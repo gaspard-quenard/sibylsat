@@ -48,6 +48,14 @@ private:
 
     float _sat_call_start_time;
 
+    const bool _use_sibylsat_expansion;
+
+    const bool _mutex_predicates;
+    long long int time_spend_on_mutexes = 0;
+
+    // USigSet new_relevants_facts_to_encode;
+    NodeHashMap<USignature, int, USignatureHasher> new_relevants_facts_to_encode;
+
 public:
     Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, std::vector<Layer*>& layers, std::function<void()> terminationCallback) : 
             _params(params), _htn(htn), _analysis(analysis), _layers(layers),
@@ -55,7 +63,9 @@ public:
             _decoder(_htn, _layers, _sat, _vars),
             _termination_callback(terminationCallback),
             _use_q_constant_mutexes(_params.getIntParam("qcm") > 0), 
-            _implicit_primitiveness(params.isNonzero("ip")) {}
+            _implicit_primitiveness(params.isNonzero("ip")),
+            _use_sibylsat_expansion(params.isNonzero("sibylsat")),
+            _mutex_predicates(_params.isNonzero("mutex")) {}
 
     void encode(size_t layerIdx, size_t pos);
     void addAssumptions(int layerIdx, bool permanent = false);
@@ -71,11 +81,29 @@ public:
     Plan extractPlan() {
         return _decoder.extractPlan();
     }
+    std::vector<PlanItem> extractVirtualPlan() {
+        return _decoder.extractClassicalPlan(Decoder::ALL);
+    }
     void printStatistics() {
         _stats.printStages();
     }
     SatInterface& getSatInterface() {return _sat;}
     EncodingStatistics& getEncodingStatistics() {return _stats;}
+    long long int getTimeSpendOnMutexes() {return time_spend_on_mutexes;}
+
+    /**
+     * When using sibylsat expansion method. If the left position has been developped, we need to add the frame axioms, effects on this position and QfactSemantics (how those lifted effects can be decoded to a ground predicate)
+     */
+    void encodeOnlyEffsAndFrameAxioms(size_t layerIdx, size_t pos);
+    void encodeNewRelevantsFacts(Position& initPos);
+    void encodeFrameAxiomsForNewRelevantsFacts(Position& newPos, Position& left);
+    void propagateRelevantsFacts(size_t layerIdx, size_t pos);
+
+    const USignature getOpHoldingInLayerPos(int layer, int position);
+
+    void print_formula(std::string filename) {
+        _sat.print_formula(filename);
+    }
 
     ~Encoding() {
         // Append assumptions to written formula, close stream
@@ -87,15 +115,24 @@ public:
 private:
     void encodeOperationVariables(Position& pos);
     void encodeFactVariables(Position& pos, Position& left, Position& above);
-    void encodeFrameAxioms(Position& pos, Position& left);
+    void encodeFrameAxioms(Position& pos, Position& left, bool onlyForNewRelevantsFacts = false);
     void encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int opVar, const IntPairTree& tree);
     void encodeOperationConstraints(Position& pos);
     void encodeSubstitutionVars(const USignature& opSig, int opVar, int qconst);
-    void encodeQFactSemantics(Position& pos);
+    void encodeQFactSemantics(Position& pos, bool encodeOnlyEffectQFacts = false);
     void encodeActionEffects(Position& pos, Position& left);
     void encodeQConstraints(Position& pos);
     void encodeSubtaskRelationships(Position& pos, Position& above);
+    void encodeMutexPredicates(Position& pos, Position& above, USigSet& possibleEffects);
     int encodeQConstEquality(int q1, int q2);
+
+
+    /**
+     * When using the sibylsat expansion method, prevent a method to have the same signature than one of its parents or transitive parents (meaning same name and same parameters) to be able to have a finite search space
+     */
+    void encodePreventionIdenticalSignatureThanParentsForAllMethods(Position& pos);
+
+    // void encodeFrameAxiomsForNewRelevantsFacts(Position& newPos, Position& left);
 };
 
 #endif

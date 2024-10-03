@@ -84,7 +84,7 @@ public:
         return _end;
     }
 
-    static ArgIterator getFullInstantiation(const USignature& sig, HtnInstance& _htn);
+    static ArgIterator getFullInstantiation(const USignature& sig, HtnInstance& _htn, const std::vector<int>& sorts = {}, const std::vector<FlatHashSet<int>>& constantsAllowedPerSorts = {});
 };
 
 #endif

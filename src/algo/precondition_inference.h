@@ -45,6 +45,11 @@ public:
                 100.f * (((float)precondsBefore+minedPreconds) / precondsBefore - 1);
 
         Log::i("Mined %i new reduction preconditions (+%.1f%%).\n", minedPreconds, newRatio);
+
+        // Correction for Lamps benchmark where the cache was not complete. Need to remove all cached possible fact changes
+        for (auto& [rId, r] : htn.getReductionTemplates()) {
+            analysis.eraseCachedPossibleFactChanges(r.getSignature());
+        }
     }
 
 };

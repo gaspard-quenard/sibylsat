@@ -15,6 +15,8 @@ Reduction::Reduction(int nameId, const std::vector<int>& args, USignature&& task
 
 void Reduction::orderSubtasks(const std::map<int, std::vector<int>>& orderingNodelist) {
 
+    if (orderingNodelist.empty()) return;
+    
     // Initialize "visited" state for each node
     std::map<int, int> visitedStates;
     for (auto pair : orderingNodelist) {

@@ -12,4 +12,6 @@ SOLUTION
 picosat
 PANDA.jar
 logs/
+build/
+pandaPIparser
 src/pandaPIparser/

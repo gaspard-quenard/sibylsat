@@ -29,6 +29,7 @@ const int STAGE_SUBSTITUTIONCONSTRAINTS = 17;
 const int STAGE_TRUEFACTS = 18;
 const int STAGE_ASSUMPTIONS = 19;
 const int STAGE_PLANLENGTHCOUNTING = 20;
+const int STAGE_MUTEX = 21;
 
 class EncodingStatistics {
 
@@ -40,10 +41,10 @@ public:
     int _prev_num_lits = 0;
 
 private:
-    const char* STAGES_NAMES[21] = {"actionconstraints","actioneffects","atleastoneelement","atmostoneelement",
+    const char* STAGES_NAMES[22] = {"actionconstraints","actioneffects","atleastoneelement","atmostoneelement",
         "axiomaticops","directframeaxioms","expansions","factpropagation","factvarencoding","forbiddenoperations",
         "indirectframeaxioms", "initsubstitutions","predecessors","qconstequality","qfactsemantics",
-        "qtypeconstraints","reductionconstraints","substitutionconstraints","truefacts","assumptions","planlengthcounting"};
+        "qtypeconstraints","reductionconstraints","substitutionconstraints","truefacts","assumptions","planlengthcounting", "mutexes"};
     std::vector<int> _num_cls_per_stage;
     std::vector<int> _current_stages;
     int _num_cls_at_stage_start = 0;

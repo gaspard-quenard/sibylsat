@@ -22,6 +22,7 @@ int Planner::findPlan() {
     _sat_time_limit = _params.getFloatParam("stl");
 
     bool solved = false;
+    bool solvedVirtualPlan = false;
     _enc.setTerminateCallback(this, terminateSatCall);
     if (iteration >= firstSatCallIteration) {
         _enc.addAssumptions(_layer_idx);
@@ -32,6 +33,11 @@ int Planner::findPlan() {
         }
         solved = result == 10;
     } 
+
+    if (_use_sibylsat_expansion) {
+        // Only develop the position which contains the _top_method
+        sibylsat_positions_to_develop.insert(0);
+    }
     
     // Next layers
     while (!solved && (maxIterations == 0 || iteration < maxIterations)) {
@@ -60,7 +66,14 @@ int Planner::findPlan() {
         iteration++;      
         Log::i("Iteration %i.\n", iteration);
         
-        createNextLayer();
+        if (_use_sibylsat_expansion) {
+            // Only develop the positions where the associate reduction is true in the last virtual plan
+            createNextLayerUsingSibylSat(sibylsat_positions_to_develop);
+        } else {
+            // Lilotane: Breadth first expansion
+            createNextLayer();
+        }
+        
 
         if (iteration >= firstSatCallIteration) {
             _enc.addAssumptions(_layer_idx);
@@ -71,6 +84,40 @@ int Planner::findPlan() {
             }
             solved = result == 10;
         } 
+
+        if (_use_sibylsat_expansion && !solved) {
+            Log::i("Failed to find a solution at layer %i. Trying to find a virtual plan...\n", _layer_idx);
+            // Find a virtual plan to develop
+            int result = _enc.solve();
+            if (result == 0) {
+                Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
+                _sat_time_limit = 0;
+            }
+            solvedVirtualPlan = result == 10;
+            if (!solvedVirtualPlan) {
+                Log::w("No virtual plan found. Problem is impossible ! Exiting.\n");
+                break;
+            }
+
+            Log::i("Found a virtual plan\n");
+
+            // Extract the virtual plan and use it to determinate which positions need to be developed
+            std::vector<PlanItem> virtualPlan = _enc.extractVirtualPlan();
+            sibylsat_positions_to_develop.clear();
+            int pos = -1;
+            for (const PlanItem& item : virtualPlan) {
+                pos++;
+                if (item.id == -1) continue;
+                else if (_htn.isReduction(item.reduction)) {
+                    if (_verbosity >= Log::V2_INFORMATION) {
+                        const USignature& rSig = _enc.getOpHoldingInLayerPos(_layer_idx, pos);
+                        Log::d("  Reduction %s is true in layer %i, position %i\n", TOSTR(rSig), _layer_idx, pos);
+                    }
+                    sibylsat_positions_to_develop.insert(pos);
+                }
+            }
+
+        }
     }
 
     if (!solved) {
@@ -189,6 +236,11 @@ void Planner::createFirstLayer() {
     _layers.push_back(new Layer(0, initSize));
     Layer& initLayer = (*_layers[0]);
     initLayer[_pos].setPos(_layer_idx, _pos);
+    // Useful informations for sibylsat expansion
+    initLayer[_pos].setOriginalLayerIdx(_layer_idx);
+    initLayer[_pos].setOriginalPos(_pos);
+    
+    
     
     /***** LAYER 0, POSITION 0 ******/
 
@@ -218,6 +270,10 @@ void Planner::createFirstLayer() {
     initLayer[_pos].addAction(goalSig);
     initLayer[_pos].addAxiomaticOp(goalSig);
     addPreconditionConstraints();
+    // Useful informations for sibylsat expansion
+    initLayer[_pos].setOriginalLayerIdx(_layer_idx);
+    initLayer[_pos].setOriginalPos(_pos);
+    
     
     /***** LAYER 0 END ******/
 
@@ -286,7 +342,156 @@ void Planner::createNextLayer() {
     newLayer.consolidate();
 }
 
+
+void Planner::createNextLayerUsingSibylSat(const FlatHashSet<int>& positionsToDevelop) {
+
+    Layer& oldLayer = (*_layers[_layer_idx]);
+
+
+    // Find the size of the next layer with the known position to develop
+    int size_new_layer = _layers.back()->size();
+
+    for (int pos: positionsToDevelop) {
+        Position& oldPos = oldLayer[pos];
+        size_new_layer += oldPos.getMaxExpansionSize() - 1;
+    }
+
+    // We need to set where the next position will be for each position of the old layer
+    oldLayer.clearSuccessorPositions();
+
+    // Create the new layer
+    _layers.push_back(new Layer(_layers.size(), size_new_layer));
+    Log::i("New layer size: %i\n", size_new_layer);
+
+     // Get the new layer
+    Layer& newLayer = *_layers.back();
+
+    _layer_idx++;
+    _pos = 0;
+
+
+    // Instantiate new layer
+    Log::i("Instantiating ...\n");
+    int num_pos_developed = 0;
+    bool all_pos_developed = false;
+    bool left_pos_is_developed = false;
+
+    for (_old_pos = 0; _old_pos < oldLayer.size(); _old_pos++)  {
+
+        oldLayer.pushSuccessorPosition(_pos);
+
+        if (!positionsToDevelop.count(_old_pos)) {
+
+            // Report the position to the new layer
+            Position* pointerPos = _layers[_layer_idx - 1]->getPointerPos(_old_pos);
+            newLayer.updatePos(_pos, pointerPos);
+
+            // Update layer and position 
+            newLayer[_pos].setPos(_layer_idx, _pos);
+
+            if (_pos == 0) {
+                propagateInitialState();
+            } else {
+                // Add the effects of the left position
+                Position& leftPos = newLayer[_pos - 1];
+
+                if (left_pos_is_developed) {
+                    // Left posititon has updated its frame axioms, we need to update the effects
+                    Position& newPos = newLayer[_pos];
+                    newPos.clearFactSupports();
+                    createNextPositionFromLeft(leftPos);
+                } else if (!all_pos_developed) {
+                    createNextPositionFromLeftSimplified(leftPos);
+                }     
+            }
+
+            left_pos_is_developed = false;
+            _pos++;
+        } else {
+            // Find the expansion size of this position
+            size_t expansion_size = 1;
+            
+            for (const auto& method : oldLayer[_old_pos].getReductions()) {
+                const Reduction& subR = _htn.getOpTable().getReduction(method);
+                expansion_size = std::max(expansion_size, subR.getSubtasks().size());
+            }
+
+            // Set the max expansion size of the position
+            oldLayer[_old_pos].setExpansionSize(expansion_size);
+
+            for (int offset = 0; offset < expansion_size; offset++) {
+
+                createNextPosition();
+
+                incrementPosition();
+            }
+
+            num_pos_developed++;
+            left_pos_is_developed = true;
+            if (num_pos_developed == positionsToDevelop.size()) {
+                all_pos_developed = true;
+            }
+        }
+    }
+
+    Log::i("Collected %i relevant facts at this layer\n", _analysis.getRelevantFacts().size());
+
+    // Encode new layer
+    Log::i("Encoding ...\n");
+    bool encodeOnlyEffsAndFA = false;
+    for (_old_pos = 0; _old_pos < oldLayer.size(); _old_pos++) {
+
+        // Log::v("Layer: %d, pos: %d/%d\n", _layer_idx, _old_pos, oldLayer.size());
+
+        if (_old_pos == 0 && !positionsToDevelop.count(_old_pos)) {
+            // Encode the new relevant facts
+            _enc.encodeNewRelevantsFacts(newLayer[0]);
+        }
+
+        if (positionsToDevelop.count(_old_pos)) {
+            size_t newPos = oldLayer.getSuccessorPos(_old_pos);
+            size_t maxOffset = oldLayer[_old_pos].getMaxExpansionSize();
+            for (size_t offset = 0; offset < maxOffset; offset++) {
+                _pos = newPos + offset;
+                Log::v("- Position (%i,%i)\n", _layer_idx, _pos);
+                _enc.encode(_layer_idx, _pos);
+            }
+            encodeOnlyEffsAndFA = true;
+
+        } else if (encodeOnlyEffsAndFA) {
+            // We still to have to encode the frame axioms for the current position (as it was not done in the previouses position encoded). Then we will have totally encoded the current position
+            size_t newPos = oldLayer.getSuccessorPos(_old_pos);
+            Log::v("- Position (%i,%i) (Only for Frame axioms)\n", _layer_idx, newPos);
+            _enc.encodeOnlyEffsAndFrameAxioms(_layer_idx, newPos);
+            encodeOnlyEffsAndFA = false;
+        } 
+        else if (_old_pos != 0) {
+            // propagate all the new relevant facts at this position
+            size_t _pos = oldLayer.getSuccessorPos(_old_pos);
+            Log::v(" - Position (%i,%i): Propagate new relevant facts\n", _layer_idx, _pos);
+            size_t newPos = oldLayer.getSuccessorPos(_old_pos);
+            _enc.propagateRelevantsFacts(_layer_idx, newPos);
+        }
+    } 
+
+    // Free some memory from the above layer: old pos which have been decomposed into new positions
+    for (int pos : positionsToDevelop) {
+        Log::v("Freeing position %d of layer %d\n", pos, _layer_idx - 1);
+        oldLayer[pos].clearFullPos();    
+    }
+    for (int _new_pos = 0; _new_pos < newLayer.size(); _new_pos++) {
+        newLayer[_new_pos].clearDecodings();
+    }
+    
+}
+
 void Planner::createNextPosition() {
+
+    Position& newPos = (*_layers[_layer_idx])[_pos];
+    // Useful informations for sibylsat expansion
+    newPos.setAbovePos(_old_pos);
+    newPos.setOriginalLayerIdx(_layer_idx);
+    newPos.setOriginalPos(_pos);
 
     // Set up all facts that may hold at this position.
     if (_pos == 0) {
@@ -307,8 +512,12 @@ void Planner::createNextPosition() {
 
     // In preparation for the upcoming position,
     // add all effects of the actions and reductions occurring HERE
-    // as (initially false) facts to THIS position.  
-    initializeNextEffects();
+    // as (initially false) facts to THIS position. 
+
+    // Already done in create next position from left for sibylsat expansion
+    if (!_use_sibylsat_expansion) { 
+        initializeNextEffects();
+    }
 }
 
 void Planner::createNextPositionFromAbove() {
@@ -319,6 +528,13 @@ void Planner::createNextPositionFromAbove() {
     propagateActions(offset);
     propagateReductions(offset);
     addPreconditionConstraints();
+
+    // if (offset == 0) {
+    //     Position& above = (*_layers[_layer_idx-1])[_old_pos];
+    //     for (const int mutexGroup : above.getGroupMutexEncoded()) {
+    //         newPos.addGroupMutexEncoded(mutexGroup);
+    //     }
+    // }
 }
 
 void Planner::createNextPositionFromLeft(Position& left) {
@@ -365,6 +581,21 @@ void Planner::createNextPositionFromLeft(Position& left) {
         _pruning.prune(aSig, _layer_idx, _pos-1);
     }
 }
+
+
+
+// Just update the analysis
+void Planner::createNextPositionFromLeftSimplified(Position& left) {
+    Position& newPos = (*_layers[_layer_idx])[_pos];
+    assert(left.getLayerIndex() == _layer_idx);
+    assert(left.getPositionIndex() == _pos-1);
+
+    for (const auto& [fact, opSigs] : newPos.getPosFactSupports()) _analysis.addReachableFact(fact, /*negated=*/false);
+    for (const auto& [fact, opSigs] : newPos.getNegFactSupports()) _analysis.addReachableFact(fact, /*negated=*/true);
+    for (const auto& [fact, opSigs] : newPos.getPosIndirectFactSupports()) _analysis.addReachableFact(fact, /*negated=*/false);
+    for (const auto& [fact, opSigs] : newPos.getNegIndirectFactSupports()) _analysis.addReachableFact(fact, /*negated=*/true);
+}
+
 
 void Planner::addPreconditionConstraints() {
     Position& newPos = _layers[_layer_idx]->at(_pos);
@@ -505,6 +736,12 @@ bool Planner::addEffect(const USignature& opSig, const Signature& fact, EffectMo
     bool isQFact = _htn.hasQConstants(factAbs);
 
     if (!isQFact) {
+
+        if (_analysis.checkGroundingFacts() && !_analysis.isInGroundFacts(fact._usig, fact._negated)) {
+            // No need to encode
+            return true;
+        }
+
         // Invariant fact? --> no need to encode
         if (_analysis.isInvariant(fact)) return true;
 
@@ -512,7 +749,7 @@ bool Planner::addEffect(const USignature& opSig, const Signature& fact, EffectMo
 
         // Depending on whether fact supports are encoded for primitive ops only,
         // add the ground fact to the op's support accordingly
-        if (_nonprimitive_support || _htn.isAction(opSig)) {
+        if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
             pos.addFactSupport(fact, opSig);
         } else {
             // Remember that there is some (unspecified) support for this fact
@@ -541,7 +778,27 @@ bool Planner::addEffect(const USignature& opSig, const Signature& fact, EffectMo
     
     bool anyGood = false;
     bool staticallyResolvable = true;
+    bool existNegativeEffWhichCanConflitWithPosEff = false; // Compute it for each action in preprocessing
+    // Iterate over the effect of the action to check if a negative effect as the same name_id as this positive eff
+    // TODO could be done in preprocessing...
+    if (!fact._negated && (_htn.isAction(opSig) || (_use_sibylsat_expansion && mode == DIRECT))) {
+        const SigSet& effects = _htn.isAction(opSig) ? _htn.getOpTable().getAction(opSig).getEffects() : _htn.getOpTable().getReduction(opSig).getEffects();
+        for (const Signature& negFact : effects) {
+            // Log::i("Effect: %s\n", TOSTR(negFact));
+            if (negFact._negated && negFact._usig._name_id == fact._usig._name_id) {
+                existNegativeEffWhichCanConflitWithPosEff = true;
+                break;
+            }
+        }
+    }
+    bool isPositiveEffOfAction = (_htn.isAction(opSig) || (_use_sibylsat_expansion && mode == DIRECT)) && !fact._negated;
+
     for (const USignature& decFactAbs : _htn.decodeObjects(factAbs, _htn.getEligibleArgs(factAbs, sorts))) {
+
+        if (_analysis.checkGroundingFacts() && !_analysis.isInGroundFacts(decFactAbs, fact._negated)) {
+            // Preprocessing fact cannot be true
+            continue;
+        }  
 
         auto path = SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices);
 
@@ -565,13 +822,18 @@ bool Planner::addEffect(const USignature& opSig, const Signature& fact, EffectMo
 
         anyGood = true;
         if (_analysis.isInvariant(decFactAbs, fact._negated)) {
-            // Effect holds trivially
-            continue;
+
+            if (_analysis.checkGroundingFacts() && isPositiveEffOfAction && existNegativeEffWhichCanConflitWithPosEff && staticallyResolvable) {
+                // Need to encode at least one positive effect or there will be only the negative effect of the action encoded
+                Log::d("Eff: %c %s of %s hold trivially but must be added for correct encoding\n", fact._negated ? '-' : '+', TOSTR(decFactAbs), TOSTR(opSig));
+            } else {
+                continue;
+            }
         }
 
         // Valid effect decoding
         _analysis.addReachableFact(decFactAbs, /*negated=*/fact._negated);
-        if (_nonprimitive_support || _htn.isAction(opSig)) {
+        if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
             pos.addIndirectFactSupport(decFactAbs, fact._negated, opSig, path);
         } else {
             pos.touchFactSupport(decFactAbs, fact._negated);
@@ -842,11 +1104,17 @@ void Planner::initializeNextEffects() {
 
                 if (!_htn.hasQConstants(eff._usig)) {
                     // New ground fact: set before the action may happen
+                    if (_analysis.checkGroundingFacts() && !_analysis.isInGroundFacts(eff)) {
+                        continue;
+                    }
                     initializeFact(newPos, eff._usig); 
                 } else {
                     std::vector<int> sorts = _htn.getOpSortsForCondition(eff._usig, aSig);
                     for (const USignature& decEff : _htn.decodeObjects(eff._usig, _htn.getEligibleArgs(eff._usig, sorts))) {           
                         // New ground fact: set before the action may happen
+                        if (_analysis.checkGroundingFacts() && !_analysis.isInGroundFacts(decEff, eff._negated)) {
+                            continue;
+                        }
                         initializeFact(newPos, decEff);
                     }
                 }
@@ -966,4 +1234,14 @@ void Planner::printStatistics() {
     Log::i("# retroactive prunings: %i\n", _pruning.getNumRetroactivePunings());
     Log::i("# retroactively pruned operations: %i\n", _pruning.getNumRetroactivelyPrunedOps());
     Log::i("# dominated operations: %i\n", _domination_resolver.getNumDominatedOps());
+    Log::i("Number layers: %i\n", _layers.size());
+
+    if (_params.isNonzero("mutex")) {
+        Log::i("Time spend to compute mutex predicates: %i ms\n", _htn.getTimeComputingMutex());
+        Log::i("Time spend to encode mutex predicates: %i ms\n", _enc.getTimeSpendOnMutexes());
+    }
+
+    if (_analysis.checkGroundingFacts()) {
+        Log::i("Time spend to ground facts: %i ms\n", _analysis.getGroundingTime());
+    }
 }

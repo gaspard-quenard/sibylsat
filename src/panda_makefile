@@ -5,7 +5,7 @@ CWARN=-Wno-unused-parameter
 CERROR=
 
 COMPILEFLAGS=-O3 -g -pipe -Wall -Wextra -pedantic -std=c++17 $(CWARN) $(CERROR)
-LINKERFLAGS=-O3 -lm 
+LINKERFLAGS=-O3 -lm
 #-flto -static -static-libgcc
 
 INCLUDES=-Isrc -Ibuild
@@ -21,11 +21,10 @@ SOURCES:=$(shell find src/ -name '*.cpp'|grep -vE "src/main.cpp")
 executable: pandaPIparser
 library: build/libpandaPIparser.a
 
-
-pandaPIparser: build/hddl-token.o build/hddl.o build/main.o $(patsubst src/%.cpp,build/%.o,${SOURCES})
+pandaPIparser: build/hddl-token.o build/hddl.o build/main.o build/cmdline.o $(patsubst src/%.cpp,build/%.o,${SOURCES})
 	${CC} ${INCLUDES} ${LINKERFLAGS} $^ -o pandaPIparser 
 
-build/libpandaPIparser.a: build/hddl-token.o build/hddl.o build/libmain.o $(patsubst src/%.cpp,build/%.o,${SOURCES})
+build/libpandaPIparser.a: build/hddl-token.o build/hddl.o build/libmain.o build/cmdline.o $(patsubst src/%.cpp,build/%.o,${SOURCES})
 	ar rcs build/libpandaPIparser.a $^
 
 
@@ -53,18 +52,33 @@ build/libmain.cpp:
 
 build/hddl.hpp: build/hddl.cpp
 
-	
+
 build/%.o: src/%.cpp src/%.hpp build/hddl.hpp
 	${CC} ${INCLUDES} ${COMPILEFLAGS} -o $@ -c $<
 
 build/%.o: src/%.cpp build/hddl.hpp
 	${CC} ${INCLUDES} ${COMPILEFLAGS} -o $@ -c $<
-	
+
 build/%.o: src/%.cpp
 	${CC} ${INCLUDES} ${COMPILEFLAGS} -o $@ -c $<
 
+# Add the rule to generate cmdline.c and cmdline.h
+build/cmdline.c build/cmdline.h: src/options.ggo
+	gengetopt --include-getopt --default-optional --unamed-opts --output-dir=build -i src/options.ggo
+
+# Ensure cmdline.h is generated before compiling main.o
+build/main.o: src/main.cpp build/cmdline.h
+	${CC} ${INCLUDES} ${COMPILEFLAGS} -o build/main.o -c src/main.cpp
+
+# Compile cmdline.c into cmdline.o
+build/cmdline.o: build/cmdline.c build/cmdline.h
+	${CC} ${INCLUDES} ${COMPILEFLAGS} -o build/cmdline.o -c build/cmdline.c
 
 clear:
 	rm -rf build/
 
 clean: clear
+
+# Ensure that cmdline.h is generated before attempting to compile main.o
+build/main.o: build/cmdline.h
+build/libmain.o: build/cmdline.h

@@ -1,0 +1,314 @@
+diff --git a/src/FAMmutexes.cpp b/src/FAMmutexes.cpp
+index e46b7a3..3a539d3 100644
+--- a/src/FAMmutexes.cpp
++++ b/src/FAMmutexes.cpp
+@@ -326,10 +326,55 @@ std::tuple<pddl_lifted_mgroups_t,pddl_t*,std::vector<int>> cpddl_compute_FAM_mut
+ 		ourTypeIDToCPDDL[sort] = newID;
+ 		cpddlTypesToOurs.push_back(sort);
+ 		DEBUG(std::cout << "Adding sort " << sort << " (\"" << domain.sorts[sort].name << "\")" << std::endl);
+-		DEBUG(std::cout << "\tParent is " << typeParents[sort] << std::endl);
++		// DEBUG(
++			// std::cout << "\tParent is " << typeParents[sort] << std::endl;
++			// );
+ 			// +1 is for the artificial root sort
+-		assert(typeParents[sort] != -2); // removed sorts
+-		pddlTypesAdd(&pddl->type,domain.sorts[sort].name.c_str(),ourTypeIDToCPDDL[typeParents[sort]]);
++		// assert(typeParents[sort] != -2); // removed sorts
++
++
++		if (domain.sorts[sort].name.substr(0,9) == "sort_for_") {
++			// Check if this type is used in any action or method or predicate paramter.
++			// If not used, taked the parent type instead
++			bool used = false;
++
++			// Check action
++			for (size_t tid = 0; tid < domain.nPrimitiveTasks; tid++){
++				const Task & t = domain.tasks[tid];
++				for (const int & parameter : t.variableSorts) {
++					if (parameter == sort) {
++						used = true;
++						break;
++					}
++				}
++				if (used) break;
++			}
++			if (used) {
++				std::cout << " It is used..." << std::endl;
++				pddlTypesAdd(&pddl->type,domain.sorts[sort].name.c_str(),ourTypeIDToCPDDL[typeParents[sort]]);
++				continue;
++			}
++			for (const Predicate & pred : domain.predicates){
++				for (const int & parameter : pred.argumentSorts) {
++					if (parameter == sort) {
++						used = true;
++						break;
++					}
++				}
++				if (used) break;
++			}
++			if (used) {
++				std::cout << " It is used..." << std::endl;
++				pddlTypesAdd(&pddl->type,domain.sorts[sort].name.c_str(),ourTypeIDToCPDDL[typeParents[sort]]);
++				continue;
++			}
++
++			std::cout << " Type " << domain.sorts[sort].name << " is not used in any action or predicate. " << std::endl;
++			pddlTypesAdd(&pddl->type,domain.sorts[sort].name.c_str(),-1);
++		} 
++		else {
++			pddlTypesAdd(&pddl->type,domain.sorts[sort].name.c_str(),ourTypeIDToCPDDL[typeParents[sort]]);
++		}
+ 	}
+ 
+ 	// add ids for replaced sorts
+@@ -341,8 +386,51 @@ std::tuple<pddl_lifted_mgroups_t,pddl_t*,std::vector<int>> cpddl_compute_FAM_mut
+ 	pddl->obj.htable = borHTableNew(objHash, objEq, NULL);
+ 	
+ 	// add objects
+-	for (size_t o = 0; o < domain.constants.size(); o++)
+-		cpddl_add_object_of_sort(pddl,domain.constants[o], ourTypeIDToCPDDL[objectType[o]]);
++	for (size_t o = 0; o < domain.constants.size(); o++) {
++		// cpddl_add_object_of_sort(pddl,domain.constants[o], ourTypeIDToCPDDL[objectType[o]]);
++		// If the name of the type starts with "sort_for_", takes it parent instead
++
++		bool replacedParam = false;
++		if (domain.sorts[objectType[o]].name.substr(0,9) == "sort_for_") {
++			// Check if this type is used in any action or method or predicate paramter.
++			// If not used, taked the parent type instead
++			bool used = false;
++
++			// Check action
++			for (size_t tid = 0; tid < domain.nPrimitiveTasks; tid++){
++				const Task & t = domain.tasks[tid];
++				for (const int & parameter : t.variableSorts) {
++					if (parameter == objectType[o]) {
++						used = true;
++						break;
++					}
++				}
++				if (used) break;
++			}
++			if (used) {
++				cpddl_add_object_of_sort(pddl,domain.constants[o], ourTypeIDToCPDDL[objectType[o]]);
++				continue;
++			}
++			for (const Predicate & pred : domain.predicates){
++				for (const int & parameter : pred.argumentSorts) {
++					if (parameter == objectType[o]) {
++						used = true;
++						break;
++					}
++				}
++				if (used) break;
++			}
++			if (used) {
++				cpddl_add_object_of_sort(pddl,domain.constants[o], ourTypeIDToCPDDL[objectType[o]]);
++				continue;
++			}
++
++			std::cout << "Replacing type " << domain.sorts[objectType[o]].name << " by " << domain.sorts[typeParents[objectType[o]]].name << std::endl;
++			cpddl_add_object_of_sort(pddl,domain.constants[o], ourTypeIDToCPDDL[typeParents[objectType[o]]]);
++		}
++		else
++			cpddl_add_object_of_sort(pddl,domain.constants[o], ourTypeIDToCPDDL[objectType[o]]);
++	}
+ 	
+ /////////////////////////////////// COPIED FROM CPDDL/src/obj.c
+     for (int i = 0; i < pddl->obj.obj_size; ++i){
+@@ -673,6 +761,23 @@ std::vector<FAMGroup> compute_FAM_mutexes(const Domain & domain, const Problem &
+         pddlLiftedMGroupPrint(pddl, lifted_mgroups.mgroup + li, stdout);
+     });
+ 
++	if (!config.invariantFilename.empty()){
++
++		std::cout << "Writing invariants to " << config.invariantFilename << std::endl;
++		FILE *fp = fopen(config.invariantFilename.c_str(), "w");
++		if (fp == NULL){
++			fprintf(stderr, "Error: Cannot open file %s for writing\n", config.invariantFilename.c_str());
++			exit(1);
++		}
++		for (int li = 0; li < lifted_mgroups.mgroup_size; ++li){
++			if (pruned[li]) continue;
++			// invariantFile << "M:" << li << ": ";
++			pddlLiftedMGroupPrint(pddl, lifted_mgroups.mgroup + li, fp);
++		}
++	}
++
++	if (config.exitAfterInvariants) exit(0);
++
+ 
+ 
+ 	// convert CPDDL FAM mutexes into a representation of pandaPIgrounder
+diff --git a/src/grounding.cpp b/src/grounding.cpp
+index 5a84b21..6add05d 100644
+--- a/src/grounding.cpp
++++ b/src/grounding.cpp
+@@ -24,6 +24,9 @@ void grounding_configuration::print_options(){
+ 	// inference of additional information
+ 	std::cout << "  H2 mutexes: " << h2Mutexes << std::endl;
+ 	std::cout << "  FAM groups: " << computeInvariants << std::endl;
++	std::cout << "  Exit after FAM groups: " << exitAfterInvariants << std::endl;
++	if (computeInvariants && !invariantFilename.empty())
++		std::cout << "  FAM groups output file: " << invariantFilename << std::endl;
+ 
+ 	std::cout << "Transformation Options" << std::endl;
+ 	// compilations to apply
+@@ -76,6 +79,37 @@ void run_grounding (const Domain & domain, const Problem & problem, std::ostream
+ 
+ 	// run the lifted GPG to create an initial grounding of the domain
+ 	auto [initiallyReachableFacts,initiallyReachableTasks,initiallyReachableMethods] = run_lifted_HTN_GPG(domain, problem, config, given_typing);
++
++	if (config.quickComputeStateFeatures && initiallyReachableTasks.size() == 0 && initiallyReachableMethods.size() == 0){
++
++		// The problem is slow to compute, write directly the state features
++		std::cerr << "Write state features directly" << std::endl;
++
++		dout << ";; Approximate state features" << std::endl;
++		dout << ";; #state features" << std::endl;
++		dout << initiallyReachableFacts.size() << std::endl;
++		for (const Fact& fact : initiallyReachableFacts){
++			// artificial member for SAS groups
++			if (fact.predicateNo < 0){
++				dout << "none-of-them" << std::endl;
++				continue;
++			}
++			// real fact
++			// if (prunedFacts[fact.groundedNo]) continue;
++			if (domain.predicates[fact.predicateNo].guard_for_conditional_effect) continue;
++
++			DEBUG(std::cout << fact.outputNo << " ");
++
++			dout << domain.predicates[fact.predicateNo].name << "[";
++			for (unsigned int i = 0; i < fact.arguments.size(); i++){
++				if (i) dout << ",";
++				dout << domain.constants[fact.arguments[i]];
++			}
++			dout << "]" << std::endl;
++		}
++		dout << std::endl;
++		return;
++	}
+ 	// run the grounded GPG until convergence to get the grounding smaller
+ 	std::vector<bool> prunedFacts (initiallyReachableFacts.size());
+ 	std::vector<bool> prunedTasks (initiallyReachableTasks.size());
+diff --git a/src/grounding.h b/src/grounding.h
+index d51bca9..c22abfe 100644
+--- a/src/grounding.h
++++ b/src/grounding.h
+@@ -16,6 +16,8 @@ struct grounding_configuration{
+ 	// inference of additional information
+ 	bool h2Mutexes = false;
+ 	bool computeInvariants = false;
++	bool exitAfterInvariants = false;
++	std::string invariantFilename = "";
+ 
+ 	// select output format
+ 	bool outputForPlanner = true;
+@@ -23,9 +25,12 @@ struct grounding_configuration{
+ 	bool outputSASPlus = false; 
+ 
+ 	// output formatting
++	bool writeFullMethodName = false;
+ 	bool outputSASVariablesOnly = false;
+ 	sas_delete_output_mode sas_mode = SAS_AS_INPUT;
+ 	bool noopForEmptyMethods = false;
++	bool onlyWriteStateFeatures = false;
++	bool quickComputeStateFeatures = false;
+ 	
+ 	// compilations to apply
+ 	bool compileNegativeSASVariables = false;
+diff --git a/src/liftedGPG.cpp b/src/liftedGPG.cpp
+index 5a41cb2..3d8a1fc 100644
+--- a/src/liftedGPG.cpp
++++ b/src/liftedGPG.cpp
+@@ -1,4 +1,5 @@
+ #include "liftedGPG.h"
++#include <chrono>
+ 
+ #include "gpg.h"
+ 
+@@ -28,6 +29,11 @@ void assignGroundNosToDeleteEffects(const Domain & domain, std::vector<GpgPlanni
+ 
+ std::tuple<std::vector<Fact>, std::vector<GroundedTask>, std::vector<GroundedMethod>> run_lifted_HTN_GPG(const Domain & domain, const Problem & problem, grounding_configuration & config, given_plan_typing_information & given_typing){
+ 	std::unique_ptr<HierarchyTyping> hierarchyTyping;
++
++
++	// Get init time
++	auto start = std::chrono::high_resolution_clock::now();
++
+ 	// don't do hierarchy typing for classical instances
+ 	if (problem.initialAbstractTask != -1 && config.enableHierarchyTyping)
+ 		hierarchyTyping = std::make_unique<HierarchyTyping> (domain, problem, config, given_typing, true, false);
+@@ -128,6 +134,23 @@ std::tuple<std::vector<Fact>, std::vector<GroundedTask>, std::vector<GroundedMet
+ 		method.orderingConstraints = newOrdering;
+ 	}
+ 
++
++	// Get end time
++	auto end = std::chrono::high_resolution_clock::now();
++	std::chrono::duration<double> diff = end-start;
++
++	// If the option quickComputeStateFeatures is set and the time is over the limit, we quit (limit = 1s)
++	if (config.quickComputeStateFeatures && diff.count() > 1){
++		std::cerr << "Problem is slow to compute: RunGPG took: " << diff.count() << "s" << std::endl;
++		std::cerr << "Quit without running TDG" << std::endl;
++		// create facts in the correct order
++		std::vector<Fact> reachableFactsList  (reachableFacts.size ());
++		for (const Fact & fact : reachableFacts)
++			reachableFactsList[fact.groundedNo] = fact;
++
++		return std::make_tuple(reachableFactsList, std::vector<GroundedTask>(), std::vector<GroundedMethod>());
++	}
++
+ 	if (!config.quietMode) std::cerr << "Running TDG." << std::endl;
+ 	GpgTdg tdg (domain, problem, groundedTasksPg);
+ 	std::vector<GpgTdg::ResultType *> groundedMethods;
+diff --git a/src/main.cpp b/src/main.cpp
+index c036b9a..96d5783 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -38,8 +38,12 @@ int main (int argc, char * argv[])
+ 
+ 	config.quietMode = args_info.quiet_flag;
+ 	config.printTimings = args_info.print_timings_flag;
++	config.onlyWriteStateFeatures = args_info.only_write_state_features_flag;
++	config.quickComputeStateFeatures = args_info.quick_compute_state_features_flag;
+ 
+ 	config.computeInvariants = args_info.invariants_flag;
++	config.exitAfterInvariants = args_info.exit_after_invariants_flag;
++	config.invariantFilename = args_info.out_invariants_arg;
+ 	config.h2Mutexes = args_info.h2_flag;
+ 
+ 	// SAS mode
+diff --git a/src/options.ggo b/src/options.ggo
+index 9dc115c..91750d6 100644
+--- a/src/options.ggo
++++ b/src/options.ggo
+@@ -17,10 +17,15 @@ option "quiet" q "activate quiet mode. Grounder will make no output." flag off
+ option "print-timings" T "print detailed timings of individual operations." flag off
+ option "output-domain" O "write internal data structures representing the lifted input to standard out (only for debugging)." flag off
+ option "plan" P "specify a plan. One the methods pertaining to this plan will be grounded. Provide a file(name) in which the plan is." string
++option "only-write-state-features" 9 "Only write the state features in the output file" flag off
++option "quick-compute-state-features" 7 "If the problem is slow to compute, compute the state features more quickly but lose in optimality. Need flag only-write-state-features" flag off
+ 
+ 
+ section "Additional Inferences"
+ option "invariants" i "use CPDL to infer lifted FAM groups and ground them." flag off
++option "exit-after-invariants" 3 "Exit after having computed lifted FAM groups. Needs option invariants" flag off
++option "out-invariants" 4 "Write the lifted FAM groups to the file specified. Needs option invariants" string default=""
++
+ option "h2" 2 "use H2 preprocessor to infer invariants." flag off
+ 
+ section "Transformations"
+diff --git a/src/output.cpp b/src/output.cpp
+index e3fa94c..0ed941e 100644
+--- a/src/output.cpp
++++ b/src/output.cpp
+@@ -278,6 +278,7 @@ void write_grounded_HTN(std::ostream & pout, const Domain & domain, const Proble
+ 	}
+ 	pout << std::endl;
+ 
++	if (config.onlyWriteStateFeatures) return;
+ 
+ 	pout << ";; Mutex Groups" << std::endl;
+ 	pout << number_of_sas_groups << std::endl;

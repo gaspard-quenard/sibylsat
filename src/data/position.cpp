@@ -160,6 +160,8 @@ bool Position::hasReduction(const USignature& red) const {return _reductions.cou
 
 size_t Position::getLayerIndex() const {return _layer_idx;}
 size_t Position::getPositionIndex() const {return _pos;}
+size_t Position::getOriginalLayerIndex() const {return _original_layer_idx;}
+size_t Position::getOriginalPositionIndex() const {return _original_pos;}
 
 const USigSet& Position::getQFacts() const {return _qfacts;}
 const USigSet& Position::getTrueFacts() const {return _true_facts;}
@@ -234,4 +236,59 @@ void Position::clearAtPastLayer() {
     _reductions.clear();
     _reductions.reserve(0);
     */
+}
+
+void Position::clearFactSupports() {
+    if (_pos_fact_supports != nullptr) {
+        _pos_fact_supports->clear();
+        _pos_fact_supports->reserve(0);
+    }
+    if (_neg_fact_supports != nullptr) {
+        _neg_fact_supports->clear();
+        _neg_fact_supports->reserve(0);
+    }
+    if (_pos_indir_fact_supports != nullptr) {
+        _pos_indir_fact_supports->clear();
+        _pos_indir_fact_supports->reserve(0);
+    }
+    if (_neg_indir_fact_supports != nullptr) {
+        _neg_indir_fact_supports->clear();
+        _neg_indir_fact_supports->reserve(0);
+    }
+}
+
+void Position::clearFullPos() {
+    _pos_qfact_decodings.clear();
+    _pos_qfact_decodings.reserve(0);
+    _neg_qfact_decodings.clear();
+    _neg_qfact_decodings.reserve(0);
+    _true_facts.clear();
+    _true_facts.reserve(0);
+    _false_facts.clear();
+    _false_facts.reserve(0);
+    _fact_variables.clear();
+    _fact_variables.reserve(0); 
+
+    if (_pos_fact_supports != nullptr) delete _pos_fact_supports;
+    if (_neg_fact_supports != nullptr) delete _neg_fact_supports;
+    if (_pos_indir_fact_supports != nullptr) delete _pos_indir_fact_supports;
+    if (_neg_indir_fact_supports != nullptr) delete _neg_indir_fact_supports; 
+
+    _qfacts.clear();
+    _qfacts.reserve(0);
+
+   _expansion_substitutions.clear();
+   _expansion_substitutions.reserve(0);
+    _axiomatic_ops.clear();
+    _axiomatic_ops.reserve(0);
+    _q_constants_type_constraints.clear();
+    _q_constants_type_constraints.reserve(0);
+    clearSubstitutions();
+}
+
+void Position::clearDecodings() {
+    _pos_qfact_decodings.clear();
+    _pos_qfact_decodings.reserve(0);
+    _neg_qfact_decodings.clear();
+    _neg_qfact_decodings.reserve(0);
 }

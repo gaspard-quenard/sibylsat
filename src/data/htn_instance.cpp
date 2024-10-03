@@ -3,9 +3,14 @@
 #include <getopt.h>
 #include <sys/stat.h>
 #include <iomanip>
+#include <chrono>
+#include <filesystem>
+#include <queue>
 
 #include "data/htn_instance.h"
 #include "util/regex.h"
+#include "util/project_utils.h"
+#include "util/string_util.h"
 
 #include "libpanda.hpp"
 
@@ -19,6 +24,51 @@ HtnInstance::HtnInstance(Parameters& params) :
     USignatureHasher::seed = _params.getIntParam("s");
 
     Log::i("Parser finished.\n");
+
+    for (method& method : methods) {
+
+        /*
+        Special case if the method accomplish a task which have multiple paramters with same name (in the description of the method). 
+        All parameters need to have a different name, so we add a suffix to the parameters with the same name (and add an equal predicate for them).
+        e.g Woodworking:
+
+        (:method method11
+		:parameters (?cut_and_saw_instance_2_argument_0 - board ?cut_and_saw_instance_2_argument_2 - awood ?do_colour_instance_3_argument_4 - part ?do_colour_instance_3_argument_5 - acolour ?do_colour_instance_3_argument_6 - machine ?process_oldSurfaceVar - surface)
+		:task (process ?do_colour_instance_3_argument_4 ?do_colour_instance_3_argument_5 ?process_oldSurfaceVar ?process_oldSurfaceVar)
+
+        -> The task 3rd and 4th parameters hvae the same name (?process_oldSurfaceVar), so we rename the 4th parameter and add an equal predicate to the 3rd parameter
+        */
+        for (int i = 0; i < method.atargs.size(); i++) {
+            for (int j = i + 1; j < method.atargs.size(); j++) {
+                if (method.atargs[i] == method.atargs[j]) {
+                    // Rename the j-th parameter
+                    method.atargs[j] = method.atargs[j] + "_" + std::to_string(j);
+                    std::string typeParam;
+                    for (const auto& var : method.vars) {
+                        if (var.first == method.atargs[i]) {
+                            typeParam = var.second;
+                            break;
+                        }
+                    }
+
+                    // Add the new parameter to the method
+                    method.vars.push_back(std::make_pair(method.atargs[j], typeParam));
+                    // Add the equal precondition
+                    literal l;
+                    l.positive = true;
+                    l.predicate = dummy_equal_literal;
+                    l.arguments.push_back(method.atargs[i]);
+                    l.arguments.push_back(method.atargs[j]);
+                    method.constraints.push_back(l);
+                }
+            }
+        }
+    }
+
+    if (_params.isNonzero("macroActions")) {
+        Log::i("Rewrite consecutive primitive tasks in method's task network into one macro action.\n");
+        handleMacroActions();
+    }
 
     Names::init(_name_back_table);
     
@@ -40,6 +90,10 @@ HtnInstance::HtnInstance(Parameters& params) :
         extractMethodSorts(m);
     
     extractConstants();
+
+    if (_params.isNonzero("mutex")) {
+        loadMutexes();
+    }
 
     Log::i("Structures extracted.\n");
     for (const auto& sort_pair : _p.sorts) {
@@ -495,6 +549,11 @@ Reduction& HtnInstance::createReduction(method& method) {
     if (!method.ordering.empty()) {
         std::map<int, std::vector<int>> orderingNodelist;
         for (const auto& order : method.ordering) {
+            if (!subtaskTagToIndex.count(order.first) || !subtaskTagToIndex.count(order.second)) {
+                // Should be an ordering with mprec
+                Log::d("Ignore ordering between %s and %s\n", order.first.c_str(), order.second.c_str());
+                continue;
+            }
             size_t indexLeft = subtaskTagToIndex[order.first];
             size_t indexRight = subtaskTagToIndex[order.second];
             assert(indexLeft < _methods[id].getSubtasks().size());
@@ -841,6 +900,84 @@ const std::vector<int>& HtnInstance::getSorts(int nameId) const {
     return _signature_sorts_table.at(nameId);
 }
 
+const std::vector<int> HtnInstance::getSortsParamsFromSigForFA(const Signature& eff) const {
+    // In frame axioms, the potential effect in a signature
+    // where each parameter in in the form ?<name_sort><idx_param>_<number>[_]*
+    // From this, we can extract the sort of each parameter
+    // by taking the substring from the first character to the first underscore
+    // and then removing the last character until it is not a number
+
+    // Create a vector to hold the sorts
+    std::vector<int> sorts;
+    // Initial sort for this eff
+    const std::vector<int> originalSortsEff = getSorts(eff._usig._name_id);
+
+    // For each parameter in the effect...
+    int idx = -1;
+    for (const auto& param : eff._usig._args) {
+        idx++;
+
+        // If this is a parameter of the parent method ?
+        if (param < 0) {
+            // Then use the original sort
+            int sort = originalSortsEff[idx];
+            sorts.push_back(sort);
+            continue;
+        }
+
+        // Get the name of the parameter
+        std::string name = Names::to_string(param);
+
+        // If the name does not start with ?, then it is a constant, so we can direcly get the type from the parameter
+        // if (name[0] != '?') {
+        //     // Get the sort of the parameter
+        //     int sort = sortsEffs[idx];
+        //     sorts.push_back(sort);
+        //     continue;
+        // }
+
+        // Get the sort of the parameter
+        // Remove the _ at the end
+        while (name.back() == '_') name.pop_back();
+
+        // We have our parameter here
+        std::string nameParam = name;
+
+        // Now, extract the number between the last underscore and the end of the string. This is the method id
+
+        // Find the last underscore
+        size_t lastUnderscore = name.find_last_of('_');
+        std::string methodIdStr = name.substr(lastUnderscore + 1, name.size() - lastUnderscore - 1);
+
+        // Convert extracted strings to integers
+        int paramId = _name_table.at(nameParam);
+        int methodId = std::stoi(methodIdStr);
+
+        // Log::i("idx_param: %s, Method: %s\n", nameParam.c_str(), TOSTR(methodId));
+
+        // Get the method to confirm the idxParam
+        const Reduction& r = _methods.at(methodId);
+        USignature sig = r.getSignature();
+
+        // Log::i("Reduction: %s\n", TOSTR(r.getSignature()) );
+        int trueParam = -1;
+        for (size_t i = 0; i < r.getSignature()._args.size(); i++) {
+            if (r.getSignature()._args[i] == paramId) {
+                trueParam = i;
+                break;
+            }
+        }
+
+        assert(trueParam != -1 || Log::e("Parameter %s is not in the method %s\n", name.c_str(), TOSTR(methodId) ));
+
+        int sort = getSorts(methodId)[trueParam];
+        sorts.push_back(sort);
+        continue;
+    }
+
+    return sorts;
+}
+
 const FlatHashSet<int>& HtnInstance::getConstantsOfSort(int sort) const {
     return _constants_by_sort.at(sort);
 }
@@ -934,6 +1071,574 @@ USignature HtnInstance::getNormalizedLifted(const USignature& opSig, std::vector
 
     return origSig.substitute(Substitution(origSig._args, placeholderArgs)); 
 }
+
+bool HtnInstance::sortHasConstants(int sortId) const {
+    return _constants_by_sort.count(sortId) && !_constants_by_sort.at(sortId).empty();
+}
+
+std::string HtnInstance::getPredicateInCorrectCase(std::string pred) const {
+
+    // Set this predicate to check in lower case
+    std::transform(pred.begin(), pred.end(), pred.begin(), ::tolower);
+
+    // Iterate over all all predicates extracted from the domain and for each, check if the lower case
+    // of the predicate to check is equal to the lower case of the predicate in the domain...
+    for (const predicate_definition& p : predicate_definitions) {
+
+        std::string true_pred = p.name;
+        std::transform(true_pred.begin(), true_pred.end(), true_pred.begin(), ::tolower);
+
+        if (pred == true_pred) {
+            // That's the case ! return the predicate in the correct case
+            return p.name;
+        }
+    }
+    // If we are here, it means that the predicate does not exist
+    Log::e("Predicate %s does not exist in the domain file.\n", pred.c_str());
+    exit(1);
+}
+
+
+void HtnInstance::loadMutexes() {
+    auto start = std::chrono::high_resolution_clock::now();
+
+
+    filesystem::path current_path = getProjectRootDir();
+
+    // Path parser
+    filesystem::path filesystem_full_path_parser = current_path / "lib" / "pandaPIparserOriginal";
+    std::string full_path_parser = filesystem_full_path_parser.string();
+
+    // Path parser output
+    filesystem::path filesystem_parser_output = current_path / "problem.parsed";
+    std::string parser_output = filesystem_parser_output.string();
+
+    std::string commandParser = full_path_parser + " " + _params.getDomainFilename() + " " + _params.getProblemFilename() + " " + parser_output;
+
+    Log::i("Parsing the domain and problem files with the parser...\n");
+    std::system(commandParser.c_str());
+    Log::i("Done !\n");
+
+    Log::i("Now, find the lifted fam groups...\n");
+
+    // Create the directory to store the lifted mutex file if it does not exist
+    filesystem::path dir = current_path / "LiftedFamGroups";
+    if (!filesystem::exists(dir)) {
+        filesystem::create_directory(dir);
+    }
+
+    filesystem::path filesystem_full_path_mutex_file = dir / "lfg.txt";
+    string full_path_mutex_file = filesystem_full_path_mutex_file.string();
+
+
+
+    // Call panda PI grounder to infer lifted fam groups
+    filesystem::path filesystem_full_path_grounder = current_path / "lib" / "pandaPIgrounder";
+    std::string full_path_grounder = filesystem_full_path_grounder.string();
+    std::string commandLiftedFamGroups =  full_path_grounder + " --invariants --out-invariants \"" + full_path_mutex_file + "\" --exit-after-invariants " + parser_output;
+    std::system(commandLiftedFamGroups.c_str());
+    Log::i("Done !\n");
+
+
+    Log::i("Loading and grounding lifted mutexes group from file.\n");
+
+    _sas_plus = new SASPlus(full_path_mutex_file, this);
+    Log::i("Mutexes loaded.\n");
+
+    auto stop = std::chrono::high_resolution_clock::now();
+    _time_to_compute_mutex_predicates = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count();
+}
+
+
+
+
+std::vector<std::string> HtnInstance::topologicalSort(const std::unordered_map<std::string, std::vector<std::string>>& graph, std::vector<std::string>& nodes) {
+    std::unordered_map<std::string, int> inDegree;
+    std::queue<std::string> q;
+    std::vector<std::string> result;
+
+    // Initialize in-degree for all nodes
+    for (std::string node : nodes) {
+        inDegree[node] = 0;
+    }
+
+    // Calculate in-degree for each node
+    for (const auto& pair : graph) {
+        for (std::string neighbor : pair.second) {
+            inDegree[neighbor]++;
+        }
+    }
+
+    // Add nodes with in-degree 0 to the queue
+    for (std::string node : nodes) {
+        if (inDegree[node] == 0) {
+            q.push(node);
+        }
+    }
+
+    // Process nodes
+    while (!q.empty()) {
+        std::string node = q.front();
+        q.pop();
+        result.push_back(node);
+
+        // Reduce in-degree of neighbors
+        if (graph.find(node) != graph.end()) {
+            for (std::string neighbor : graph.at(node)) {
+                inDegree[neighbor]--;
+                if (inDegree[neighbor] == 0) {
+                    q.push(neighbor);
+                }
+            }
+        }
+    }
+
+    // Check if there's a cycle
+    if (result.size() != nodes.size()) {
+        return {}; // Return empty vector if there's a cycle
+    }
+
+    return result;
+}
+
+
+void HtnInstance::handleMacroActions() {
+    int number_macro_actions = 0;
+
+    // First, let's check if a method has a sequence of primitive actions as subtasks
+    for (auto& method : methods) {
+        if (method.ps.size() <= 1) {
+            continue;
+        }
+
+        // For each subtasks, indicate all the subtasks that are ordered after it
+        std::unordered_map<std::string, std::vector<std::string>> sutbasksOrdering;
+        std::vector<std::string> subtasksIds;
+        for (plan_step& ps : method.ps) subtasksIds.push_back(ps.id);
+        for (auto& ordering: method.ordering) {
+            if (sutbasksOrdering.find(ordering.first) == sutbasksOrdering.end()) {
+                sutbasksOrdering[ordering.first] = std::vector<std::string>();
+            }
+            sutbasksOrdering[ordering.first].push_back(ordering.second);
+        }
+        
+        // From this, we can infer the chronological order of the subtasks using a topological sort
+        std::vector<std::string> orderedTasksId = topologicalSort(sutbasksOrdering, subtasksIds);
+
+        // Reorder the method.ps according to the chronological order of the subtasks
+        std::vector<plan_step> ordered_ps;
+        for (auto& taskId : orderedTasksId) {
+            for (auto& ps : method.ps) {
+                if (ps.id == taskId) {
+                    ordered_ps.push_back(ps);
+                    break;
+                }
+            }
+        }
+        method.ps = ordered_ps;
+
+        bool consecutive_primitive_tasks = false;
+        int start_primitive_task = -1;
+        bool last_is_primitive = false;
+        std::set<int> all_starts;
+        std::map<int, int> size_all_starts;
+        for (size_t i = 0; i < method.ps.size(); i++) {
+            // Ignore if it is a method precondition
+            if (method.ps[i].task.rfind(method_precondition_action_name) != std::string::npos) {
+                continue;
+            }
+            bool is_primitive = false;
+            for (auto& task : _p.parsed_primitive) {
+                if (task.name == method.ps[i].task) {
+                    is_primitive = true;
+                    break;
+                }
+            }
+
+            if (is_primitive) {
+                if (last_is_primitive) {
+                    // Found a sequence of primitive tasks
+                    all_starts.insert(start_primitive_task);
+                    size_all_starts[start_primitive_task] = i - start_primitive_task;
+                }
+                else {
+                    start_primitive_task = i;
+                }
+                last_is_primitive = true;
+            }
+            else {
+                last_is_primitive = false;
+                start_primitive_task = -1;
+            }
+        }
+
+        if (all_starts.size() > 0) {
+            Log::i("Found %i sequences of primitive tasks in method %s\n", all_starts.size(), method.name.c_str());
+        }
+
+        int offset = 0;
+        for (auto& start : all_starts) {
+            Log::i("Create a macro action for the sequence of primitive tasks starting at %i with size %i\n", start, size_all_starts[start]);
+            std::vector<task> segment;
+            for (int i = start - offset; i < start + size_all_starts[start] + 1 - offset; i++) {
+                // Create a copy of the action
+                task t = _p.task_name_map[method.ps[i].task];
+                // Replace the parameters of the action by the parameters of the method (and also in preconditions and effects)
+                // Create a dictionary of the parameters of the action to the parameters of the methods
+                std::map<std::string, std::string> task_parameters;
+                std::map<std::string, std::string> task_parameters_types;
+                for (size_t j = 0; j < t.vars.size(); j++) {
+                    task_parameters[t.vars[j].first] = method.ps[i].args[j];
+                    // Get the type from the method
+                    for (const auto& var : method.vars) {
+                        if (var.first == method.ps[i].args[j]) {
+                            task_parameters_types[t.vars[j].first] = var.second;
+                            break;
+                        }
+                    }
+                }
+                // Replace the parameters of the action by the parameters of the method
+                for (size_t j = 0; j < t.vars.size(); j++) {
+                    t.vars[j] = std::make_pair(task_parameters[t.vars[j].first], task_parameters_types[t.vars[j].first]);
+                }
+                // Replace the parameters of the preconditions, effects and constrains (__equal preconditions) of the task by the parameters of the method
+                for (auto& pre : t.prec) {
+                    for (size_t j = 0; j < pre.arguments.size(); j++) {
+                        pre.arguments[j] = task_parameters[pre.arguments[j]];
+                        // If this is a constant, replace it directly with the constant to ease 
+                        std::string sort_param;
+                        for (const auto& var : t.vars) {
+                            if (var.first == pre.arguments[j]) {
+                                sort_param = var.second;
+                                break;
+                            }
+                        }
+                    }
+                }
+                for (auto& eff : t.eff) {
+                    for (size_t j = 0; j < eff.arguments.size(); j++) {
+                        eff.arguments[j] = task_parameters[eff.arguments[j]];
+                        // If this is a constant, replace it directly with the constant to ease 
+
+                        std::string sort_param;
+                        for (const auto& var : t.vars) {
+                            if (var.first == eff.arguments[j]) {
+                                sort_param = var.second;
+                                break;
+                            }
+                        }
+                    }
+                }
+                for (auto& constr : t.constraints) {
+                    for (size_t j = 0; j < constr.arguments.size(); j++) {
+                        constr.arguments[j] = task_parameters[constr.arguments[j]];
+                        // If this is a constant, replace it directly with the constant to ease 
+
+                        std::string sort_param;
+                        for (const auto& var : t.vars) {
+                            if (var.first == constr.arguments[j]) {
+                                sort_param = var.second;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+
+                segment.push_back(t);
+            }
+
+            task macro_task;
+            macro_task.name = "Macro-" + method.name + "__" + std::to_string(start) + "-" + std::to_string(start + size_all_starts[start]);
+            for (auto& t : segment) {
+
+                macro_task.name += "__" + t.name;
+                
+                // First, add precondition to macro with formula : pre(macroAction, actionToAdd) = pre(macroAction) U (pre(actionToAdd) \ add(macroAction))
+
+
+                // For each precondition of the action to add...
+                for (auto& pre: t.prec) {
+
+                    bool contains_opposite_eff = false;
+                    bool contains_eff = false;
+                    bool contains_pre = false;
+
+                    // Check if the macro action already certifies the precondition...
+                    for (auto& eff: macro_task.eff) {
+
+                        // Precondition is already satisfied !
+                        if (pre.predicate == eff.predicate 
+                        && pre.arguments == eff.arguments 
+                        && pre.positive == eff.positive) {
+
+                            contains_eff = true;
+                            break;
+                        }
+
+                        // Precondition is impossible to satisfy !
+                        if (pre.predicate == eff.predicate
+                        && pre.positive != eff.positive) {
+                            if (pre.arguments == eff.arguments) {
+                                contains_opposite_eff = true;
+                                break;
+                            }
+                            // At least one of the paramter must be different to be sure that the precondition can be satisfied
+                            // For now, only handle the case with one parameter (add the constraint that the parameter must be different)
+                            // TODO handle for multiple parameters (if possible ?)
+                            if (pre.arguments.size() == 1 && eff.arguments.size() == 1) {
+                                // Is this constraint already in the macro action ?
+                                bool contains_constr = false;
+                                for (auto& constr_macro: macro_task.constraints) {
+                                    if (constr_macro.predicate == dummy_equal_literal && !constr_macro.positive 
+                                    && (constr_macro.arguments[0] == pre.arguments[0] && constr_macro.arguments[1] == eff.arguments[0]
+                                    || constr_macro.arguments[0] == eff.arguments[0] && constr_macro.arguments[1] == pre.arguments[0])) {
+                                        contains_constr = true;
+                                        break;
+                                    } 
+                                }
+                                if (!contains_constr) {
+                                    Log::i("Add a constraint to the macro action that the parameter %s must be different from the parameter %s because the precondition %c%s [%s] is impossible to satisfy with the effect %c%s [%s]\n", pre.arguments[0].c_str(), eff.arguments[0].c_str(), pre.positive ? '+' : '-', pre.predicate.c_str(), StringUtil::join(pre.arguments, ", ").c_str(), eff.positive ? '+' : '-', eff.predicate.c_str(), StringUtil::join(eff.arguments, ", ").c_str());
+                                    literal constr;
+                                    constr.positive = false;
+                                    constr.predicate = dummy_equal_literal;
+                                    constr.arguments.push_back(pre.arguments[0]);
+                                    constr.arguments.push_back(eff.arguments[0]);
+                                    macro_task.constraints.push_back(constr);
+                                }
+                            }
+                        }
+                    }
+
+                    if (!contains_eff && !contains_opposite_eff) {
+                        // Check if we already have this precondition in the macro action
+                        for (auto& pre_macro: macro_task.prec) {
+                            if (pre.predicate == pre_macro.predicate 
+                            && pre.arguments == pre_macro.arguments 
+                            && pre.positive == pre_macro.positive) {
+                                contains_pre = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (contains_opposite_eff) {
+                        Log::e("  Error: the macro action already contains the opposite effect of the precondition\n");
+                        exit(1);
+                    }
+                    if (contains_eff) {
+                        // The precondition is automatically satisfied
+                        continue;
+                    }
+                    if (contains_pre) {
+                        // The precondition is already a precondition of the macro action
+                        continue;
+                    }
+
+                    macro_task.prec.push_back(pre);
+                }
+                // Also add the constrains if exist
+                for (auto& constr: t.constraints) {
+                    bool contains_constr = false;
+                    for (auto& constr_macro: macro_task.constraints) {
+                        if (constr.predicate == constr_macro.predicate 
+                        && constr.arguments == constr_macro.arguments) {
+                            if (constr.positive != constr_macro.positive) {
+                                Log::e("  Error: the macro action already contains the opposite constraint\n");
+                                exit(1);
+                            }
+                            contains_constr = true;
+                            break;
+                        } 
+                    }
+                    if (!contains_constr) {
+                        macro_task.constraints.push_back(constr);
+                    }
+                }
+
+                // Now, add delete effect to macro with formula : del(macroAction, actionToAdd) = del(actionToAdd) U (del(macroAction) \ add(actionToAdd))
+
+                // So, first, we remove all the del of the macro action if the action to add has the same predicate as an add effect
+                Log::i("Remove the following delete effects from the macro action\n");
+                auto new_end = std::remove_if(macro_task.eff.begin(), macro_task.eff.end(),
+                                [&t](const literal& del) {
+                                    if (!del.positive) {  // Only consider negative effects for deletion
+                                        for (const auto& add : t.eff) {
+                                            if (add.positive && del.predicate == add.predicate && del.arguments == add.arguments) {
+                                                return true;  // Effect matches and should be removed
+                                            }
+                                        }
+                                    }
+                                    return false;  // Do not remove
+                                });
+
+                // Erase the effects that were flagged for removal
+                macro_task.eff.erase(new_end, macro_task.eff.end());
+
+                // Now, add the delete effects of the action to add
+                for (auto& eff: t.eff) {
+                    if (!eff.positive) {
+                        macro_task.eff.push_back(eff);
+                    }
+                }
+
+                // Now, add the add effects of the action to add with formula : add(macroAction, actionToAdd) = add(actionToAdd) U (add(macroAction) \ del(actionToAdd))
+
+                // So, first, we remove all the add of the macro action if the action to add has the same predicate as a delete effect
+                new_end = std::remove_if(macro_task.eff.begin(), macro_task.eff.end(),
+                                [&t](const literal& add) {
+                                    if (add.positive) {  // Only consider positive effects for addition
+                                        for (const auto& del : t.eff) {
+                                            if (!del.positive && add.predicate == del.predicate && add.arguments == del.arguments) {
+                                                return true;  // Effect matches and should be removed
+                                            }
+                                        }
+                                    }
+                                    return false;  // Do not remove
+                                });
+
+                // Erase the effects that were flagged for removal
+                macro_task.eff.erase(new_end, macro_task.eff.end());
+
+                // Now, add the add effects of the action to add
+                for (auto& eff: t.eff) {
+                    if (eff.positive) {
+                        macro_task.eff.push_back(eff);
+                    }
+                }
+            }
+
+            // Final clean, remove all the effects which are in the preconditions 
+            auto new_end = std::remove_if(macro_task.eff.begin(), macro_task.eff.end(),
+                                [&macro_task](const literal& eff) {
+                                    for (const auto& pre : macro_task.prec) {
+                                        if (eff.predicate == pre.predicate && eff.arguments == pre.arguments && eff.positive == pre.positive) {
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                });
+
+            // Erase the effects that were flagged for removal
+            macro_task.eff.erase(new_end, macro_task.eff.end());
+
+            // Add all the necessary arguments of the macro action
+            std::set<std::pair<std::string, std::string>> all_args;
+            for (auto& t : segment) {
+                for (auto var : t.vars) {
+                    all_args.insert(var);
+                }
+            }
+
+            for (auto& arg : all_args) {
+                macro_task.vars.push_back(arg);
+            }
+            macro_task.number_of_original_vars = macro_task.vars.size();
+
+            Log::i("Info final macro action\n");
+            Log::i("Name: %s\n", macro_task.name.c_str());
+            Log::i("Parameters: \n");
+            for (auto& var : macro_task.vars) {
+                Log::i("  %s %s\n", var.first.c_str(), var.second.c_str());
+            }
+            Log::i("Preconditions: \n");
+            for (auto& pre : macro_task.prec) {
+                Log::i("  %c%s [%s]\n", pre.positive ? '+' : '-', pre.predicate.c_str(), StringUtil::join(pre.arguments, ", ").c_str());
+            }
+            Log::i("Constrains: \n");
+            for (auto& constr : macro_task.constraints) {
+                Log::i("  %c%s [%s]\n", constr.positive ? '+' : '-', constr.predicate.c_str(), StringUtil::join(constr.arguments, ", ").c_str());
+            }
+            Log::i("Effects: \n");
+            for (auto& eff : macro_task.eff) {
+                Log::i("  %c%s [%s]\n", eff.positive ? '+' : '-', eff.predicate.c_str(), StringUtil::join(eff.arguments, ", ").c_str());
+            }
+
+            // Add the macro task to the primitive tasks
+            primitive_tasks.push_back(macro_task);
+
+            // Finally, modify the method to use the macro task instead of the sequence of primitive tasks
+            // First, remove the sequence of primitive tasks
+            method.ps.erase(method.ps.begin() + start - offset, method.ps.begin() + start + size_all_starts[start] + 1 - offset);
+            // Then, add the macro task
+            plan_step ps;
+            ps.task = macro_task.name;
+            ps.id = "t" + std::to_string(start + 1 - offset);
+            for (auto& var : macro_task.vars) {
+                ps.args.push_back(var.first);
+            }
+            method.ps.insert(method.ps.begin() + start - offset, ps);
+
+            // Remake the ordering from the current order
+            std::vector<std::pair<std::string, std::string>> new_ordering;
+            for (size_t i = 0; i < method.ps.size() - 1; i++) {
+                for (size_t j = i + 1; j < method.ps.size(); j++) {
+                    new_ordering.push_back(std::make_pair(method.ps[i].id, method.ps[j].id));
+                }
+                // new_ordering.push_back(std::make_pair(method.ps[i].id, method.ps[i + 1].id));
+            }
+            method.ordering = new_ordering;
+
+            // Replace in _methods the old method by the new method
+            for (auto& m : methods) {
+                if (m.name == method.name) {
+                    m = method;
+                    break;
+                }
+            }
+
+            // Create the map from the macro task to the sequence of primitive tasks
+            _macro_name_to_primitives[macro_task.name] = segment;
+            _macro_name_to_task[macro_task.name] = macro_task;
+
+            offset += segment.size() - 1;
+            number_macro_actions++;
+        }
+    }
+    Log::i("Created %d macro actions\n", number_macro_actions);
+}
+
+std::vector<USignature> HtnInstance::getActionsFromMacro(const USignature& macroAction) const {
+    std::vector<USignature> actions;
+    if (!isMacroTask(macroAction._name_id)) return actions;
+
+    Log::d("Retrieving actions from macro %s\n", TOSTR(macroAction));
+
+    std::string name = _name_back_table.at(macroAction._name_id);
+
+    assert((_macro_name_to_task.count(name) && _macro_name_to_primitives.count(name)) || Log::e("Macro %s not found!\n", name.c_str()));
+    const task& macroTask = _macro_name_to_task.at(name);
+    const std::vector<task>& originalPrimTasks = _macro_name_to_primitives.at(name);
+    for (const task& primTask : originalPrimTasks) {
+        assert(_name_table.count(primTask.name) || Log::e("Primitive task %s not found!\n", primTask.name.c_str()));
+        int primTaskId = _name_table.at(primTask.name);
+        std::vector<int> args;
+        for (size_t i = 0; i < primTask.vars.size(); i++) {
+            std::string name = primTask.vars[i].first;
+            // Find the idx of the variable in the macro task
+            int idx = -1;
+            for (size_t j = 0; j < macroTask.vars.size(); j++) {
+                if (macroTask.vars[j].first == name) {
+                    idx = j;
+                    break;
+                }
+            }
+            assert(idx != -1 || Log::e("Variable %s not found in macro %s!\n", name.c_str(), TOSTR(macroAction)));
+            args.push_back(macroAction._args[idx]);
+        }
+        USignature action(primTaskId, args);
+        Log::d("  Action %s\n", TOSTR(action));
+        actions.push_back(action);
+        int b;
+    }
+
+    return actions;
+}
+
+bool HtnInstance::isMacroTask(int nameId) const {
+    return _macro_name_to_task.count(_name_back_table.at(nameId));
+}
+
 
 HtnInstance::~HtnInstance() {
     delete &_p;

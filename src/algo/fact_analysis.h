@@ -22,6 +22,14 @@ private:
     USigSet _initialized_facts;
     USigSet _relevant_facts;
 
+    const bool _preprocess_facts;
+    USigSet _ground_pos_facts;
+    USigSet _ground_neg_facts;
+    // For each lift fact, store the set of ground facts that it can be grounded to
+    NodeHashMap<int, std::vector<FlatHashSet<int>>> _allowed_domain_per_pos_lift_facts;
+    NodeHashMap<int, std::vector<FlatHashSet<int>>> _allowed_domain_per_neg_lift_facts;
+    long long int _time_grounding_facts = 0;
+
     // Maps an (action|reduction) name 
     // to the set of (partially lifted) fact signatures
     // that might be added to the state due to this operator. 
@@ -33,8 +41,36 @@ private:
 
 public:
     
-    FactAnalysis(HtnInstance& htn) : _htn(htn), _traversal(htn), _init_state(_htn.getInitState()) {
+    FactAnalysis(HtnInstance& htn, bool preprocess_facts) : _htn(htn), _traversal(htn),  _preprocess_facts(preprocess_facts), _init_state(_htn.getInitState()) {
         resetReachability();
+
+        if (_preprocess_facts) {
+            getGroundFacts();
+        }
+    }
+    
+    bool checkGroundingFacts() {
+        return _preprocess_facts;
+    }
+
+    long long int getGroundingTime() {
+        return _time_grounding_facts;
+    }
+
+    bool isInGroundFacts(const USignature& fact, bool negated) {
+        if (negated) {
+            return _htn.isEqualityPredicate(fact._name_id) || _ground_neg_facts.count(fact);
+        } else {
+            return _htn.isEqualityPredicate(fact._name_id) || _ground_pos_facts.count(fact);
+        }
+    }
+
+    const USigSet& getGroundPosFacts() const {
+        return _ground_pos_facts;
+    }
+
+    bool isInGroundFacts(const Signature& fact) {
+        return isInGroundFacts(fact._usig, fact._negated);
     }
 
     void resetReachability() {
@@ -56,10 +92,23 @@ public:
     }
     
     bool isReachable(const USignature& fact, bool negated) {
+        if (_preprocess_facts && !isInGroundFacts(fact, negated)) {
+            return false;
+        }
         if (negated) {
             return _neg_layer_facts.count(fact) || !_init_state.count(fact);
         }
         return _pos_layer_facts.count(fact);
+    }
+
+    void printReachableFacts() {
+        Log::i("Reachable facts:\n");
+        for (const auto& fact : _pos_layer_facts) {
+            Log::i("  +%s\n", TOSTR(fact));
+        }
+        for (const auto& fact : _neg_layer_facts) {
+            Log::i("  -%s\n", TOSTR(fact));
+        }
     }
 
     bool isInvariant(const Signature& fact) {
@@ -135,6 +184,15 @@ public:
 
 private:
     FactFrame getFactFrame(const USignature& sig, USigSet& currentOps);
+    void getGroundFacts();
+    void extractGroundFactsFromPandaPiGrounderFile(const std::string& filename);
+
+    /**
+     * For a lift fact, return for each argument the set of object that it can be grounded to using the set of all possible ground facts that are reachable.
+     * Can only be called when using the option preprocessFacts.
+     */
+    const std::vector<FlatHashSet<int>>& getMaxAllowedDomainForLiftFactParams(const Signature& sig);
+
 };
 
 #endif

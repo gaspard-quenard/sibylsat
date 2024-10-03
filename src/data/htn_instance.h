@@ -14,6 +14,7 @@
 
 #include "algo/arg_iterator.h"
 #include "algo/sample_arg_iterator.h"
+#include "data/sas_plus.h"
 
 // Forward definitions
 class ParsedProblem;
@@ -91,7 +92,20 @@ private:
     
     const bool _share_q_constants;
 
+    long long int _time_to_compute_mutex_predicates = 0;
+
+    FlatHashSet<int> _name_id_recursive_methods;
+
+    // For macro actions (with flag -macroActions)
+    FlatHashMap<std::string, task> _macro_name_to_task;
+    FlatHashMap<std::string, std::vector<task>> _macro_name_to_primitives;
+
 public:
+
+    SASPlus* _sas_plus = nullptr;
+    long long int getTimeComputingMutex() {
+        return _time_to_compute_mutex_predicates;
+    }
 
     // Special action representing a virtual "No-op".
     static Action BLANK_ACTION;
@@ -100,6 +114,19 @@ public:
     ~HtnInstance();
 
     ParsedProblem* parse(std::string domainFile, std::string problemFile);
+
+
+    // Get the params 
+    Parameters& getParams() const {
+        return _params;
+    }
+
+    const bool isEqualityPredicate(int nameId) const {
+        return _equality_predicates.count(nameId);
+    }
+
+    bool isMacroTask(int nameId) const;
+    std::vector<USignature> getActionsFromMacro(const USignature& macroAction) const;
 
     USigSet getInitState();
     const Reduction& getInitReduction();
@@ -131,6 +158,7 @@ public:
     const Action& getActionFromRepetition(int vChildId) const;
 
     const std::vector<int>& getSorts(int nameId) const;
+    const std::vector<int> getSortsParamsFromSigForFA(const Signature& eff) const;
     const FlatHashSet<int>& getConstantsOfSort(int sort) const;
     const FlatHashSet<int>& getSortsOfQConstant(int qconst);
     const IntPair& getOriginOfQConstant(int qconst) const;
@@ -312,6 +340,19 @@ public:
         return constraints;
     }
 
+    inline void addRecursiveMethod(int nameId) {
+        _name_id_recursive_methods.insert(nameId);
+    }
+
+    inline bool isRecursiveMethod(int nameId) {
+        return _name_id_recursive_methods.count(nameId);
+    }
+
+
+    bool sortHasConstants(int sortId) const;
+    NodeHashMap<int, FlatHashSet<int>>& getConstantsBySort() {return _constants_by_sort;}
+    std::string getPredicateInCorrectCase(std::string pred) const;
+
 private:
 
     void primitivizeSimpleReductions();
@@ -334,6 +375,10 @@ private:
 
     std::vector<int> replaceVariablesWithQConstants(const HtnOp& op, const std::vector<FlatHashSet<int>>& opArgDomains, int layerIdx, int pos);
     void initQConstantSorts(int id, const FlatHashSet<int>& domain);
+
+    void loadMutexes();
+    std::vector<std::string> topologicalSort(const std::unordered_map<std::string, std::vector<std::string>>& graph, std::vector<std::string>& nodes);
+    void handleMacroActions();
 
 };
 

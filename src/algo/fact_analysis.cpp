@@ -1,6 +1,12 @@
 
 #include "fact_analysis.h"
 
+#include <chrono>
+#include <fstream>
+#include <filesystem>
+
+#include "util/project_utils.h"
+
 const SigSet& FactAnalysis::getPossibleFactChanges(const USignature& sig, FactInstantiationMode mode, OperationType opType) {
     
     if (opType == UNKNOWN) opType = _htn.isAction(sig) ? ACTION : REDUCTION;
@@ -56,11 +62,70 @@ const SigSet& FactAnalysis::getPossibleFactChanges(const USignature& sig, FactIn
         // Convert result to vector
         SigSet& liftedResult = _lifted_fact_changes[nameId];
         SigSet& result = _fact_changes[nameId];
-        for (const Signature& sig : facts) {
-            liftedResult.insert(sig);
-            if (sig._usig._args.empty()) result.insert(sig);
-            else for (const USignature& sigGround : ArgIterator::getFullInstantiation(sig._usig, _htn)) {
-                result.emplace(sigGround, sig._negated);
+        bool restrictSortInFA = _htn.getParams().isNonzero("restrictSortsInFA");
+        bool isInitReduction = sig._name_id == _htn.getInitReduction().getNameId();
+        bool getReducedConstantsPerSort = _preprocess_facts && opType == REDUCTION && sig._name_id != _htn.getInitReduction().getNameId();
+        for (const Signature& fact : facts) {
+            liftedResult.insert(fact);
+            std::vector<int> trueSortsFact;
+            if (restrictSortInFA && opType == REDUCTION && !isInitReduction) {
+                trueSortsFact = _htn.getSortsParamsFromSigForFA(fact);
+            }
+            if (fact._usig._args.empty()) {
+                if (opType == REDUCTION && _preprocess_facts && !isInGroundFacts(fact._usig, fact._negated)) {
+                    continue;
+                }
+                result.insert(fact);
+            }
+            // else for (const USignature& sigGround : ArgIterator::getFullInstantiation(fact._usig, _htn)) {
+            else for (const USignature& sigGround : ArgIterator::getFullInstantiation(fact._usig, _htn, trueSortsFact, getReducedConstantsPerSort ? getMaxAllowedDomainForLiftFactParams(fact) : std::vector<FlatHashSet<int>>())) {
+                if (_preprocess_facts && opType == REDUCTION) {
+
+                    if (_htn.isFullyGround(sigGround)) {
+                        if (!isInGroundFacts(sigGround, fact._negated)) {
+                            // Log::i("Discard %s as possible eff because it is not in the preprocessed facts\n", TOSTR(sigGround));
+                            continue;
+                        }
+                    } 
+                    else {
+                        // Check if at least one decoding is correct
+                        bool atLeastOneDecodingIsCorrect = false;
+                        std::vector<int> sortsMethod = _htn.getSorts(sig._name_id);
+
+                        std::vector<int> sigSorts(sigGround._args.size());
+                        for (size_t sigIdx = 0; sigIdx < sigSorts.size(); sigIdx++) {
+                            for (size_t opIdx = 0; opIdx < sig._args.size(); opIdx++) {
+                                if (sigGround._args[sigIdx] < 0) {
+                                    // Found
+                                    sigSorts[sigIdx] = sortsMethod[-sigGround._args[sigIdx] - 1];
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Log::i("Sorts of the condition: %s\n", TOSTR(sigSorts));
+                        
+                        auto eligibleArgs = _htn.getEligibleArgs(sigGround, sigSorts);
+                        // Log::i("Eleigible args: %s\n", TOSTR(eligibleArgs));
+
+                        for (const USignature& decFactAbs : _htn.decodeObjects(sigGround, eligibleArgs)) {
+
+                            // Log::i("Possible decoding: %s\n", TOSTR(decFactAbs));
+                            if (isInGroundFacts(decFactAbs, fact._negated)) {
+                                atLeastOneDecodingIsCorrect = true;
+                                break;
+                            }
+                            
+                        }
+
+                        if (!atLeastOneDecodingIsCorrect) {
+                            Log::d("Discard %s as possible pseudo eff because no decoding is correct\n", TOSTR(sigGround));
+                            continue;
+                        }
+                    }
+                }
+                
+                result.emplace(sigGround, fact._negated);
             }
         }
     }
@@ -181,6 +246,8 @@ FactFrame FactAnalysis::getFactFrame(const USignature& sig, USigSet& currentOps)
             result.effects = getPossibleFactChanges(r.getSignature(), LIFTED);
             //Log::d("RECURSIVE_FACT_FRAME %s\n", TOSTR(result.effects));
 
+            _htn.addRecursiveMethod(op._name_id);
+
         } else {
             currentOps.insert(op);
             
@@ -249,5 +316,166 @@ FactFrame FactAnalysis::getFactFrame(const USignature& sig, USigSet& currentOps)
 
     const FactFrame& f = _fact_frames[nameId];
     return f.substitute(Substitution(f.sig._args, sig._args));
+}
+
+void FactAnalysis::getGroundFacts() {
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    std::filesystem::path current_path = getProjectRootDir();
+
+    // Path parser
+    std::filesystem::path filesystem_full_path_parser = current_path / "lib" / "pandaPIparserOriginal";
+    std::string full_path_parser = filesystem_full_path_parser.string();
+
+    // Path parser output
+    std::filesystem::path filesystem_parser_output = current_path / "problem.parsed";
+    std::string parser_output = filesystem_parser_output.string();
+
+    std::string commandParser = full_path_parser + " " + _htn.getParams().getDomainFilename() + " " + _htn.getParams().getProblemFilename() + " " + parser_output;
+
+    Log::i("Parsing the domain and problem files with the parser...\n");
+    std::system(commandParser.c_str());
+    Log::i("Done !\n");
+
+
+    // Path grounder 
+    std::filesystem::path filesystem_full_path_grounder = current_path / "lib" / "pandaPIgrounder";
+    std::string full_path_grounder = filesystem_full_path_grounder.string();
+
+    // Path grounder output
+    std::filesystem::path filesystem_problem_sas = current_path / "problem.sas";
+    std::string grounder_output = filesystem_problem_sas.string();
+
+    // Remove the file if exists
+    if (std::filesystem::exists(grounder_output)) {
+        std::filesystem::remove(grounder_output);
+    }
+
+
+    // The option --only-write-state-features is used to only write the state features in the file (no ground task or methods are written in the output file)
+    // The option --quick-compute-state-features is used to compute more quickly the state features but can produce a less precise result (will only be used if the grounding is too slow)
+    Log::i("Grounding the parsed file with the grounder...\n");
+    std::string command2 = full_path_grounder + " --no-literal-pruning --only-write-state-features --quick-compute-state-features --quiet " + parser_output + " " + grounder_output;
+    // Log::i("Command2: %s\n", command2.c_str());
+    std::system(command2.c_str());
+    Log::i("Done !\n");
+
+
+    // Assert that the file exist
+    std::ifstream file(grounder_output);
+    assert(file.good() || Log::e("File %s does not exist!\n", grounder_output.c_str()));
+
+    // Now, read the file Proprocessing_sas/problem.sas and extract the facts
+    Log::i("Extract ground facts from ground file...\n");
+    extractGroundFactsFromPandaPiGrounderFile(grounder_output);
+    Log::i("Done !\n");
+
+    auto end = std::chrono::high_resolution_clock::now();
+    _time_grounding_facts = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    Log::i("Grounding facts took %lld ms\n", _time_grounding_facts);
+}
+
+void FactAnalysis::extractGroundFactsFromPandaPiGrounderFile(const std::string& filename) {
+    std::ifstream file(filename);
+    int lineIdx = 0;
+    std::string line;
+
+    // First, read until the line which start with ";; #state features"
+    while (std::getline(file, line)) {
+        lineIdx++;
+        if (line == ";; #state features") {
+            break;
+        }
+    }
+
+    // Skip the next line which contains the number of state features
+    std::getline(file, line);
+    lineIdx++;
+
+
+    while (std::getline(file, line)) {
+        lineIdx++;
+        if (line.size() == 0) break;
+        else {
+            // Each fact is in the form [+-]fact_name\[arg1,arg2,...\]
+            bool isPositive = line[0] == '+';
+            std::string fact_name = "";
+            std::vector<std::string> fact_args;
+            int idx = 1; // Ignore the first character, which is + or -
+            while (line[idx] != '[') {
+                fact_name += line[idx];
+                idx++;
+            }
+            idx++; // Skip the '[' character
+            while (line[idx] != ']') {
+                std::string arg = "";
+                while (line[idx] != ',' && line[idx] != ']') {
+                    arg += line[idx];
+                    idx++;
+                }
+                fact_args.push_back(arg);
+                if (line[idx] == ',') idx++; // Skip the ',' character
+            }
+
+            // Create the fact as a USignature
+            std::vector<int> args_pred;
+            for (std::string arg_name: fact_args) {
+                args_pred.push_back(_htn.nameId(arg_name));
+            }
+            USignature pred_usig(_htn.nameId(fact_name), args_pred);
+            if (isPositive) {
+                _ground_pos_facts.insert(pred_usig);
+                // Add it as well as a negative state feature
+                _ground_neg_facts.insert(pred_usig);
+                Log::d("%d -> %s\n", _ground_pos_facts.size(), TOSTR(pred_usig));
+            } else {
+                Log::d("-> not %s\n", TOSTR(pred_usig));
+                // Only add it as a negative state feature
+                _ground_neg_facts.insert(pred_usig);
+            }
+        }
+    }
+
+    Log::i("There are %d positive state features (which can also be negative) for this problem.\n", _ground_pos_facts.size());
+    Log::i("There are %d negative state features for this problem.\n", _ground_neg_facts.size());
+}
+
+const std::vector<FlatHashSet<int>>& FactAnalysis::getMaxAllowedDomainForLiftFactParams(const Signature& sig) {
+    // If it is in the cache, return it
+    if (sig._negated) {
+        if (_allowed_domain_per_neg_lift_facts.count(sig._usig._name_id) > 0) {
+            return _allowed_domain_per_neg_lift_facts[sig._usig._name_id];
+        }
+    } else {
+        if (_allowed_domain_per_pos_lift_facts.count(sig._usig._name_id) > 0) {
+            return _allowed_domain_per_pos_lift_facts[sig._usig._name_id];
+        }
+    }
+
+
+    const USigSet& preprocessed_facts = sig._negated ? _ground_neg_facts : _ground_pos_facts;
+
+
+    std::vector<FlatHashSet<int>> domainPerVariable(sig._usig._args.size());
+
+    for (const USignature& pSig: preprocessed_facts) {
+        if (pSig._name_id != sig._usig._name_id) continue;
+
+
+        // Increate each domain per variable
+        for (int i = 0; i < pSig._args.size(); i++) {
+            domainPerVariable[i].insert(pSig._args[i]);
+        }
+    }
+
+    if (sig._negated) {
+        _allowed_domain_per_neg_lift_facts[sig._usig._name_id] = domainPerVariable;
+        return _allowed_domain_per_neg_lift_facts[sig._usig._name_id];
+    } else {
+        _allowed_domain_per_pos_lift_facts[sig._usig._name_id] = domainPerVariable;
+        return _allowed_domain_per_pos_lift_facts[sig._usig._name_id];
+    }
 }
 

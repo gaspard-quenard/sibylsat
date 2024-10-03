@@ -16,6 +16,7 @@
 #include "algo/domination_resolver.h"
 #include "algo/plan_writer.h"
 #include "sat/encoding.h"
+#include <optional>
 
 typedef std::pair<std::vector<PlanItem>, std::vector<PlanItem>> Plan;
 
@@ -42,6 +43,11 @@ private:
     size_t _pos;
     size_t _old_pos;
 
+    const int _verbosity;
+
+    const bool _use_sibylsat_expansion;
+    FlatHashSet<int> sibylsat_positions_to_develop;
+
     float _sat_time_limit = 0;
     float _init_plan_time_limit = 0;
     bool _nonprimitive_support;
@@ -58,7 +64,9 @@ private:
 
 public:
     Planner(Parameters& params, HtnInstance& htn) : _params(params), _htn(htn),
-            _analysis(_htn), 
+            _verbosity(params.getIntParam("v")),
+            _analysis(_htn, _htn.getParams().isNonzero("preprocessFacts")), 
+            _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
             _instantiator(params, htn, _analysis), 
             _enc(_params, _htn, _analysis, _layers, [this](){checkTermination();}), 
             _minres(_htn), 
@@ -70,6 +78,10 @@ public:
 
         // Mine additional preconditions for reductions from their subtasks
         PreconditionInference::infer(_htn, _analysis, PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
+
+        if (_htn.getParams().isNonzero("mutex") && _analysis.checkGroundingFacts()) {
+            _htn._sas_plus->cleanMutexGroupsWithPandaPiGrounderPreprocessingFacts(_analysis.getGroundPosFacts());
+        }
     }
     int findPlan();
     void improvePlan(int& iteration);
@@ -82,10 +94,12 @@ private:
 
     void createFirstLayer();
     void createNextLayer();
+    void createNextLayerUsingSibylSat(const FlatHashSet<int>& positionsToDevelop);
     
     void createNextPosition();
     void createNextPositionFromAbove();
     void createNextPositionFromLeft(Position& left);
+    void createNextPositionFromLeftSimplified(Position& left);
 
     void incrementPosition();
 

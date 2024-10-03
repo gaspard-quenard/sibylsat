@@ -153,6 +153,41 @@ public:
         return result;
     }
 
+    inline void print_formula(std::string filename) {
+         if (filename.length() == 0) {
+            filename == "FORMULA.cnf";
+        }
+
+        // std::cout << "WRITING FORMULA TO FILE: " << filename << std::endl;
+
+        // Create final formula file
+        std::ofstream ffile;
+        ffile.open(filename);
+
+        ffile << "p cnf " << VariableDomain::getMaxVar() << " " << (_stats._num_cls+_last_assumptions.size()) << "\n";
+
+        ffile << "c assumptions\n";
+        for (int asmpt : _last_assumptions) {
+            ffile << asmpt << " 0\n";
+        }
+        ffile << "c end assumptions\n";
+
+        // Write the content of _out to the file
+        _out.flush();
+        std::ifstream oldfile;
+        oldfile.open("formula.cnf");
+        std::string line;
+        while (std::getline(oldfile, line)) {
+            line = line + "\n";
+            ffile.write(line.c_str(), line.size());
+        }
+
+        // Finish
+        ffile.flush();
+        ffile.close();
+
+    }
+
     ~SatInterface() {
         
         if (_params.isNonzero("wf")) {

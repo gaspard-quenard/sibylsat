@@ -380,6 +380,95 @@ public:
     void convert(std::function<U(const T&)> map, LiteralTree<U, UHash>& result) const {
         result._root = *_root.convert(map);
     }
+
+
+    bool pathSubsumes(const std::vector<T>& path1, const std::vector<T>& path2) const {
+        if (path1.size() > path2.size()) return false;
+        
+        for (const auto& elem : path1) {
+            if (std::find(path2.begin(), path2.end(), elem) == path2.end()) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    void collectPaths(const Node& node, std::vector<T>& currentPath, std::vector<std::vector<T>>& paths) const {
+        if (node.validLeaf) {
+            paths.push_back(currentPath);
+            return;
+        }
+        for (const auto& [key, child] : node.children) {
+            currentPath.push_back(key);
+            collectPaths(*child, currentPath, paths);
+            currentPath.pop_back();
+        }
+    }
+
+    void clearHelper(Node& node) {
+        for (auto& [key, child] : node.children) {
+            clearHelper(*child);
+            delete child;
+        }
+        node.children.clear();
+        node.validLeaf = false;
+    }
+
+    void clear() {
+        // Delete all nodes and reset the root
+        clearHelper(_root);
+        _root = Node();
+    }
+
+
+    /*
+     * Suppose that we have two paths:
+     * path1: var1 must take value x1 
+     * path2: var2 must take value x2, var1 must take value x1, var3 must take value x3
+     * 
+     * The path 2 must actually be removed because a possible solution is
+     * var1=x1, var2=x2, var3=x5 (it is ok with the first path)
+     * But if we do not prune the redondant paths, the encoding will prevent this solution
+    */
+    void pruneRedundantPaths() {
+        std::vector<std::vector<T>> paths;
+        std::vector<T> currentPath;
+        collectPaths(_root, currentPath, paths);
+
+        if (paths.size() <= 1) return;
+        
+        std::vector<bool> toRemove(paths.size(), false);
+
+        bool atLeastOneRemoved = false;
+        
+        for (size_t i = 0; i < paths.size(); ++i) {
+            if (toRemove[i]) continue;
+            for (size_t j = 0; j < paths.size(); ++j) {
+                if (i == j || toRemove[j]) continue;
+                if (pathSubsumes(paths[i], paths[j])) {
+                    Log::d("Removing path %s because it is subsumed by %s\n", TOSTR(paths[j]), TOSTR(paths[i]));
+                    toRemove[j] = true;
+                    atLeastOneRemoved = true;
+                }
+            }
+        }
+
+        if (!atLeastOneRemoved) return;
+        
+        std::vector<std::vector<T>> prunedPaths;
+        for (size_t i = 0; i < paths.size(); ++i) {
+            if (!toRemove[i]) {
+                prunedPaths.push_back(std::move(paths[i]));
+            }
+        }
+
+        // Rebuild the tree with pruned paths
+        clear();
+        for (const auto& path : prunedPaths) {
+            insert(path);
+        }
+    }
 };
 
 

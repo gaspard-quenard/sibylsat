@@ -135,6 +135,7 @@ struct SigVecHasher {
 
 typedef FlatHashSet<Signature, SignatureHasher> SigSet;
 typedef FlatHashSet<USignature, USignatureHasher> USigSet;
+typedef FlatHashSet<PositionedUSig, PositionedUSigHasher> PositionUSigSet;
 
 namespace Sig {
     const static USignature NONE_SIG = USignature(-1, std::vector<int>());

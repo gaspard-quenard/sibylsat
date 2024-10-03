@@ -22,19 +22,22 @@ void RetroactivePruning::prune(const USignature& op, int layerIdx, int pos) {
             continue;
         }
 
-        Position& position = _layers[psig.layer]->at(psig.pos);
-        assert(position.hasAction(psig.usig) || position.hasReduction(psig.usig));
-        int oldPos = 0;
-        Layer& oldLayer = *_layers.at(psig.layer-1);
-        while (oldPos+1 < (int)oldLayer.size() && oldLayer.getSuccessorPos(oldPos+1) <= psig.pos) 
-            oldPos++;
+        Position* position = &_layers[psig.layer]->at(psig.pos);
+        assert(position->hasAction(psig.usig) || position->hasReduction(psig.usig));
+        // int oldPos = 0;
+        // Layer& oldLayer = *_layers.at(psig.layer-1);
+        // while (oldPos+1 < (int)oldLayer.size() && oldLayer.getSuccessorPos(oldPos+1) <= psig.pos) 
+        //     oldPos++;
+        int oldPos = position->getAbovePos();
+        int aboveLayerIdx = position->getOriginalLayerIndex() - 1;
+        Layer& oldLayer = *_layers.at(aboveLayerIdx);
 
         bool pruneSomeParent = false;
-        assert(position.getPredecessors().count(psig.usig) || Log::e("%s has no predecessors!\n", TOSTR(psig)));
-        for (const auto& parent : position.getPredecessors().at(psig.usig)) {
-            PositionedUSig parentPSig(psig.layer-1, oldPos, parent);
-            //assert(oldLayer.at(oldPos).hasAction(parent) || oldLayer.at(oldPos).hasReduction(parent) || Log::e("%s\n", TOSTR(parentPSig)));
-            const auto& siblings = position.getExpansions().at(parent);
+        assert(position->getPredecessors().count(psig.usig) || Log::e("%s has no predecessors!\n", TOSTR(psig)));
+        for (const auto& parent : position->getPredecessors().at(psig.usig)) {
+            PositionedUSig parentPSig(aboveLayerIdx, oldPos, parent);
+            assert(oldLayer.at(oldPos).hasAction(parent) || oldLayer.at(oldPos).hasReduction(parent) || Log::e("%s\n", TOSTR(parentPSig)));
+            const auto& siblings = position->getExpansions().at(parent);
 
             // Mark op for removal from expansion of the parent
             assert(siblings.count(psig.usig));
@@ -56,14 +59,24 @@ void RetroactivePruning::prune(const USignature& op, int layerIdx, int pos) {
     while (!opsToRemove.empty()) {
         PositionedUSig psig = *opsToRemove.begin();
         opsToRemove.erase(psig);
-        Position& position = _layers[psig.layer]->at(psig.pos);
+        Position* position = &_layers[psig.layer]->at(psig.pos);
         Log::d("PRUNE_DOWN %s\n", TOSTR(psig));
-        assert(position.hasAction(psig.usig) || position.hasReduction(psig.usig));
+        assert(position->hasAction(psig.usig) || position->hasReduction(psig.usig));
+
+        // Get the last layer idx of this position (since for sibylsat expansion, one position can be repeated in multiple layers)
+        int lastLayerIdx = position->getLayerIndex();
+        int lastPositionIdx = position->getPositionIndex();
+        psig.layer = lastLayerIdx;
+        psig.pos = lastPositionIdx;
 
         // Go down one layer and mark all children for removal which have only one predecessor left
         if (psig.layer+1 < _layers.size()) {
             int belowPosIdx = _layers.at(psig.layer)->getSuccessorPos(psig.pos);
-            while (belowPosIdx < (int)_layers.at(psig.layer)->getSuccessorPos(psig.pos+1)) {
+            int until = belowPosIdx;
+            while ((until < _layers[psig.layer + 1]->size()) && (_layers[psig.layer + 1]->at(until).getAbovePos() == psig.pos)) {
+                until++;
+            }
+            while (belowPosIdx < until) {
 
                 Position& below = _layers.at(psig.layer+1)->at(belowPosIdx);
                 if (below.getExpansions().count(psig.usig)) for (auto& child : below.getExpansions().at(psig.usig)) {
@@ -86,10 +99,10 @@ void RetroactivePruning::prune(const USignature& op, int layerIdx, int pos) {
 
         // Remove the operation's occurrence itself,
         // together with its expansions and predecessors
-        int opVar = position.getVariableOrZero(VarType::OP, psig.usig);
+        int opVar = position->getVariableOrZero(VarType::OP, psig.usig);
         if (opVar != 0) _enc.addUnitConstraint(-opVar);
-        position.removeActionOccurrence(psig.usig);
-        position.removeReductionOccurrence(psig.usig);
+        position->removeActionOccurrence(psig.usig);
+        position->removeReductionOccurrence(psig.usig);
         _num_retroactively_pruned_ops++;
     }
 

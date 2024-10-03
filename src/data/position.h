@@ -29,6 +29,11 @@ private:
     size_t _layer_idx;
     size_t _pos;
 
+    // Some useful attributes for sibylsat
+    size_t _original_pos = -1;
+    size_t _original_layer_idx = -1;
+    size_t _above_pos = -1;
+
     USigSet _actions;
     USigSet _reductions;
 
@@ -65,6 +70,9 @@ private:
 
     bool _has_primitive_ops = false;
     bool _has_nonprimitive_ops = false;
+
+    // Indicate which mutex groups this position has fully encoded (i.e. already done an at most one for all elements in the group)
+    FlatHashSet<int> _group_mutex_encoded;
 
 public:
 
@@ -137,6 +145,8 @@ public:
 
     size_t getLayerIndex() const;
     size_t getPositionIndex() const;
+    size_t getOriginalLayerIndex() const;
+    size_t getOriginalPositionIndex() const;
     
     void clearAfterInstantiation();
     void clearAtPastPosition();
@@ -145,6 +155,9 @@ public:
         _substitution_constraints.clear();
         _substitution_constraints.reserve(0);
     }
+    void clearFactSupports();
+    void clearDecodings();
+    void clearFullPos();
 
     inline int encode(VarType type, const USignature& sig) {
         auto& vars = type == OP ? _op_variables : _fact_variables;
@@ -161,7 +174,11 @@ public:
 
     inline int setVariable(VarType type, const USignature& sig, int var) {
         auto& vars = type == OP ? _op_variables : _fact_variables;
-        assert(!vars.count(sig));
+        // assert(!vars.count(sig));
+        if (vars.count(sig)) {
+            assert(vars.at(sig) == var);
+            return var;
+        }
         vars[sig] = var;
         return var;
     }
@@ -187,6 +204,17 @@ public:
         auto& vars = type == OP ? _op_variables : _fact_variables;
         vars.erase(sig);
     }
+
+
+    void setExpansionSize(size_t size) {_max_expansion_size = size;}
+
+    void setAbovePos(size_t abovePos) {_above_pos = abovePos;}
+    void setOriginalLayerIdx(size_t originalLayerIdx) {_original_layer_idx = originalLayerIdx;}
+    void setOriginalPos(size_t originalPos) {_original_pos = originalPos;}
+    size_t getAbovePos() {return _above_pos;}
+
+    void addGroupMutexEncoded(int group_mutex) {_group_mutex_encoded.insert(group_mutex);}
+    const FlatHashSet<int>& getGroupMutexEncoded() const {return _group_mutex_encoded;}
 };
 
 

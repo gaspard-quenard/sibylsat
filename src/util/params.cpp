@@ -72,6 +72,14 @@ void Parameters::setDefaults() {
     setParam("aar", "1"); // acknowledge action repetitions
     setParam("vp", "0"); // verify plan before printing it
     setParam("wf", "0"); // output formula to f.cnf
+
+    // Parameters added for sibylsat
+    setParam("wp", "0"); // output plan to plan.txt
+    setParam("sibylsat", "1"); // use the sibylsat expansion method
+    setParam("mutex", "1"); // Filter possible effects of abstract tasks using mutexes
+    setParam("macroActions", "1"); // Join consecutive actions in subtasks methods into a single macro action
+    setParam("preprocessFacts", "1"); // Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts
+    setParam("restrictSortsInFA", "1"); // Restrict the sorts of the possible effects of methods to the most constrained sort. For example. If a method has a parameter of sort 'car' an call a primtive subtask with this parameter, but the parameter sort of the primitive task is vehicle (which is a super sort of car), the possible effects of the method will be restricted to the sort car.
 }
 
 void Parameters::printUsage() {
@@ -119,6 +127,14 @@ void Parameters::printUsage() {
     Log::i(" -v=<verb>           Verbosity: 0=essential 1=warnings 2=information 3=verbose 4=debug\n");
     Log::i(" -vp=<0|1>           Verify plan (using pandaPIparser) before printing it\n");
     Log::i(" -wf=<0|1>           Write generated formula to text file \"f.cnf\" (with assumptions used in final call)\n");
+
+    // SibylSAT
+    Log::i(" -wp=<0|1>           Write plan to plan.txt\n");
+    Log::i(" -sibylsat=<0|1>     Use the sibylsat expansion method\n");
+    Log::i(" -mutex=<0|1>        Filter possible effects of abstract tasks using mutexes\n");
+    Log::i(" -macroActions=<0|1> Join consecutive actions in subtasks methods into a single macro action\n");
+    Log::i(" -preprocessFacts=<0|1> Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts\n");
+    Log::i(" -restrictSortsInFA=<0|1> Restrict the sorts of the possible effects of methods to the most constrained sort. For example. If a method has a parameter of sort 'car' an call a primtive subtask with this parameter, but the parameter sort of the primitive task is vehicle (which is a super sort of car), the possible effects of the method will be restricted to the sort car.\n");
     Log::i("\n");
     printParams();
     Log::setForcePrint(false);
