@@ -18,6 +18,15 @@ SibylSat outputs a plan in accordance to [5]. Basically everything in between "`
 
 ## Building
 
+SibylSat use both [pandaPigrounder](https://github.com/panda-planner-dev/pandaPIgrounder) and [pandaPiParser](https://github.com/panda-planner-dev/pandaPIparser) which require the following dependancies:
+- `g++` (C++17 support)
+- `make`
+- `flex`  (version 2.6 or higher)
+- `bison` (versions 3.5.1 and 3.7.2 are known to work)
+- `zip`
+- `gengetopt` (tested with version 2.23)
+
+
 You can build SibylSat like this:
 
 ```
