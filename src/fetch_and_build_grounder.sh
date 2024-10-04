@@ -19,7 +19,7 @@ fi
 
 # Checkout correct commit (can be updated but must be manually checked to build cleanly)
 git config advice.detachedHead false
-git checkout a1a937e766c47169f8f1ee8036405607182afdd5
+git checkout 4ff15b2828d893a7976a92cd60cc63a61f1baffc
 
 
 # Patch pandaPiGrounder to add 4 options:
