@@ -71,6 +71,19 @@ Some useful parameters as well:
 * `-wp`: If a plan is found, write it into plan.txt.
 * `-wf`: Write the generated formula to `./f.cnf`. As SibylSat works incrementally, the formula will consist of all clauses added during program execution. Additionally, when the program exits, the assumptions used in the final SAT call will be added to the formula as well.
 
+
+## Benchmarks
+
+SibylSat includes benchmark sets from the totally-ordered HTN [IPC 2020](https://github.com/panda-planner-dev/ipc2020-domains) and [IPC 2023](https://github.com/ipc2023-htn/ipc2023-domains). These benchmarks are included as submodules in the `Benchmarks` folder. To obtain the benchmarks, you will need to initialize the submodules as follows:
+
+```bash
+git submodule update --init --recursive
+```
+
+The IPC 2020 benchmarks are located in Benchmarks/ipc2020-domains, and the IPC 2023 benchmarks are located in Benchmarks/ipc2023-domains.
+
+You can navigate into these directories to explore the respective benchmarks. Some benchmarks are identical between the two sets but are maintained separately for clarity about their origin. Only the total-order benchmarks can be used with SibylSat.
+
 ## License
 
 The code of SibylSat is published under the GNU GPLv3. Consult the LICENSE file for details.  

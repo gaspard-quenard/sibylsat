@@ -1,0 +1,6 @@
+[submodule "Benchmarks/ipc2023-domains"]
+	path = Benchmarks/ipc2023-domains
+	url = https://github.com/ipc2023-htn/ipc2023-domains
+[submodule "Benchmarks/ipc2020-domains"]
+	path = Benchmarks/ipc2020-domains
+	url = https://github.com/panda-planner-dev/ipc2020-domains
