@@ -30,14 +30,10 @@ SibylSat use both [pandaPigrounder](https://github.com/panda-planner-dev/pandaPI
 You can build SibylSat like this:
 
 ```
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=RELEASE -DIPASIRSOLVER=glucose4
 make
-cd ..
 ```
 
-The SAT solver to link SibylSat with can be set with the `IPASIRSOLVER` variable. Valid values are `cadical`, `cryptominisat`, `glucose4`, `lingeling`, and `riss`.
+The SAT solver to link SibylSat with can be set with the `IPASIRSOLVER` variable in the makefile. Valid values are `cadical`, `cryptominisat`, `glucose4`, `lingeling`, and `riss`.
 
 Note that the Makefile in the base directory is only supposed to be used for building SibylSat [as an IPASIR application](https://github.com/biotomas/ipasir).
 
@@ -65,7 +61,7 @@ Once the Docker image is built, you can start the container and enter the Bash s
 docker run -it sibylsat
 ```
 
-This command starts the container and drops you into an interactive Bash shell inside the Docker environment, directly inside the `sibylsat` repository.. From here, you can manually run SibylSat using the instructions provided in the previous sections.
+This command starts the container and drops you into an interactive Bash shell inside the Docker environment, directly inside the `sibylsat` repository.. From here, you can manually run SibylSat using the instructions provided in `Usage` sections.
 
 
 ### Exiting the Docker Container
@@ -78,7 +74,7 @@ SibylSat uses the HDDL file format.
 
 Execute the planner executable like this:
 ```bash
-./build/sibylsat path/to/domain.hddl path/to/problem.hddl [options]
+./sibylsat path/to/domain.hddl path/to/problem.hddl [options]
 ```
 
 By default, the executable is launched with the best sibylsat configuration. In particular, some options had been added for the sibylsat planner such as:
@@ -98,6 +94,7 @@ You can launch the original Lilotane planner by using the following options:
 
 
 Some useful parameters as well:
+* `-h`: Print all available options.
 * `-v=<verb>`: Verbosity of the planner. Use 0 if you absolutely only care about the plan. Use 1 for warnings, 2 for general information, 3 for verbose output and 4 for full debug messages.
 * `-wp`: If a plan is found, write it into plan.txt.
 * `-wf`: Write the generated formula to `./f.cnf`. As SibylSat works incrementally, the formula will consist of all clauses added during program execution. Additionally, when the program exits, the assumptions used in the final SAT call will be added to the formula as well.
