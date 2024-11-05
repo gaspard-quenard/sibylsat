@@ -2,7 +2,7 @@
 
 ## Overview
 
-SibylSat is an incremental SAT-based planner for totally-ordered HTN planning problems based on a fork of the [Lilotane planner](https://github.com/domschrei/lilotane). Like lilotane and other current SAT-based solver, SibylSat adheres to a standard procedure of alternating between expanding the search space, encoding it into a SAT formula, and invoking a SAT solver to find a solution plan. However, it differ from the other SAT-based planner in that it uses a greedy best first search to explore the search space instead of the usual breadth-first search. More details about the planner can be found in the [ECAI paper](insert_url_here).
+SibylSat is an incremental SAT-based planner for totally-ordered HTN planning problems based on a fork of the [Lilotane planner](https://github.com/domschrei/lilotane). Like lilotane and other current SAT-based solver, SibylSat adheres to a standard procedure of alternating between expanding the search space, encoding it into a SAT formula, and invoking a SAT solver to find a solution plan. However, it differ from the other SAT-based planner in that it uses a greedy best first search to explore the search space instead of the usual breadth-first search. More details about the planner can be found in the [ECAI paper](https://ebooks.iospress.nl/doi/10.3233/FAIA240987).
 
 ### Valid Inputs
 
@@ -129,7 +129,7 @@ If you use SibylSat in academic work, please cite [0].
 
 ---
 
-[0] My paper...
+[0] Quenard,  G.,  Pellier,  D., &  Fiorino,  H.  (2024).  [**SibylSat: Using SAT as an Oracle to Perform a Greedy Search on TOHTN Planning.**](https://ebooks.iospress.nl/doi/10.3233/FAIA240987)  In27th European Conference on Artificial Intelligence, volume 392, 4157–4164.
 
 [1] Schreiber, D. (2021). [**Lilotane: A Lifted SAT-based Approach to Hierarchical Planning.**](https://doi.org/10.1613/jair.1.12520) In Journal of Artificial Intelligence Research (JAIR) 2021 (70), pp. 1117-1181.
 
