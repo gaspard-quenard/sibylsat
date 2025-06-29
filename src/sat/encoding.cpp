@@ -50,7 +50,11 @@ void Encoding::encode(size_t layerIdx, size_t pos) {
     encodeQFactSemantics(newPos);
 
     // Effects of "old" actions to the left
-    encodeActionEffects(newPos, left);
+    if (_pos != 0 && _pos != _new_init_pos) {
+        // Encode frame axioms for the left position
+        encodeActionEffects(newPos, left);
+    }
+    
 
     // Type constraints and forbidden substitutions for q-constants
     // and (sets of) q-facts
@@ -60,7 +64,7 @@ void Encoding::encode(size_t layerIdx, size_t pos) {
     // and prohibition of impossible children
     encodeSubtaskRelationships(newPos, above);
 
-    if (_use_sibylsat_expansion) {
+    if (_use_sibylsat_expansion && !_optimal) {
         encodePreventionIdenticalSignatureThanParentsForAllMethods(newPos);
     }
 
@@ -149,17 +153,18 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
         }
     }
 
-    if (_pos == 0) {
+    if (_pos == 0 || _pos == _new_init_pos) {
+        _new_relevants_facts_to_encode.clear();
         // Encode all relevant definitive facts
         const USigSet* defFacts[] = {&newPos.getTrueFacts(), &newPos.getFalseFacts()};
         bool trueFacts = true;
         for (auto set : defFacts) {for (const auto& fact : *set) {
-                if (!newPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevant(fact)) {
+                if (!newPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevantBitVec(fact, !trueFacts)) {
 
                     if (_use_sibylsat_expansion) {
                         int var = _vars.encodeVariable(VarType::FACT, newPos, fact);
                         _sat.addClause((trueFacts ? 1 : -1) * var);
-                        new_relevants_facts_to_encode[fact] = var;
+                        _new_relevants_facts_to_encode[fact] = var;
                     } else {
                         _new_fact_vars.insert(_vars.encodeVariable(VarType::FACT, newPos, fact));
                     }
@@ -222,17 +227,22 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
     // Facts that must hold at this position
     _stats.begin(STAGE_TRUEFACTS);
     const USigSet* cHere[] = {&newPos.getTrueFacts(), &newPos.getFalseFacts()}; 
-    for (int i = 0; i < 2; i++) 
-    for (const USignature& factSig : *cHere[i]) if (_analysis.isRelevant(factSig)) {
-        int var = newPos.getVariableOrZero(VarType::FACT, factSig);
-        if (var == 0) {
-            // Variable is not encoded yet.
-            _sat.addClause((i == 0 ? 1 : -1) * _vars.encodeVariable(VarType::FACT, newPos, factSig));
-        } else {
-            // Variable is already encoded. If the variable is new, constrain it.
-            if (_new_fact_vars.count(var)) _sat.addClause((i == 0 ? 1 : -1) * var);
+    bool negated = false;
+    for (int i = 0; i < 2; i++) {
+        for (const USignature& factSig : *cHere[i]) {
+            if (_analysis.isRelevantBitVec(factSig, negated)) {
+                int var = newPos.getVariableOrZero(VarType::FACT, factSig);
+                if (var == 0) {
+                    // Variable is not encoded yet.
+                    _sat.addClause((i == 0 ? 1 : -1) * _vars.encodeVariable(VarType::FACT, newPos, factSig));
+                } else {
+                    // Variable is already encoded. If the variable is new, constrain it.
+                    if (_new_fact_vars.count(var)) _sat.addClause((i == 0 ? 1 : -1) * var);
+                }
+                Log::d("(%i,%i) DEFFACT %s\n", _layer_idx, _pos, TOSTR(factSig));
+            }
         }
-        Log::d("(%i,%i) DEFFACT %s\n", _layer_idx, _pos, TOSTR(factSig));
+        negated = true;
     }
     _stats.end(STAGE_TRUEFACTS);
 }
@@ -240,7 +250,7 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
 void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForNewRelevantsFacts) {
     static Position NULL_POS;
 
-    using Supports = const NodeHashMap<USignature, USigSet, USignatureHasher>;
+    using SupportsId = const NodeHashMap<int, USigSet>;
 
     _stats.begin(STAGE_DIRECTFRAMEAXIOMS);
 
@@ -253,36 +263,43 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForN
 
     // Check if frame axioms can be skipped because
     // the above position had a superset of operations
-    Position& above = layerIdx > 0 ? _layers[layerIdx-1]->at(_old_pos) : NULL_POS;
-    Position& leftOfAbove = layerIdx > 0 && _old_pos > 0 ? _layers[layerIdx-1]->at(_old_pos-1) : NULL_POS;
+    // Position& above = layerIdx > 0 ? _layers[layerIdx-1]->at(_old_pos) : NULL_POS;
+    Position& above = newPos.getOriginalLayerIndex() > 0 ? _layers[newPos.getOriginalLayerIndex() - 1]->at(newPos.getAbovePos()) : NULL_POS;
+    // Position& leftOfAbove = layerIdx > 0 && _old_pos > 0 ? _layers[layerIdx-1]->at(_old_pos-1) : NULL_POS;
+    Position& leftOfAbove = newPos.getOriginalLayerIndex() > 0 && newPos.getAbovePos() > 0 ? _layers[newPos.getOriginalLayerIndex() - 1]->at(newPos.getAbovePos() - 1) : NULL_POS;
     bool skipRedundantFrameAxioms = _params.isNonzero("srfa") && _offset == 0
         && !left.hasNonprimitiveOps() && !leftOfAbove.hasNonprimitiveOps() 
         && left.getActions().size()+left.getReductions().size() <= leftOfAbove.getActions().size()+leftOfAbove.getReductions().size();
 
     // Retrieve supports from left position
-    Supports* supp[2] = {&newPos.getNegFactSupports(), &newPos.getPosFactSupports()};
-    IndirectFactSupportMap* iSupp[2] = {&newPos.getNegIndirectFactSupports(), &newPos.getPosIndirectFactSupports()};
+    SupportsId* supp[2] = {&newPos.getNegFactSupportsId(), &newPos.getPosFactSupportsId()};
+    IndirectFactSupportMapId* iSupp[2] = {&newPos.getNegIndirectFactSupportsId(), &newPos.getPosIndirectFactSupportsId()};
 
     // If mutex param is used, prevent incompatible facts from being true at the same time
     USigSet positiveFacts;
     // positiveFacts.reserve(left.getVariableTable(VarType::FACT).size());
-    positiveFacts.reserve(onlyForNewRelevantsFacts ? new_relevants_facts_to_encode.size() : left.getVariableTable(VarType::FACT).size());
+    positiveFacts.reserve(onlyForNewRelevantsFacts ? _new_relevants_facts_to_encode.size() : left.getVariableTable(VarType::FACT).size());
 
     if (onlyForNewRelevantsFacts) {
         // Update the variable associated with the facts that are already encoded
-        for (const auto& fact: new_relevants_facts_to_encode) {
+        for (const auto& fact: _new_relevants_facts_to_encode) {
             int var = left.getVariableOrZero(VarType::FACT, fact.first);
             if (var != 0) {
-                new_relevants_facts_to_encode[fact.first] = var;
+                _new_relevants_facts_to_encode[fact.first] = var;
             }
         }
     }
 
     // Find and encode frame axioms for each applicable fact from the left
     size_t skipped = 0;
-    for ([[maybe_unused]] const auto& [fact, var] : onlyForNewRelevantsFacts ? new_relevants_facts_to_encode : left.getVariableTable(VarType::FACT)) {
+    for ([[maybe_unused]] const auto& [fact, var] : onlyForNewRelevantsFacts ? _new_relevants_facts_to_encode : left.getVariableTable(VarType::FACT)) {
         if (_htn.hasQConstants(fact)) continue;
-        
+
+        int factId = _htn.getGroundFactId(fact, true);
+        if (factId < 0) {
+            Log::e("factId: %i, fact: %s, var: %i\n", factId, TOSTR(fact), var);
+            exit(1);
+        }
         int oldFactVars[2] = {-var, var};
         const USigSet* dir[2] = {nullptr, nullptr};
         IndirectFactSupportMapEntry* indir[2] = {nullptr, nullptr};
@@ -291,14 +308,14 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForN
         bool reuse = true;
         for (int i = 0; i < 2; i++) {
             if (!supp[i]->empty()) { // Direct support
-                auto it = supp[i]->find(fact);
+                auto it = supp[i]->find(factId);
                 if (it != supp[i]->end()) {
                     dir[i] = &(it->second);
                     reuse = false;
                 } 
             }
             if (!iSupp[i]->empty()) { // Indirect support
-                auto it = iSupp[i]->find(fact);
+                auto it = iSupp[i]->find(factId);
                 if (it != iSupp[i]->end()) {
                     indir[i] = &(it->second);
                     reuse = false;
@@ -391,7 +408,9 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForN
     Log::d("Skipped %i frame axioms\n", skipped);
 
     if (_mutex_predicates) {
+        // _stats.beginTiming(TimingStage::ENCODING_MUTEXES);
         encodeMutexPredicates(newPos, above, positiveFacts);
+        // _stats.endTiming(TimingStage::ENCODING_MUTEXES);
     }
 }
 
@@ -863,31 +882,33 @@ int Encoding::encodeQConstEquality(int q1, int q2) {
     return _vars.getQConstantEqualityVar(q1, q2);
 }
 
-void Encoding::addAssumptions(int layerIdx, bool permanent) {
+void Encoding::addAssumptionsPrimPlan(int layerIdx, bool permanent, int assumptions_until) {
     Layer& l = *_layers.at(layerIdx);
     if (_implicit_primitiveness) {
         _stats.begin(STAGE_ACTIONCONSTRAINTS);
         for (size_t pos = 0; pos < l.size(); pos++) {
+            if (pos == assumptions_until) break;
             _sat.appendClause(-_vars.encodeVarPrimitive(layerIdx, pos));
             for (int var : _primitive_ops) _sat.appendClause(var);
             _sat.endClause();
         }
         _stats.end(STAGE_ACTIONCONSTRAINTS);
     }
+    _stats.begin(STAGE_ASSUMPTIONS);
     for (size_t pos = 0; pos < l.size(); pos++) {
-        _stats.begin(STAGE_ASSUMPTIONS);
+        if (pos == assumptions_until) break;
+        
         int v = _vars.getVarPrimitiveOrZero(layerIdx, pos);
         if (v != 0) {
             if (permanent) _sat.addClause(v);
             else _sat.assume(v);
         }
-        _stats.end(STAGE_ASSUMPTIONS);
     }
+    _stats.end(STAGE_ASSUMPTIONS);
 }
 
 void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& possibleEffects) {
     _stats.begin(STAGE_MUTEX);
-    auto start = std::chrono::high_resolution_clock::now();
     // Encode the SAS+ constrains for this fact
     // Indicate that if this fact is true then all the other facts that are in the same lifted fam ground that this fact must be false
     std::vector<int> mutex;
@@ -973,9 +994,6 @@ void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& po
             }
         }
     }
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end-start);
-    time_spend_on_mutexes += duration.count();
     _stats.end(STAGE_MUTEX);
 }
 
@@ -992,7 +1010,7 @@ void Encoding::encodeOnlyEffsAndFrameAxioms(size_t layerIdx, size_t pos) {
     bool hasLeft = pos > 0;
     Position& left = (hasLeft ? newLayer[pos-1] : NULL_POS);
     bool hasAbove = layerIdx > 0;
-    _offset = 0, _old_pos = 0;
+        _offset = 0, _old_pos = 0;
     if (hasAbove) {
         const Layer& oldLayer = *_layers.at(layerIdx-1);
         while (_old_pos+1 < oldLayer.size() && oldLayer.getSuccessorPos(_old_pos+1) <= pos) 
@@ -1169,16 +1187,16 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
 
 void Encoding::encodeNewRelevantsFacts(Position& initPos) {
     int num_relevants_facts = 0;
-    new_relevants_facts_to_encode.clear();
+    _new_relevants_facts_to_encode.clear();
     // Encode all relevant definitive facts
     const USigSet* defFacts[] = {&initPos.getTrueFacts(), &initPos.getFalseFacts()};
     bool trueFacts = true;
     for (const auto& set : defFacts) { 
         for (const auto& fact : *set) {
-            if (!initPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevant(fact))  {
+            if (!initPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevantBitVec(fact, !trueFacts)) {
                 int var = _vars.encodeVariable(VarType::FACT, initPos, fact);
                 _sat.addClause((trueFacts ? 1 : -1) * var);
-                new_relevants_facts_to_encode[fact] = var;
+                _new_relevants_facts_to_encode[fact] = var;
                 num_relevants_facts++;
             }
         }
@@ -1190,6 +1208,10 @@ void Encoding::encodeNewRelevantsFacts(Position& initPos) {
 
 void Encoding::propagateRelevantsFacts(size_t layerIdx, size_t pos) {
 
+    if (_new_relevants_facts_to_encode.empty()) {
+        return;
+    }
+
     _layer_idx = layerIdx;
     _pos = pos;
 
@@ -1200,20 +1222,6 @@ void Encoding::propagateRelevantsFacts(size_t layerIdx, size_t pos) {
     Position& newPos = newLayer[pos];
     bool hasLeft = pos > 0;
     Position& left = (hasLeft ? newLayer[pos-1] : NULL_POS);
-    bool hasAbove = layerIdx > 0;
-    _offset = 0, _old_pos = 0;
-    if (hasAbove) {
-        const Layer& oldLayer = *_layers.at(layerIdx-1);
-        while (_old_pos+1 < oldLayer.size() && oldLayer.getSuccessorPos(_old_pos+1) <= pos) 
-            _old_pos++;
-        _offset = pos - oldLayer.getSuccessorPos(_old_pos);
-    }
-    Position& above = (hasAbove ? (*_layers.at(layerIdx-1))[_old_pos] : NULL_POS);
-
-    if (layerIdx == 2) {
-        int dbg = 0;
-    }
- 
     encodeFrameAxioms(newPos, left, /*onlyForNewRelevantsFacts=*/true);
 }
 
@@ -1294,4 +1302,139 @@ const USignature Encoding::getOpHoldingInLayerPos(int layer, int position) {
 
     assert(numOps <= 1);
     return op;
+}
+
+void Encoding::printStatementsAtPosition(int layer, int pos) {
+    Position& newPos = _layers[layer]->at(pos);
+    Position NULL_POS;
+    NULL_POS.setPos(-1, -1);
+    bool hasLeft = pos > 0;
+    Position& left = (hasLeft ? _layers[newPos.getOriginalLayerIndex()]->at(newPos.getOriginalPositionIndex() - 1) : NULL_POS);
+    Log::i("STATE AT (%i,%i) (original: %i,%i)\n", layer, pos, newPos.getOriginalLayerIndex(), newPos.getOriginalPositionIndex());
+    Layer& l = *_layers[layer];
+    Position& p = l[pos];
+    for (const auto& [sig, aVar] : p.getVariableTable(VarType::FACT)) {
+        if (!_htn.isFullyGround(sig) || _htn.hasQConstants(sig)) continue; // skip non-ground facts)
+        if (!_sat.holds(aVar)) continue; // skip false facts
+        // Log::i("  FACT %s => %s\n", TOSTR(sig), _sat.holds(aVar) ? "TRUE" : "FALSE");
+        Log::i("  FACT %s (%d) => TRUE\n", TOSTR(sig), aVar);
+        // Print the value on the left if it is not the same
+        if (hasLeft && left.hasVariable(VarType::FACT, sig)) {
+            int leftVar = left.getVariableOrZero(VarType::FACT, sig);
+            Log::i("    LEFT FACT %s (%d) => %s\n", TOSTR(sig), leftVar, _sat.holds(leftVar) ? "TRUE" : "FALSE");
+        }
+    }
+    // for (const auto& [sig, aVar] : p.getVariableTable(VarType::OP)) {
+    //     Log::d("  OP %s => %s\n", TOSTR(sig), _sat.holds(aVar) ? "TRUE" : "FALSE");
+    // }
+}
+
+const USignature Encoding::getDecodingOpHoldingInLayerPos(int layer, int pos) {
+
+    const USignature origSig = getOpHoldingInLayerPos(layer, pos);
+    USignature sig = origSig;
+    while (true) {
+        bool containsQConstants = false;
+        for (int arg : sig._args) if (_htn.isQConstant(arg)) {
+            // q constant found
+            containsQConstants = true;
+
+            int numSubstitutions = 0;
+            for (int argSubst : _htn.getDomainOfQConstant(arg)) {
+                const USignature& sigSubst = _vars.sigSubstitute(arg, argSubst);
+                if (_vars.isEncodedSubstitution(sigSubst) && _sat.holds(_vars.varSubstitution(arg, argSubst))) {
+                    Log::d("SUBSTVAR [%s/%s] TRUE => %s ~~> ", TOSTR(arg), TOSTR(argSubst), TOSTR(sig));
+                    numSubstitutions++;
+                    Substitution sub;
+                    sub[arg] = argSubst;
+                    sig.apply(sub);
+                    Log::d("%s\n", TOSTR(sig));
+                } else {
+                    //Log::d("%i FALSE\n", varSubstitution(sigSubst));
+                }
+            }
+
+            if (numSubstitutions == 0) {
+                Log::v("(%i,%i) No substitutions for arg %s of %s\n", layer, pos, TOSTR(arg), TOSTR(origSig));
+                return Sig::NONE_SIG;
+            }
+            assert(numSubstitutions == 1 || Log::e("%i substitutions for arg %s of %s\n", numSubstitutions, TOSTR(arg), TOSTR(origSig)));
+        }
+
+        if (!containsQConstants) break; // done
+    }
+
+    //if (origSig != sig) Log::d("%s ~~> %s\n", TOSTR(origSig), TOSTR(sig));
+    
+    return sig;
+}
+
+NodeHashSet<int> Encoding::getSnapshotsOpsAndPredsTrue(int untilPos) {
+
+    Layer& layer = *_layers[_layer_idx];
+    NodeHashSet<int> snapshotsVarsTrue;
+
+    // First, get for each layer, the limit 
+    std::vector<int> limits;
+    limits.push_back(untilPos);
+    const Position& lastPos = layer[untilPos];
+
+    for (size_t pos = 0; pos < untilPos; pos++) {
+        Position& newPos = layer[pos];
+        for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::FACT)) {
+            if (!_sat.holds(aVar)); // snapshotsVarsTrue.insert(-aVar);
+            else snapshotsVarsTrue.insert(aVar);
+        }
+        for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::OP)) {
+            if (!_sat.holds(aVar)); // snapshotsVarsTrue.insert(-aVar);
+            else snapshotsVarsTrue.insert(aVar);
+        }
+
+        size_t aboveLayer = newPos.getOriginalLayerIndex() - 1;
+        size_t abovePos = newPos.getAbovePos();
+
+        while (_layers[aboveLayer]->at(abovePos).getOriginalLayerIndex() != 0) {
+
+            Position& above = _layers[aboveLayer]->at(abovePos);
+            
+            for (const auto& [sig, aVar] : above.getVariableTable(VarType::FACT)) {
+                if (!_sat.holds(aVar)); //snapshotsVarsTrue.insert(-aVar);
+                else snapshotsVarsTrue.insert(aVar);
+            }
+            for (const auto& [sig, aVar] : above.getVariableTable(VarType::OP)) {
+                if (!_sat.holds(aVar)); // snapshotsVarsTrue.insert(-aVar);
+                else snapshotsVarsTrue.insert(aVar);
+            }
+
+            size_t newAboveLayer = above.getOriginalLayerIndex() - 1;
+            size_t newAbovePos = above.getAbovePos();
+            aboveLayer = newAboveLayer;
+            abovePos = newAbovePos;
+        }
+    }
+    return std::move(snapshotsVarsTrue);
+}
+
+
+void Encoding::addAssumptionsTasksAccomplished(NodeHashSet<int>& opsAndPredsTrue, bool permanent) {
+    for (const int& var : opsAndPredsTrue) {
+        if (permanent) _sat.addClause(var);
+        else _sat.assume(var);
+    }
+    if (permanent) {
+        // We can clear the set of ops and preds true
+        opsAndPredsTrue.clear();
+    }
+}
+
+void Encoding::clearSoftLits() {
+    _sat.clearSoftLits();
+}
+
+void Encoding::addSoftLit(int lit, int weight) {
+    _sat.addSoftLit(lit, weight);
+}
+
+int Encoding::getObjectiveValue() {
+    return _sat.getObjectiveValue();
 }

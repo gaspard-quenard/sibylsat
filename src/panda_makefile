@@ -4,7 +4,7 @@ CC=g++
 CWARN=-Wno-unused-parameter
 CERROR=
 
-COMPILEFLAGS=-O3 -g -pipe -Wall -Wextra -pedantic -std=c++17 $(CWARN) $(CERROR)
+COMPILEFLAGS=-O3 -g -pipe -Wall -Wextra -pedantic -std=c++17 $(CWARN) $(CERROR) -DNDEBUG
 LINKERFLAGS=-O3 -lm
 #-flto -static -static-libgcc
 

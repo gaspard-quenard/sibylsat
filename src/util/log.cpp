@@ -110,3 +110,7 @@ void Log::resetColorModifier() {
     static Modifier resetFg(FG_DEFAULT);
     printf("%s", resetFg.str());
 }
+
+int Log::getVerbosity() {
+    return verbosity;
+}

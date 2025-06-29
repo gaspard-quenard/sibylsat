@@ -56,7 +56,15 @@ void NetworkTraversal::traverse(const USignature& opSig, TraverseOrder order, st
             // Arguments need to be renamed on recursive domains
             Substitution s;
             for (int arg : child._args) {
-                if (arg > 0) s[arg] = _htn->nameId(_htn->toString(arg) + "_");
+                if (arg > 0) {
+                    // If the name ID already finishes with '_', it is already renamed to contain any variable
+                    std::string argStr = _htn->toString(arg);
+                    if (argStr.back() == '_') {
+                        s[arg] = arg;   
+                        continue;
+                    }
+                    s[arg] = _htn->nameId(_htn->toString(arg) + "_");
+                }
             }
             frontier.push_back(child.substitute(s));
             depths.push_back(depth);

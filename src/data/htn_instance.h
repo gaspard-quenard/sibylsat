@@ -10,6 +10,8 @@
 #include "util/names.h"
 #include "util/params.h"
 #include "util/hashmap.h"
+#include "util/bitvec.h"
+#include "util/statistics.h"
 #include "data/op_table.h"
 
 #include "algo/arg_iterator.h"
@@ -28,8 +30,16 @@ class HtnInstance {
 private:
     Parameters& _params;
 
+    Statistics& _stats;
+
     // The raw parsed problem.
     ParsedProblem& _p;
+
+    // Test with ground facts
+    std::vector<USignature> _ground_pos_facts;
+    int _cutoff_neg_facts = -1;
+    BitVec all_preds_pos_bitvec; // All one except all value after the cutoff
+    NodeHashMap<const USignature, int, USignatureHasher> _ground_facts_map;
     
     // Maps a string to its name ID within the problem.
     FlatHashMap<std::string, int> _name_table;
@@ -71,6 +81,9 @@ private:
     // Maps a reduction name ID to its reduction object.
     NodeHashMap<int, Reduction> _methods;
 
+    // Name IDs of static predicates (predicate that cannot change during the problem).
+    NodeHashSet<int> _static_predicates;
+
     // Lookup for all actions and reductions instantiated so far.
     OpTable _op_table;
 
@@ -92,20 +105,19 @@ private:
     
     const bool _share_q_constants;
 
-    long long int _time_to_compute_mutex_predicates = 0;
-
     FlatHashSet<int> _name_id_recursive_methods;
 
     // For macro actions (with flag -macroActions)
     FlatHashMap<std::string, task> _macro_name_to_task;
     FlatHashMap<std::string, std::vector<task>> _macro_name_to_primitives;
 
+    std::unordered_map<int, BitVec> _filter_by_name_id;
+    std::unordered_map<std::string, BitVec> _filter_by_sort_at_idx_args;
+    std::unordered_map<std::string, BitVec> _filter_by_constant_at_idx_args;
+
 public:
 
     SASPlus* _sas_plus = nullptr;
-    long long int getTimeComputingMutex() {
-        return _time_to_compute_mutex_predicates;
-    }
 
     // Special action representing a virtual "No-op".
     static Action BLANK_ACTION;
@@ -124,8 +136,12 @@ public:
     const bool isEqualityPredicate(int nameId) const {
         return _equality_predicates.count(nameId);
     }
+    const bool isStaticPredicate(int nameId) const {
+        return _static_predicates.count(nameId);
+    }
 
     bool isMacroTask(int nameId) const;
+    int numActionsInMacro(int nameId) const;
     std::vector<USignature> getActionsFromMacro(const USignature& macroAction) const;
 
     USigSet getInitState();
@@ -158,8 +174,9 @@ public:
     const Action& getActionFromRepetition(int vChildId) const;
 
     const std::vector<int>& getSorts(int nameId) const;
-    const std::vector<int> getSortsParamsFromSigForFA(const Signature& eff) const;
+    const std::vector<int> getSortsParamsFromSigForFA(const USignature& eff) const;
     const FlatHashSet<int>& getConstantsOfSort(int sort) const;
+    const int getPrimarySortOfQConstant(int qconst) const;
     const FlatHashSet<int>& getSortsOfQConstant(int qconst);
     const IntPair& getOriginOfQConstant(int qconst) const;
     const FlatHashSet<int>& getDomainOfQConstant(int qconst) const;
@@ -353,6 +370,77 @@ public:
     NodeHashMap<int, FlatHashSet<int>>& getConstantsBySort() {return _constants_by_sort;}
     std::string getPredicateInCorrectCase(std::string pred) const;
 
+
+
+    void setGroundPosAndNegFacts(const std::vector<USignature>& posFacts, const std::vector<USignature>& negFacts) {
+        _ground_pos_facts = posFacts;
+
+        // Add all equality predicates to the set of ground pos facts
+        for (int eqPredId : _equality_predicates) {
+
+            // For each pair of constants of correct sorts
+            const std::vector<int>& sorts = getSorts(eqPredId);
+            assert(sorts[0] == sorts[1]);
+            for (int c1 : _constants_by_sort[sorts[0]]) {
+                for (int c2 : _constants_by_sort[sorts[1]]) {
+
+                    // Add equality lit to state if the two are equal
+                    if (c1 != c2) continue;
+                    std::vector<int> args;
+                    args.push_back(c1); args.push_back(c2);
+                    USignature eqPredSig(eqPredId, std::move(args));
+                    _ground_pos_facts.push_back(eqPredSig);
+                }
+            }
+        }
+
+        // Add all the negative facts at the end
+        for (const USignature& negFact : negFacts) {
+            _ground_pos_facts.push_back(negFact);
+        }
+
+
+        _cutoff_neg_facts = _ground_pos_facts.size() - negFacts.size();
+
+        all_preds_pos_bitvec = BitVec(_ground_pos_facts.size(), true);
+        for (size_t i = _cutoff_neg_facts; i < _ground_pos_facts.size(); ++i) {
+            all_preds_pos_bitvec.clear(i);
+        }
+
+
+        // Create the map for fast access
+        _ground_facts_map.clear();
+        for (size_t i = 0; i < _ground_pos_facts.size(); ++i) {
+            const USignature& fact = _ground_pos_facts[i];
+            _ground_facts_map[fact] = i;
+        }
+    }
+
+    int getGroundFactId(const USignature& sig, bool negated) const {
+        auto it = _ground_facts_map.find(sig);
+        if (it != _ground_facts_map.end()) {
+            int id = it->second;
+            if (!negated && id > _cutoff_neg_facts) {
+                // If the fact is positive and outside the cutoff, return -1
+                return -1;
+            } 
+            return id; // Found
+        }
+        return -1; // Not found
+    }
+
+    int getNumPositiveGroundFacts() const {
+        return _ground_pos_facts.size();
+    }
+    const USignature& getGroundPositiveFact(int idx) const {
+        assert(idx >= 0 && idx < _ground_pos_facts.size() || Log::e("Index out of bounds: %i, size: %zu\n", idx, _ground_pos_facts.size()));
+        return _ground_pos_facts[idx];
+    }
+    const BitVec getAllPredicatesId(int name_id, bool negated, const std::vector<int>& sorts_per_args, const std::vector<int>& restrictive_sorts_per_args = std::vector<int>(), const std::vector<int>& fixed_constant = std::vector<int>());
+
+    inline std::string key_sort(int sort, int idx)   { return "S_" + std::to_string(sort) + '_' + std::to_string(idx); }
+    inline std::string key_const(int cst,  int idx)  { return "C_" + std::to_string(cst)  + '_' + std::to_string(idx); }
+
 private:
 
     void primitivizeSimpleReductions();
@@ -367,6 +455,7 @@ private:
     void extractTaskSorts(const task& t);
     void extractMethodSorts(const method& m);
     void extractConstants();
+    void extractStaticPredicates();
     SigSet extractEqualityConstraints(int opId, const std::vector<literal>& lits, const std::vector<std::pair<std::string, std::string>>& vars);
     SigSet extractGoals();
 
@@ -379,7 +468,7 @@ private:
     void loadMutexes();
     std::vector<std::string> topologicalSort(const std::unordered_map<std::string, std::vector<std::string>>& graph, std::vector<std::string>& nodes);
     void handleMacroActions();
-
+    
 };
 
 #endif

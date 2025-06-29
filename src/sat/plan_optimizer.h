@@ -16,12 +16,12 @@ private:
     std::vector<Layer*>& _layers;
     Encoding& _enc;
     SatInterface& _sat;
-    EncodingStatistics& _stats;
+    Statistics& _stats;
 
 public:
     PlanOptimizer(HtnInstance& htn, std::vector<Layer*>& layers, Encoding& enc) : 
             _htn(htn), _layers(layers), _enc(enc), 
-            _sat(_enc.getSatInterface()), _stats(_enc.getEncodingStatistics()) {}
+            _sat(_enc.getSatInterface()), _stats(Statistics::getInstance()) {}
 
     enum ConstraintAddition { TRANSIENT, PERMANENT };
 

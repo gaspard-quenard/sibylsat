@@ -4,8 +4,8 @@
 #include "sat/variable_domain.h"
 #include "util/log.h"
 
-NodeHashMap<USignature, USigSet, USignatureHasher> Position::EMPTY_USIG_TO_USIG_SET_MAP;
-IndirectFactSupportMap Position::EMPTY_INDIRECT_FACT_SUPPORT_MAP;
+NodeHashMap<int, USigSet> Position::EMPTY_USIG_TO_USIG_SET_MAP_ID;
+IndirectFactSupportMapId Position::EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
 
 Position::Position() : _layer_idx(-1), _pos(-1) {}
 void Position::setPos(size_t layerIdx, size_t pos) {_layer_idx = layerIdx; _pos = pos;}
@@ -15,30 +15,34 @@ void Position::addQFact(const USignature& qfact) {
 }
 void Position::addTrueFact(const USignature& fact) {_true_facts.insert(fact);}
 void Position::addFalseFact(const USignature& fact) {_false_facts.insert(fact);}
+void Position::addTrueFactId(int factId) { _true_facts_ids.insert(factId);}
+void Position::addFalseFactId(int factId) { _false_facts_ids.insert(factId);}
 void Position::addDefinitiveFact(const Signature& fact) {(fact._negated ? _false_facts : _true_facts).insert(fact._usig);}
 
-void Position::addFactSupport(const Signature& fact, const USignature& operation) {
-    auto& supp = fact._negated ? _neg_fact_supports : _pos_fact_supports;
-    if (supp == nullptr) supp = new NodeHashMap<USignature, USigSet, USignatureHasher>();
-    auto& set = (*supp)[fact._usig];
+
+void Position::addFactSupportId(int predId, bool negated, const USignature& operation) {
+    // auto& supp = fact._negated ? _neg_fact_supports : _pos_fact_supports;
+    auto& supp = negated ? _neg_fact_supports_id : _pos_fact_supports_id;
+    // if (supp == nullptr) supp = new NodeHashMap<USignature, USigSet, USignatureHasher>();
+    if (supp == nullptr) supp = new NodeHashMap<int, USigSet>();
+    // auto& set = (*supp)[fact._usig];
+    auto& set = (*supp)[predId];
     set.insert(operation);
 }
-void Position::touchFactSupport(const Signature& fact) {
-    auto& supp = fact._negated ? _neg_fact_supports : _pos_fact_supports;
-    if (supp == nullptr) supp = new NodeHashMap<USignature, USigSet, USignatureHasher>();
-    (*supp)[fact._usig];
-}
-void Position::touchFactSupport(const USignature& fact, bool negated) {
-    auto& supp = negated ? _neg_fact_supports : _pos_fact_supports;
-    if (supp == nullptr) supp = new NodeHashMap<USignature, USigSet, USignatureHasher>();
-    (*supp)[fact];
-}
-void Position::addIndirectFactSupport(const USignature& fact, bool negated, const USignature& op, const std::vector<IntPair>& path) {
-    auto& supp = negated ? _neg_indir_fact_supports : _pos_indir_fact_supports;
-    if (supp == nullptr) supp = new IndirectFactSupportMap();
-    auto& tree = (*supp)[fact][op];
+void Position::addIndirectFactSupportId(int predId, bool negated, const USignature& op, const std::vector<IntPair>& path) {
+    auto& supp = negated ? _neg_indir_fact_supports_id : _pos_indir_fact_supports_id;
+    if (supp == nullptr) supp = new IndirectFactSupportMapId();
+    auto& tree = (*supp)[predId][op];
     tree.insert(path);
 }
+void Position::touchFactSupportId(int predId, bool negated) {
+    // auto& supp = negated ? _neg_fact_supports_id : _pos_fact_supports_id;
+    auto& supp = negated ? _neg_fact_supports_id : _pos_fact_supports_id;
+    if (supp == nullptr) supp = new NodeHashMap<int, USigSet>();
+    (*supp)[predId];
+}
+
+
 void Position::setHasPrimitiveOps(bool has) {
     _has_primitive_ops = has;
 }
@@ -166,22 +170,26 @@ size_t Position::getOriginalPositionIndex() const {return _original_pos;}
 const USigSet& Position::getQFacts() const {return _qfacts;}
 const USigSet& Position::getTrueFacts() const {return _true_facts;}
 const USigSet& Position::getFalseFacts() const {return _false_facts;}
-NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getPosFactSupports() {
-    if (_pos_fact_supports == nullptr) return EMPTY_USIG_TO_USIG_SET_MAP;
-    return *_pos_fact_supports;
+
+NodeHashMap<int, USigSet>& Position::getPosFactSupportsId() {
+    if (_pos_fact_supports_id == nullptr) return EMPTY_USIG_TO_USIG_SET_MAP_ID;
+    return *_pos_fact_supports_id;
 }
-NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getNegFactSupports() {
-    if (_neg_fact_supports == nullptr) return EMPTY_USIG_TO_USIG_SET_MAP;
-    return *_neg_fact_supports;
+NodeHashMap<int, USigSet>& Position::getNegFactSupportsId() {
+    if (_neg_fact_supports_id == nullptr) return EMPTY_USIG_TO_USIG_SET_MAP_ID;
+    return *_neg_fact_supports_id;
 }
-IndirectFactSupportMap& Position::getPosIndirectFactSupports() {
-    if (_pos_indir_fact_supports == nullptr) return EMPTY_INDIRECT_FACT_SUPPORT_MAP;
-    return *_pos_indir_fact_supports;
+IndirectFactSupportMapId& Position::getPosIndirectFactSupportsId() {
+    if (_pos_indir_fact_supports_id == nullptr) return EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
+    return *_pos_indir_fact_supports_id;
 }
-IndirectFactSupportMap& Position::getNegIndirectFactSupports() {
-    if (_neg_indir_fact_supports == nullptr) return EMPTY_INDIRECT_FACT_SUPPORT_MAP;
-    return *_neg_indir_fact_supports;
+IndirectFactSupportMapId& Position::getNegIndirectFactSupportsId() {
+    if (_neg_indir_fact_supports_id == nullptr) return EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
+    return *_neg_indir_fact_supports_id;
 }
+
+
+
 const NodeHashMap<USignature, std::vector<TypeConstraint>, USignatureHasher>& Position::getQConstantsTypeConstraints() const {
     return _q_constants_type_constraints;
 }
@@ -213,10 +221,10 @@ void Position::clearAtPastPosition() {
     _q_constants_type_constraints.clear();
     _q_constants_type_constraints.reserve(0);
     clearSubstitutions();
-    if (_pos_fact_supports != nullptr) delete _pos_fact_supports;
-    if (_neg_fact_supports != nullptr) delete _neg_fact_supports;
-    if (_pos_indir_fact_supports != nullptr) delete _pos_indir_fact_supports;
-    if (_neg_indir_fact_supports != nullptr) delete _neg_indir_fact_supports;
+    if (_pos_fact_supports_id != nullptr) delete _pos_fact_supports_id;
+    if (_neg_fact_supports_id != nullptr) delete _neg_fact_supports_id;
+    if (_pos_indir_fact_supports_id != nullptr) delete _pos_indir_fact_supports_id;
+    if (_neg_indir_fact_supports_id != nullptr) delete _neg_indir_fact_supports_id;
 }
 
 void Position::clearAtPastLayer() {
@@ -226,8 +234,12 @@ void Position::clearAtPastLayer() {
     _neg_qfact_decodings.reserve(0);
     _true_facts.clear();
     _true_facts.reserve(0);
+    _true_facts_ids.clear();
+    _true_facts_ids.reserve(0);
     _false_facts.clear();
     _false_facts.reserve(0);
+    _false_facts_ids.clear();
+    _false_facts_ids.reserve(0);
     _fact_variables.clear();
     _fact_variables.reserve(0);
     /*
@@ -238,22 +250,22 @@ void Position::clearAtPastLayer() {
     */
 }
 
-void Position::clearFactSupports() {
-    if (_pos_fact_supports != nullptr) {
-        _pos_fact_supports->clear();
-        _pos_fact_supports->reserve(0);
+void Position::clearFactSupportsId() {
+    if (_pos_fact_supports_id != nullptr) {
+        _pos_fact_supports_id->clear();
+        _pos_fact_supports_id->reserve(0);
     }
-    if (_neg_fact_supports != nullptr) {
-        _neg_fact_supports->clear();
-        _neg_fact_supports->reserve(0);
+    if (_neg_fact_supports_id != nullptr) {
+        _neg_fact_supports_id->clear();
+        _neg_fact_supports_id->reserve(0);
     }
-    if (_pos_indir_fact_supports != nullptr) {
-        _pos_indir_fact_supports->clear();
-        _pos_indir_fact_supports->reserve(0);
+    if (_pos_indir_fact_supports_id != nullptr) {
+        _pos_indir_fact_supports_id->clear();
+        _pos_indir_fact_supports_id->reserve(0);
     }
-    if (_neg_indir_fact_supports != nullptr) {
-        _neg_indir_fact_supports->clear();
-        _neg_indir_fact_supports->reserve(0);
+    if (_neg_indir_fact_supports_id != nullptr) {
+        _neg_indir_fact_supports_id->clear();
+        _neg_indir_fact_supports_id->reserve(0);
     }
 }
 
@@ -264,15 +276,32 @@ void Position::clearFullPos() {
     _neg_qfact_decodings.reserve(0);
     _true_facts.clear();
     _true_facts.reserve(0);
+    _true_facts_ids.clear();
+    _true_facts_ids.reserve(0);
+    _false_facts_ids.clear();
+    _false_facts_ids.reserve(0);
     _false_facts.clear();
     _false_facts.reserve(0);
     _fact_variables.clear();
     _fact_variables.reserve(0); 
 
-    if (_pos_fact_supports != nullptr) delete _pos_fact_supports;
-    if (_neg_fact_supports != nullptr) delete _neg_fact_supports;
-    if (_pos_indir_fact_supports != nullptr) delete _pos_indir_fact_supports;
-    if (_neg_indir_fact_supports != nullptr) delete _neg_indir_fact_supports; 
+
+    if (_pos_fact_supports_id != nullptr) {
+        delete _pos_fact_supports_id;
+        _pos_fact_supports_id = nullptr;
+    }
+    if (_neg_fact_supports_id != nullptr) {
+        delete _neg_fact_supports_id;
+        _neg_fact_supports_id = nullptr;
+    }
+    if (_pos_indir_fact_supports_id != nullptr) {
+        delete _pos_indir_fact_supports_id;
+        _pos_indir_fact_supports_id = nullptr;
+    }
+    if (_neg_indir_fact_supports_id != nullptr) {
+        delete _neg_indir_fact_supports_id;
+        _neg_indir_fact_supports_id = nullptr;
+    }
 
     _qfacts.clear();
     _qfacts.reserve(0);
@@ -291,4 +320,7 @@ void Position::clearDecodings() {
     _pos_qfact_decodings.reserve(0);
     _neg_qfact_decodings.clear();
     _neg_qfact_decodings.reserve(0);
+    // _expansion_substitutions.clear();
+    // _expansion_substitutions.reserve(0);
+    clearSubstitutions();
 }

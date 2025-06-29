@@ -16,6 +16,8 @@
 #include "algo/domination_resolver.h"
 #include "algo/plan_writer.h"
 #include "sat/encoding.h"
+#include "data/tdg.h"
+#include "algo/separate_tasks_scheduler.h"
 #include <optional>
 
 typedef std::pair<std::vector<PlanItem>, std::vector<PlanItem>> Plan;
@@ -32,10 +34,13 @@ private:
     FactAnalysis _analysis;
     Instantiator _instantiator;
     Encoding _enc;
+    Statistics& _stats;
     MinRES _minres;
     RetroactivePruning _pruning;
     DominationResolver _domination_resolver;
     PlanWriter _plan_writer;
+
+
 
     std::vector<Layer*> _layers;
 
@@ -46,7 +51,18 @@ private:
     const int _verbosity;
 
     const bool _use_sibylsat_expansion;
-    FlatHashSet<int> sibylsat_positions_to_develop;
+    FlatHashSet<int> _sibylsat_positions_to_develop;
+
+    // For optimal planning
+    const bool _optimal;
+    std::optional<TDG> _tdg;
+    size_t _last_number_of_soft_lits = 0;
+    std::unordered_set<int> _soft_lits;
+
+    // For separate tasks
+    const bool _separate_tasks;
+    std::unique_ptr<SeparateTasksScheduler> _separate_tasks_scheduler;
+    
 
     float _sat_time_limit = 0;
     float _init_plan_time_limit = 0;
@@ -63,10 +79,12 @@ private:
     size_t _num_instantiated_reductions = 0;
 
 public:
-    Planner(Parameters& params, HtnInstance& htn) : _params(params), _htn(htn),
+    Planner(Parameters& params, HtnInstance& htn) : _params(params), _htn(htn), _stats(Statistics::getInstance()),
             _verbosity(params.getIntParam("v")),
-            _analysis(_htn, _htn.getParams().isNonzero("preprocessFacts")), 
+            _analysis(_htn, true, _htn.getParams().isNonzero("optimal")), 
             _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
+            _optimal(_params.isNonzero("optimal")),
+            _separate_tasks(_params.isNonzero("separateTasks") && _htn.getInitReduction().getSubtasks().size() > 1 && _use_sibylsat_expansion && !_optimal),
             _instantiator(params, htn, _analysis), 
             _enc(_params, _htn, _analysis, _layers, [this](){checkTermination();}), 
             _minres(_htn), 
@@ -82,6 +100,16 @@ public:
         if (_htn.getParams().isNonzero("mutex") && _analysis.checkGroundingFacts()) {
             _htn._sas_plus->cleanMutexGroupsWithPandaPiGrounderPreprocessingFacts(_analysis.getGroundPosFacts());
         }
+
+        if (_optimal) {
+            // Construct the TDG and infer the admissible values for each tasks and methods
+            _tdg.emplace(_htn);
+        }
+
+        if (_separate_tasks) {
+            // Initialize the separate tasks scheduler
+            _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(/*htn=*/ htn);
+        }
     }
     int findPlan();
     void improvePlan(int& iteration);
@@ -89,6 +117,10 @@ public:
     friend int terminateSatCall(void* state);
     void checkTermination();
     bool cancelOptimization();
+
+    const bool mustRestartPlanner() const { 
+        return (_separate_tasks && _separate_tasks_scheduler->mustRestartPlanner());
+    }
 
 private:
 
@@ -105,10 +137,14 @@ private:
 
     void addPreconditionConstraints();
     void addPreconditionsAndConstraints(const USignature& op, const SigSet& preconditions, bool isActionRepetition);
-    std::optional<SubstitutionConstraint> addPrecondition(const USignature& op, const Signature& fact, bool addQFact = true);
+    std::optional<SubstitutionConstraint> addPreconditionBitVec(const USignature& op, const Signature& fact, bool addQFact = true);
     
     enum EffectMode { INDIRECT, DIRECT, DIRECT_NO_QFACT };
     bool addEffect(const USignature& op, const Signature& fact, EffectMode mode);
+
+    bool addGroundEffect(const USignature& opSig, const int predId, bool negated, EffectMode mode);
+    void addGroundEffectBitVec(const USignature& opSig, BitVec effects, bool negated, EffectMode mode);
+    bool addPseudoGroundEffect(const USignature& op, const Signature& fact, EffectMode mode);
 
     std::optional<Reduction> createValidReduction(const USignature& rSig, const USignature& task);
 
@@ -117,9 +153,11 @@ private:
     void propagateReductions(size_t offset);
     std::vector<USignature> instantiateAllActionsOfTask(const USignature& task);
     std::vector<USignature> instantiateAllReductionsOfTask(const USignature& task);
-    void initializeNextEffects();
-    void initializeFact(Position& newPos, const USignature& fact);
+    void initializeNextEffectsBitVec();
+    void initializeFactBitVec(Position& newPos, const int predId);
     void addQConstantTypeConstraints(const USignature& op);
+
+    void setSoftLitsForOpsLastLayer();
 
     int getTerminateSatCall();
     void clearDonePositions(int offset);

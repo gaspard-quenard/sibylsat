@@ -15,6 +15,7 @@
 #include "util/timer.h"
 #include "util/signal_manager.h"
 #include "util/random.h"
+#include "util/statistics.h"
 
 #ifndef LILOTANE_VERSION
 #define LILOTANE_VERSION "(dbg)"
@@ -71,9 +72,29 @@ void handleSignal(int signum) {
 
 void run(Parameters& params) {
 
+    Statistics::getInstance().beginTiming(TimingStage::TOTAL);
+
     HtnInstance htn(params);
-    Planner planner(params, htn);
-    int result = planner.findPlan();
+    // Planner planner(params, htn);
+
+    std::unique_ptr<Planner> planner = std::make_unique<Planner>(params, htn);
+    int result = planner->findPlan();
+    Log::i("End after result %d\n", result);
+
+    if (planner->mustRestartPlanner()) {
+        Log::i("Restarting planner.\n");
+        // Clean the static and singleton data structures
+        Statistics::getInstance().reset();
+        VariableDomain::clear();
+
+        // Resetting the unique_ptr will delete the current planner and create a new one.
+        planner = std::make_unique<Planner>(params, htn);
+        result = planner->findPlan();
+        Log::i("End after result %d\n", result);
+    }
+
+    Statistics::getInstance().endTiming(TimingStage::TOTAL);
+    Statistics::getInstance().printStats();
 
     if (result == 0 && !params.isNonzero("cleanup")) {
         // Exit directly -- avoid to clean up :)

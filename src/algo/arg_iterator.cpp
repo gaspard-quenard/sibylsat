@@ -41,3 +41,33 @@ ArgIterator ArgIterator::getFullInstantiation(const USignature& sig, HtnInstance
 
     return ArgIterator(sig._name_id, std::move(constantsPerArg));
 }
+
+
+BitVec ArgIterator2::getFullInstantiation2(const USignature& sig, bool negated,
+                                    HtnInstance& _htn,
+                                    const std::vector<int>& sortsInput)
+{
+    std::vector<int> sorts = sortsInput.empty() ? _htn.getSorts(sig._name_id)
+                                                : sortsInput;
+
+
+    // Log::i("Get full instantiation for %s with sorts %s\n",
+        //    TOSTR(sig), TOSTR(sorts));
+
+    std::vector<int> restrictiveSorts(sig._args.size(), -1);
+    std::vector<int> fixed(sig._args.size(), -1);
+    for (size_t i = 0; i < sig._args.size(); ++i) {
+        // if (/*sig._args[i] <= 0 ||*/ !_htn.isVariable(sig._args[i]))
+        //     fixed[i] = sig._args[i];
+        if (_htn.isQConstant(sig._args[i])) {
+            // Restrict the sorts with the domain of the q-constant
+            int domain = _htn.getPrimarySortOfQConstant(sig._args[i]);
+            restrictiveSorts[i] = domain;
+        } else if (!_htn.isVariable(sig._args[i])) {
+            // Constant, set fixed value
+            fixed[i] = sig._args[i];
+        }
+    }
+
+    return _htn.getAllPredicatesId(sig._name_id, negated, sorts, restrictiveSorts, fixed);
+}

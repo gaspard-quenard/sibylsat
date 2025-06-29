@@ -25,6 +25,7 @@ public:
     static bool isLocked();
     static void lock();
     static void unlock();
+    static void clear();
 };
 
 #endif

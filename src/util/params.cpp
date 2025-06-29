@@ -78,8 +78,15 @@ void Parameters::setDefaults() {
     setParam("sibylsat", "1"); // use the sibylsat expansion method
     setParam("mutex", "1"); // Filter possible effects of abstract tasks using mutexes
     setParam("macroActions", "1"); // Join consecutive actions in subtasks methods into a single macro action
-    setParam("preprocessFacts", "1"); // Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts
+    // setParam("preprocessFacts", "1"); // Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts -> ALWAYS TRUE NOW, CANNOT BE SET TO FALSE
     setParam("restrictSortsInFA", "1"); // Restrict the sorts of the possible effects of methods to the most constrained sort. For example. If a method has a parameter of sort 'car' an call a primtive subtask with this parameter, but the parameter sort of the primitive task is vehicle (which is a super sort of car), the possible effects of the method will be restricted to the sort car.
+    setParam("separateTasks", "1"); // Solve the initial tasks network incrementally
+
+    // Parameters added for optimal solution using MaxSAT and the TDG heuristic
+    setParam("optimal", "0"); // Find an optimal solution instead of just a solution 
+    setParam("reusePreviousCores", "0"); // If using MaxSAT, try to reuse previous cores for the next maxsat call
+
+    
 }
 
 void Parameters::printUsage() {
@@ -133,8 +140,15 @@ void Parameters::printUsage() {
     Log::i(" -sibylsat=<0|1>     Use the sibylsat expansion method\n");
     Log::i(" -mutex=<0|1>        Filter possible effects of abstract tasks using mutexes\n");
     Log::i(" -macroActions=<0|1> Join consecutive actions in subtasks methods into a single macro action\n");
-    Log::i(" -preprocessFacts=<0|1> Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts\n");
+    // Log::i(" -preprocessFacts=<0|1> Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts\n");
     Log::i(" -restrictSortsInFA=<0|1> Restrict the sorts of the possible effects of methods to the most constrained sort. For example. If a method has a parameter of sort 'car' an call a primtive subtask with this parameter, but the parameter sort of the primitive task is vehicle (which is a super sort of car), the possible effects of the method will be restricted to the sort car.\n");
+
+    // Optimal solution using MaxSAT and the TDG heuristic
+    Log::i(" -optimal=<0|1>      Find an optimal solution instead of just a solution. Usually slower.\n");
+    Log::i(" -reusePreviousCores=<0|1>  If using MaxSAT, try to reuse previous cores for the next maxsat call\n");
+
+    // Separate tasks
+    Log::i(" -separateTasks=<0|1> Solve the initial tasks incrementally instead of all at once\n");
     Log::i("\n");
     printParams();
     Log::setForcePrint(false);

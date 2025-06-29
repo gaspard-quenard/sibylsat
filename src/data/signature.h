@@ -133,6 +133,18 @@ struct SigVecHasher {
     }
 };
 
+struct USignaturePtrHasher {
+    size_t operator()(const USignature* s) const {
+        return USignatureHasher()(*s);
+    }
+};
+
+struct USignaturePtrEqual {
+    bool operator()(const USignature* lhs, const USignature* rhs) const {
+        return *lhs == *rhs;
+    }
+};
+
 typedef FlatHashSet<Signature, SignatureHasher> SigSet;
 typedef FlatHashSet<USignature, USignatureHasher> USigSet;
 typedef FlatHashSet<PositionedUSig, PositionedUSigHasher> PositionUSigSet;

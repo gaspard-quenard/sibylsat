@@ -22,10 +22,12 @@ private:
     HtnInstance& _htn;
     FactAnalysis& _analysis;
     std::vector<Layer*>& _layers;
-    EncodingStatistics _stats;
+    Statistics& _stats;
     SatInterface _sat;
     VariableProvider _vars;
     Decoder _decoder;
+
+    size_t _new_init_pos = 0;
 
     std::function<void()> _termination_callback;
     
@@ -50,25 +52,27 @@ private:
 
     const bool _use_sibylsat_expansion;
 
+    const bool _optimal;
+
     const bool _mutex_predicates;
-    long long int time_spend_on_mutexes = 0;
 
     // USigSet new_relevants_facts_to_encode;
-    NodeHashMap<USignature, int, USignatureHasher> new_relevants_facts_to_encode;
+    NodeHashMap<USignature, int, USignatureHasher> _new_relevants_facts_to_encode;
 
 public:
     Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, std::vector<Layer*>& layers, std::function<void()> terminationCallback) : 
-            _params(params), _htn(htn), _analysis(analysis), _layers(layers),
-            _sat(params, _stats), _vars(_params, _htn, _layers),
+            _params(params), _htn(htn), _analysis(analysis), _layers(layers), _stats(Statistics::getInstance()),
+            _sat(params), _vars(_params, _htn, _layers),
             _decoder(_htn, _layers, _sat, _vars),
             _termination_callback(terminationCallback),
             _use_q_constant_mutexes(_params.getIntParam("qcm") > 0), 
             _implicit_primitiveness(params.isNonzero("ip")),
             _use_sibylsat_expansion(params.isNonzero("sibylsat")),
+            _optimal(params.isNonzero("optimal")),
             _mutex_predicates(_params.isNonzero("mutex")) {}
 
     void encode(size_t layerIdx, size_t pos);
-    void addAssumptions(int layerIdx, bool permanent = false);
+    void addAssumptionsPrimPlan(int layerIdx, bool permanent = false, int assumptions_until = -1);
     void addUnitConstraint(int lit);
     
     void setTerminateCallback(void * state, int (*terminate)(void * state));
@@ -84,12 +88,7 @@ public:
     std::vector<PlanItem> extractVirtualPlan() {
         return _decoder.extractClassicalPlan(Decoder::ALL);
     }
-    void printStatistics() {
-        _stats.printStages();
-    }
     SatInterface& getSatInterface() {return _sat;}
-    EncodingStatistics& getEncodingStatistics() {return _stats;}
-    long long int getTimeSpendOnMutexes() {return time_spend_on_mutexes;}
 
     /**
      * When using sibylsat expansion method. If the left position has been developped, we need to add the frame axioms, effects on this position and QfactSemantics (how those lifted effects can be decoded to a ground predicate)
@@ -100,16 +99,30 @@ public:
     void propagateRelevantsFacts(size_t layerIdx, size_t pos);
 
     const USignature getOpHoldingInLayerPos(int layer, int position);
+    const USignature getDecodingOpHoldingInLayerPos(int layer, int position);
+    void printStatementsAtPosition(int layer, int position);
 
     void print_formula(std::string filename) {
         _sat.print_formula(filename);
     }
 
+    // For optimal planning using maxsat
+    void clearSoftLits();
+    void addSoftLit(int lit, int weight);
+    int getObjectiveValue();
+
+    NodeHashSet<int> getSnapshotsOpsAndPredsTrue(int untilPos);
+    void addAssumptionsTasksAccomplished(NodeHashSet<int>& opsAndPredsTrue, bool permanent);
+
     ~Encoding() {
         // Append assumptions to written formula, close stream
         if (!_params.isNonzero("cs") && !_sat.hasLastAssumptions()) {
-            addAssumptions(_layers.size()-1);
+            addAssumptionsPrimPlan(_layers.size()-1);
         }
+    }
+
+    void setNewInitPos(size_t newInitPos) {
+        _new_init_pos = newInitPos;
     }
 
 private:

@@ -3,7 +3,6 @@
 #include <getopt.h>
 #include <sys/stat.h>
 #include <iomanip>
-#include <chrono>
 #include <filesystem>
 #include <queue>
 
@@ -11,13 +10,14 @@
 #include "util/regex.h"
 #include "util/project_utils.h"
 #include "util/string_util.h"
+#include "util/statistics.h"
 
 #include "libpanda.hpp"
 
 Action HtnInstance::BLANK_ACTION;
 
 HtnInstance::HtnInstance(Parameters& params) :
-             _params(params), _p(*parse(params.getDomainFilename(), params.getProblemFilename())), 
+             _params(params), _stats(Statistics::getInstance()), _p(*parse(params.getDomainFilename(), params.getProblemFilename())), 
             _share_q_constants(_params.isNonzero("sqq")) {
 
     // Transfer random seed to the hash function for any kind of signature
@@ -92,7 +92,9 @@ HtnInstance::HtnInstance(Parameters& params) :
     extractConstants();
 
     if (_params.isNonzero("mutex")) {
+        _stats.beginTiming(TimingStage::INIT_MUTEXES);
         loadMutexes();
+        _stats.endTiming(TimingStage::INIT_MUTEXES);
     }
 
     Log::i("Structures extracted.\n");
@@ -113,6 +115,8 @@ HtnInstance::HtnInstance(Parameters& params) :
     for (method& method : methods) {
         createReduction(method);
     }
+
+    extractStaticPredicates();
 
     if (_params.isNonzero("stats")) {
         printStatistics();
@@ -442,6 +446,35 @@ void HtnInstance::extractConstants() {
         for (const std::string& c : sortPair.second) {
             constants.insert(nameId(c));
             //log("constant %s of sort %s\n", c.c_str(), sortPair.first.c_str());
+        }
+    }
+}
+
+void HtnInstance::extractStaticPredicates() {
+    // Extract invariant predicates (which are not in any effect of an action)
+    for (const predicate_definition &p : predicate_definitions)
+    {
+        // Get the name id
+        int pId = nameId(p.name);
+        bool isInvariant = true;
+        // Now iterate over all the actions
+        for (const auto &action : _operators)
+        {
+            // Iterate over all the effects of the action
+            for (const auto &effect : action.second.getEffects())
+            {
+                // If the effect is the same as the predicate, we can break
+                if (effect._usig._name_id == pId)
+                {
+                    isInvariant = false;
+                    break;
+                }
+            }
+        }
+        if (isInvariant)
+        {
+            Log::i("Predicate %s is invariant: %d\n", p.name.c_str(), isInvariant);
+            _static_predicates.insert(pId);
         }
     }
 }
@@ -900,7 +933,7 @@ const std::vector<int>& HtnInstance::getSorts(int nameId) const {
     return _signature_sorts_table.at(nameId);
 }
 
-const std::vector<int> HtnInstance::getSortsParamsFromSigForFA(const Signature& eff) const {
+const std::vector<int> HtnInstance::getSortsParamsFromSigForFA(const USignature& eff) const {
     // In frame axioms, the potential effect in a signature
     // where each parameter in in the form ?<name_sort><idx_param>_<number>[_]*
     // From this, we can extract the sort of each parameter
@@ -910,11 +943,11 @@ const std::vector<int> HtnInstance::getSortsParamsFromSigForFA(const Signature& 
     // Create a vector to hold the sorts
     std::vector<int> sorts;
     // Initial sort for this eff
-    const std::vector<int> originalSortsEff = getSorts(eff._usig._name_id);
+    const std::vector<int> originalSortsEff = getSorts(eff._name_id);
 
     // For each parameter in the effect...
     int idx = -1;
-    for (const auto& param : eff._usig._args) {
+    for (const auto& param : eff._args) {
         idx++;
 
         // If this is a parameter of the parent method ?
@@ -980,6 +1013,15 @@ const std::vector<int> HtnInstance::getSortsParamsFromSigForFA(const Signature& 
 
 const FlatHashSet<int>& HtnInstance::getConstantsOfSort(int sort) const {
     return _constants_by_sort.at(sort);
+}
+
+const int HtnInstance::getPrimarySortOfQConstant(int qconst) const {
+    auto it = _primary_sort_of_q_constants.find(qconst);
+    if (it == _primary_sort_of_q_constants.end()) {
+        Log::e("No primary sort for q-constant %i\n", qconst);
+        exit(1);
+    }
+    return it->second;
 }
 
 const FlatHashSet<int>& HtnInstance::getSortsOfQConstant(int qconst) {
@@ -1100,8 +1142,6 @@ std::string HtnInstance::getPredicateInCorrectCase(std::string pred) const {
 
 
 void HtnInstance::loadMutexes() {
-    auto start = std::chrono::high_resolution_clock::now();
-
 
     filesystem::path current_path = getProjectRootDir();
 
@@ -1110,22 +1150,23 @@ void HtnInstance::loadMutexes() {
     std::string full_path_parser = filesystem_full_path_parser.string();
 
     // Path parser output
-    filesystem::path filesystem_parser_output = current_path / "problem.parsed";
+    filesystem::path filesystem_parser_output = getProblemProcessingDir() / "problem.parsed";
     std::string parser_output = filesystem_parser_output.string();
 
     std::string commandParser = full_path_parser + " " + _params.getDomainFilename() + " " + _params.getProblemFilename() + " " + parser_output;
 
     Log::i("Parsing the domain and problem files with the parser...\n");
-    std::system(commandParser.c_str());
+    int result = std::system(commandParser.c_str());
+    if (result != 0) {
+        Log::e("Error while parsing the domain and problem files with the parser.\n");
+        exit(1);
+    }
     Log::i("Done !\n");
 
     Log::i("Now, find the lifted fam groups...\n");
 
     // Create the directory to store the lifted mutex file if it does not exist
-    filesystem::path dir = current_path / "LiftedFamGroups";
-    if (!filesystem::exists(dir)) {
-        filesystem::create_directory(dir);
-    }
+    filesystem::path dir = getProblemProcessingDir();
 
     filesystem::path filesystem_full_path_mutex_file = dir / "lfg.txt";
     string full_path_mutex_file = filesystem_full_path_mutex_file.string();
@@ -1136,7 +1177,11 @@ void HtnInstance::loadMutexes() {
     filesystem::path filesystem_full_path_grounder = current_path / "lib" / "pandaPIgrounder";
     std::string full_path_grounder = filesystem_full_path_grounder.string();
     std::string commandLiftedFamGroups =  full_path_grounder + " --invariants --out-invariants \"" + full_path_mutex_file + "\" --exit-after-invariants " + parser_output;
-    std::system(commandLiftedFamGroups.c_str());
+    result = std::system(commandLiftedFamGroups.c_str());
+    if (result != 0) {
+        Log::e("Error while computing lifted mutexes group.\n");
+        exit(1);
+    }
     Log::i("Done !\n");
 
 
@@ -1144,9 +1189,6 @@ void HtnInstance::loadMutexes() {
 
     _sas_plus = new SASPlus(full_path_mutex_file, this);
     Log::i("Mutexes loaded.\n");
-
-    auto stop = std::chrono::high_resolution_clock::now();
-    _time_to_compute_mutex_predicates = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count();
 }
 
 
@@ -1598,6 +1640,10 @@ void HtnInstance::handleMacroActions() {
     Log::i("Created %d macro actions\n", number_macro_actions);
 }
 
+int HtnInstance::numActionsInMacro(int nameId) const {
+    return _macro_name_to_primitives.at(_name_back_table.at(nameId)).size();
+}
+
 std::vector<USignature> HtnInstance::getActionsFromMacro(const USignature& macroAction) const {
     std::vector<USignature> actions;
     if (!isMacroTask(macroAction._name_id)) return actions;
@@ -1642,4 +1688,92 @@ bool HtnInstance::isMacroTask(int nameId) const {
 
 HtnInstance::~HtnInstance() {
     delete &_p;
+}
+
+const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const std::vector<int>& sorts_per_args, const std::vector<int>& restrictive_sorts_per_args, const std::vector<int>& fixed_constant)
+{
+
+    // _stats.beginTiming(TimingStage::GET_ALL_PREDS);
+
+    BitVec all_preds_id = negated ? BitVec(getNumPositiveGroundFacts(), true) : all_preds_pos_bitvec;
+
+    // Do we already have the BitVec filter for all predicates of this name_id ?
+    if (!_filter_by_name_id.count(name_id))
+    {
+        // No, we need to create it
+        BitVec bv(getNumPositiveGroundFacts());
+        // Iterate overall positive ground facts, and set the bit if the predicate matches the name_id
+        for (size_t i = 0; i < getNumPositiveGroundFacts(); i++)
+        {
+            const USignature &fact = getGroundPositiveFact(i);
+            if (fact._name_id == name_id)
+            {
+                bv.set(i);
+            }
+        }
+        _filter_by_name_id[name_id] = bv;
+    }
+    // Filter by name_id
+    all_preds_id.and_with(_filter_by_name_id[name_id]);
+
+    for (size_t i = 0; i < sorts_per_args.size(); i++)
+    {
+        // Is it a constant at this idx ?
+        if (fixed_constant.size() > i && fixed_constant[i] != -1) {
+            int cst = fixed_constant[i];
+            // Do we already have the BitVec filter for this constant for this param idx ?
+            // Create a unique key for the constant at param idx
+            std::string k = key_const(cst, i);
+
+            if (!_filter_by_constant_at_idx_args.count(k)) {
+                BitVec bv(getNumPositiveGroundFacts());
+                for (size_t j = 0; j < getNumPositiveGroundFacts(); ++j) {
+                    const USignature& fact = getGroundPositiveFact(j);
+                    if (fact._args.size() > i && fact._args[i] == cst)
+                        bv.set(j);
+                }
+                _filter_by_constant_at_idx_args[k] = std::move(bv);
+            }
+            // Filter by constant at idx
+            all_preds_id.and_with(_filter_by_constant_at_idx_args[k]);
+        }
+        else {
+            int sort = sorts_per_args[i];
+            // Do we already have the BitVec for this sort for this param idx ?
+            std::string key = key_sort(sort, i);
+            if (!_filter_by_sort_at_idx_args.count(key)) {
+                const FlatHashSet<int>& constant_of_sort = getConstantsOfSort(sort);
+                BitVec bv(getNumPositiveGroundFacts());
+                for (size_t j = 0; j < getNumPositiveGroundFacts(); ++j) {
+                    const USignature& fact = getGroundPositiveFact(j);
+                    if (fact._args.size() > i && constant_of_sort.count(fact._args[i]))
+                        bv.set(j);
+                }
+                _filter_by_sort_at_idx_args[key] = std::move(bv);
+            }
+            // Filter by sort at idx
+            all_preds_id.and_with(_filter_by_sort_at_idx_args[key]);
+
+            // Do we have a restrictive sort for this param idx ?
+            if (restrictive_sorts_per_args.size() > i && restrictive_sorts_per_args[i] != -1) {
+                int restrictive_sort = restrictive_sorts_per_args[i];
+                // Do we already have the BitVec for this restrictive sort for this param idx ?
+                std::string key_restrictive = key_sort(restrictive_sort, i);
+                if (!_filter_by_sort_at_idx_args.count(key_restrictive)) {
+                    const FlatHashSet<int>& constant_of_restrictive_sort = getConstantsOfSort(restrictive_sort);
+                    BitVec bv(getNumPositiveGroundFacts());
+                    for (size_t j = 0; j < getNumPositiveGroundFacts(); ++j) {
+                        const USignature& fact = getGroundPositiveFact(j);
+                        if (fact._args.size() > i && constant_of_restrictive_sort.count(fact._args[i]))
+                            bv.set(j);
+                    }
+                    _filter_by_sort_at_idx_args[key_restrictive] = std::move(bv);
+                }
+                // Filter by restrictive sort at idx
+                all_preds_id.and_with(_filter_by_sort_at_idx_args[key_restrictive]);
+            }
+        }
+    }
+    // _stats.endTiming(TimingStage::GET_ALL_PREDS);
+    return all_preds_id;
 }

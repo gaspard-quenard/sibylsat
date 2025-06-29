@@ -72,6 +72,8 @@ public:
 
     static bool log(int verb, const char* str, va_list& vl);
 
+    static int getVerbosity();
+
 private:
     static void printColorModifier(int verb);
     static void resetColorModifier();

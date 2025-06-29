@@ -153,7 +153,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
     
     // Add primitiveness of all positions at the final layer
     // as unit literals (instead of assumptions)
-    _enc.addAssumptions(layerIdx, /*permanent=*/mode == ConstraintAddition::PERMANENT);
+    _enc.addAssumptionsPrimPlan(layerIdx, /*permanent=*/mode == ConstraintAddition::PERMANENT);
     _stats.end(STAGE_PLANLENGTHCOUNTING);
 
     int curr = currentPlanLength;

@@ -153,11 +153,26 @@ std::vector<USignature> Instantiator::instantiateLimited(const HtnOp& op, const 
     //Log::d("DIS=%i\n", doneInstSize);
     
     if (doneInstSize == 0) {
-        if (_analysis.hasValidPreconditions(op.getPreconditions()) 
-            && _analysis.hasValidPreconditions(op.getExtraPreconditions()) 
-            && _htn.hasSomeInstantiation(op.getSignature())) 
+        if (
+            _analysis.hasValidPreconditionsBitVec(op.getPreconditions()) && 
+            _analysis.hasValidPreconditionsBitVec(op.getExtraPreconditions()) &&
+            _htn.hasSomeInstantiation(op.getSignature())) {
             instantiation.emplace_back(op.getSignature());
         //log("INST %s : %i instantiations X\n", TOSTR(op.getSignature()), instantiation.size());
+
+            // Log::i("Instantiated op %s has valid preconditions!\n", TOSTR(op.getSignature()));
+            int a = 0;
+
+            // Confirm that it works as well with bitVec
+            bool validWithBitVec = _analysis.hasValidPreconditionsBitVec(op.getPreconditions()) && 
+                                    _analysis.hasValidPreconditionsBitVec(op.getExtraPreconditions());
+
+            if (!validWithBitVec) {
+                Log::e("Instantiated op %s has invalid preconditions with bitvec!\n", TOSTR(op.getSignature()));
+                exit(1);
+            }
+        }
+
         return instantiation;
     }
 
@@ -187,8 +202,23 @@ std::vector<USignature> Instantiator::instantiateLimited(const HtnOp& op, const 
             HtnOp newOp = op.substitute(s);
 
             // Test validity
-            if (!_analysis.hasValidPreconditions(newOp.getPreconditions())
-                || !_analysis.hasValidPreconditions(newOp.getExtraPreconditions())) continue;
+            if (
+                !_analysis.hasValidPreconditionsBitVec(newOp.getPreconditions()) ||
+                !_analysis.hasValidPreconditionsBitVec(newOp.getExtraPreconditions()))
+                {
+
+
+                    // Confirm that it would not be valid with bitvec
+                    bool notValidWithBitVec = !_analysis.hasValidPreconditionsBitVec(newOp.getPreconditions()) || 
+                                            !_analysis.hasValidPreconditionsBitVec(newOp.getExtraPreconditions());
+                    if (!notValidWithBitVec) {
+                        Log::e("Instantiated op %s has valid preconditions with bitvec, but not with set!\n", TOSTR(newOp.getSignature()));
+                        exit(1);
+                    }
+
+                    continue;
+
+            }
 
             // All ok -- add to stack
             if (newAssignment.size() == doneInstSize) {

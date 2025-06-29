@@ -2,7 +2,6 @@
 #include <fstream>
 #include <sstream>
 #include <unordered_set>
-#include <chrono>
 
 #include "data/sas_plus.h"
 #include "util/log.h"

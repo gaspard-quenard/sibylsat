@@ -1,0 +1,411 @@
+diff --git a/MsSolver.cc b/MsSolver.cc
+index 8f5a681..19e0bda 100755
+--- a/MsSolver.cc
++++ b/MsSolver.cc
+@@ -400,6 +400,102 @@ static bool separate_gbmo_subgoal(vec<Int>& splitting_weights, vec<Lit>& goal_ps
+     } else
+         return false;
+ }
++void MsSolver::removeNonReusableCores() {
++    // Remove all saved cores which are based on soft literals that are no longer relevant
++
++    // Get all the soft literals which have been deleted since the last call to this function
++    vec<Lit> soft_literals_deleted;
++    vec<Lit> current_soft_literals;
++    
++    // Collect current soft literals
++    for (int i = 0; i < soft_cls.size(); i++) {
++        // If weight is 0, it means that the soft clause is no longer relevant
++        if (soft_cls[i].fst == 0) continue;
++        Minisat::vec<Lit>* clause = soft_cls[i].snd;
++        for (int j = 0; j < clause->size(); j++) {
++            current_soft_literals.push((*clause)[j]);
++        }
++    }
++    
++    // Sort current soft literals for efficient search
++    Sort::sort(current_soft_literals);
++
++    // Find deleted soft literals by comparing with the previous set
++    for (int i = 0; i < previous_soft_cls.size(); i++) {
++        const Lit& previous_lit = previous_soft_cls[i];
++        if (Sort::bin_search(current_soft_literals, previous_lit) == -1) {
++            soft_literals_deleted.push(previous_lit);
++        }
++    }
++
++    // Add deleted literals to the list for removal
++    vec<Lit> lits_to_delete;
++    for (int i = 0; i < soft_literals_deleted.size(); i++) {
++        lits_to_delete.push(soft_literals_deleted[i]);
++    }
++
++    int num_cores = saved_cores.size();
++    int num_cores_deleted = 0;
++    
++    // Iterate over saved cores and remove those that contain deleted literals
++    for (int i = 0; i < saved_cores.size(); ) {
++        bool should_delete = false;
++        for (int j = 0; j < saved_cores[i].size(); j++) {
++            if (Sort::bin_search(lits_to_delete, ~saved_cores[i][j]) != -1) {
++                should_delete = true;
++                break;
++            }
++        }
++
++        if (should_delete) {
++            // Add the constraint literals introduced by this core to lits_to_delete
++            for (int j = 0; j < core_to_constrains_lits[i].size(); j++) {
++                lits_to_delete.push(core_to_constrains_lits[i][j]);
++            }
++            Sort::sort(lits_to_delete);
++            // Remove core and constraints without changing order
++            for (int k = i; k < saved_cores.size() - 1; k++) {
++                saved_cores[k + 1].moveTo(saved_cores[k]);
++                core_to_constrains_lits[k + 1].moveTo(core_to_constrains_lits[k]);
++            }
++            saved_cores.shrink(1);
++            core_to_constrains_lits.shrink(1);
++            num_cores_deleted++;
++        } else {
++            i++;
++        }
++    }
++
++    // Print the number of cores deleted
++    printf("Done! Number of cores deleted: %d/%d\n", num_cores_deleted, num_cores);
++
++    // Update previous soft clauses
++    previous_soft_cls.clear();
++    for (int i = 0; i < current_soft_literals.size(); i++) {
++        previous_soft_cls.push(current_soft_literals[i]);
++    }
++}
++
++int MsSolver::findReusableCore(const Minisat::vec<bool>& core_usage_flags, const Minisat::vec<Lit>& assump_ps) {
++    // Iterate through saved cores to find one that can be reused with the current assumptions.
++    for (int core_idx = 0; core_idx < saved_cores.size(); ++core_idx) {
++        if (core_usage_flags[core_idx]) continue; // Skip already used cores
++
++        // Check if all literals in this core are present in the current assumptions
++        bool is_subset = true;
++        for (int lit_idx = 0; lit_idx < saved_cores[core_idx].size(); ++lit_idx) {
++            if (Sort::bin_search(assump_ps, ~saved_cores[core_idx][lit_idx]) == -1) {
++                is_subset = false;
++                break;
++            }
++        }
++        
++        if (is_subset) {
++            return core_idx; // Return the index of the reusable core
++        }
++    }
++    return -1; // No reusable core found
++}
+ 
+ void MsSolver::maxsat_solve(solve_Command cmd)
+ {
+@@ -411,6 +507,11 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+         return;
+     }
+ 
++    if (reuse_previous_cores) {
++        printf("Remove the cores whose soft literals are no longer relevant...\n");
++        removeNonReusableCores();
++    }
++
+ #if defined(GLUCOSE3) || defined(GLUCOSE4)    
+     if (opt_verbosity >= 1) sat_solver.verbEveryConflicts = 100000;
+     sat_solver.setIncrementalMode();
+@@ -674,6 +775,18 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+     Minisat::vec<Lit> sat_conflicts;
+     lbool status;
+     extern bool opt_scip_parallel;
++
++    // Variables used when reusing previous cores
++    Minisat::vec<Minisat::vec<Lit>> new_saved_cores;
++    Minisat::vec<Minisat::vec<Lit>> new_core_to_constrains_lits;
++    // Initialize a mask to know if a reusable core has been used
++    Minisat::vec<bool> saved_cores_used(saved_cores.size(), false);
++    int num_saved_cores_used = 0;
++    float avg_size_core_used = 0;
++    int reusable_core_idx = -1;
++    Minisat::vec<Lit> constrains_created;
++
++
+     do { // a loop to process GBMO splitting points
+     while (1) {
+ #ifdef USE_SCIP
+@@ -708,6 +821,15 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+                                  sat_solver.conflicts < opt_unsat_conflicts - 500)
+           sat_solver.setConfBudget(opt_unsat_conflicts - sat_solver.conflicts);
+       else sat_solver.budgetOff();
++      if (reuse_previous_cores) {
++        reusable_core_idx = findReusableCore(saved_cores_used, assump_ps);
++        if (reusable_core_idx >= 0) {
++            saved_cores_used[reusable_core_idx] = true;
++            num_saved_cores_used++;
++            avg_size_core_used += saved_cores[reusable_core_idx].size();
++            goto CreateConstrainsUnsatCore;
++        } 
++      }
+       status = 
+           base_assump.size() == 1 && base_assump[0] == assump_lit ? l_True :
+           base_assump.size() == 1 && base_assump[0] == ~assump_lit ? l_False :
+@@ -929,31 +1051,38 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+         if (assump_ps.size() == 0 && assump_lit == lit_Undef || 
+             opt_minimization == 0 && sat_conflicts.size() == 1 && sat_conflicts[0] == ~assump_lit) break;
+         {
++CreateConstrainsUnsatCore:
+         Minisat::vec<Lit> core_mus;
+-        if (opt_core_minimization) {
+-            if (weighted_instance) {
+-                vec<Pair<Pair<Int, int>, Lit> > Cs_mus;
+-                for (int i = 0; i < sat_conflicts.size(); i++) {
+-                    Lit p = ~sat_conflicts[i];
+-                    int j = Sort::bin_search(assump_ps, p);
+-                    Cs_mus.push(Pair_new(Pair_new((j>=0 ? assump_Cs[j] : 0),i),p));
+-                }
+-                Sort::sort(Cs_mus);
+-                for (int i = 0; i < Cs_mus.size(); i++) core_mus.push(Cs_mus[i].snd);
++        constrains_created.clear();
++        if (reuse_previous_cores && reusable_core_idx >= 0) {
++            // Reuse the core
++            saved_cores[reusable_core_idx].copyTo(core_mus);
++        } else {
++            if (opt_core_minimization) {
++                if (weighted_instance) {
++                    vec<Pair<Pair<Int, int>, Lit> > Cs_mus;
++                    for (int i = 0; i < sat_conflicts.size(); i++) {
++                        Lit p = ~sat_conflicts[i];
++                        int j = Sort::bin_search(assump_ps, p);
++                        Cs_mus.push(Pair_new(Pair_new((j>=0 ? assump_Cs[j] : 0),i),p));
++                    }
++                    Sort::sort(Cs_mus);
++                    for (int i = 0; i < Cs_mus.size(); i++) core_mus.push(Cs_mus[i].snd);
++                } else
++                    for (int i = 0; i < sat_conflicts.size(); i++) core_mus.push(~sat_conflicts[i]);
++                core_minimization(sat_solver, core_mus);
+             } else
+-                for (int i = 0; i < sat_conflicts.size(); i++) core_mus.push(~sat_conflicts[i]);
+-            core_minimization(sat_solver, core_mus);
+-        } else
+-            for (int i = 0; i < sat_conflicts.size(); i++) core_mus.push(sat_conflicts[i]);
+-        if (core_mus.size() > 0 && core_mus.size() < 6)
+-            if (!ipamir_used) sat_solver.addClause(core_mus);
+-            else if (core_mus.size() == 1) addUnitClause(core_mus.last());
+-            else {
+-                Lit r = mkLit(sat_solver.newVar(VAR_UPOL, !opt_branch_pbvars), true);
+-                core_mus.push(r);
+-                addUnitClause(~r); sat_solver.addClause(core_mus);
+-                core_mus.pop();
+-            }
++                for (int i = 0; i < sat_conflicts.size(); i++) core_mus.push(sat_conflicts[i]);
++            if (core_mus.size() > 0 && core_mus.size() < 6)
++                if (!ipamir_used) sat_solver.addClause(core_mus);
++                else if (core_mus.size() == 1) addUnitClause(core_mus.last());
++                else {
++                    Lit r = mkLit(sat_solver.newVar(VAR_UPOL, !opt_branch_pbvars), true);
++                    core_mus.push(r);
++                    addUnitClause(~r); sat_solver.addClause(core_mus);
++                    core_mus.pop();
++                }
++        }
+         Int min_removed = Int_MAX, min_bound = Int_MAX;
+         int removed = 0;
+         bool other_conflict = false;
+@@ -961,6 +1090,16 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+         if (opt_minimization == 1) { 
+             goal_ps.clear(); goal_Cs.clear();
+         }
++        if (reuse_previous_cores && reusable_core_idx == -1) {
++            // Save the new core, as well as the constrains linked to it
++            new_saved_cores.push();
++            new (&new_saved_cores[new_saved_cores.size() - 1]) Minisat::vec<Lit>();
++            core_mus.copyTo(new_saved_cores[new_saved_cores.size() - 1]);
++
++            // Create the empty vector of constrains linked to this saved core
++            new_core_to_constrains_lits.push();
++            new (&new_core_to_constrains_lits[new_core_to_constrains_lits.size() - 1]) Minisat::vec<Lit>();
++        }
+         for (int j, i = 0; i < core_mus.size(); i++) {
+             Lit p = ~core_mus[i];
+             if ((j = Sort::bin_search(assump_ps, p)) >= 0) { 
+@@ -1049,6 +1188,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+                     sat_solver.setFrozen(var(newp),true);
+                     sat_solver.addClause(~saved_constrs[k]->lit, newp);
+                     saved_constrs[k]->lit = newp;
++                    if (reuse_previous_cores) constrains_created.push(newp);
+                     assump_ps.push(newp); assump_Cs.push(saved_constrs_Cs[k]);
+                     for (int k = assump_ps.size() - 1; k > 0 && assump_ps[k] < assump_ps[k-1]; k--)
+                         std::swap(assump_ps[k], assump_ps[k-1]), std::swap(assump_Cs[k], assump_Cs[k-1]);
+@@ -1060,6 +1200,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+         }
+         if (assump_lit != lit_Undef && !use_base_assump) {
+             sat_solver.setFrozen(var(assump_lit),true);
++            if (reuse_previous_cores) constrains_created.push(assump_lit);
+             assump_ps.push(assump_lit); assump_Cs.push(opt_minimization == 2 ? try_lessthan : 
+                                                        min_removed != Int_MAX && min_removed != 0 ? min_removed : 1);
+             for (int k = assump_ps.size() - 1; k > 0 && assump_ps[k] < assump_ps[k-1]; k--) // correct the order of assump_ps
+@@ -1077,7 +1218,10 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+                     for (int i=0; i < new_assump.size(); i++) 
+                         delayed_assump.push(Pair_new(assump_Cs.last(), new_assump[i]));
+                 }
+-                if (constrs.last()->lit != assump_lit) assump_lit = assump_ps.last() = constrs.last()->lit;
++                if (constrs.last()->lit != assump_lit) {
++                    assump_lit = assump_ps.last() = constrs.last()->lit;
++                    if (reuse_previous_cores) constrains_created[constrains_created.size() - 1] = constrs.last()->lit;
++                }
+                 saved_constrs.push(constrs.last()), assump_map.set(toInt(assump_lit),saved_constrs.size() - 1);
+                 saved_constrs_Cs.push(assump_Cs.last());
+             } else if (goal_ps.size() > 1) {
+@@ -1115,6 +1259,38 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+                     assump_ps.size(), sorted_assump_Cs.size(), top_for_strat, toString(sorted_assump_Cs.size() > 0 ? sorted_assump_Cs.last() : 0)); xfree(t); }
+         if (opt_minimization == 2 && opt_verbosity == 1 && use_base_assump) {
+             char *t; reportf("Lower bound  = %s\n", t=toString(LB_goalvalue * goal_gcd)); xfree(t); }
++        if (reuse_previous_cores && reusable_core_idx >= 0) {
++            // Update the saved cores with the new constraints
++            // Map old constraints lits to new constraints lits in all cores
++            if (constrains_created.size() == core_to_constrains_lits[reusable_core_idx].size()) { 
++                std::map<Lit, Lit> old_to_new_constrains;
++                for (int j = 0; j < core_to_constrains_lits[reusable_core_idx].size(); j++) {
++                    old_to_new_constrains[core_to_constrains_lits[reusable_core_idx][j]] = constrains_created[j];
++                }
++
++                // Update saved_cores and core_to_constrains_lits with new constraints
++                if (old_to_new_constrains.size() > 0) {
++                    for (int j = 0; j < saved_cores.size(); j++) {
++                        for (int k = 0; k < saved_cores[j].size(); k++) {
++                            if (old_to_new_constrains.find(~saved_cores[j][k]) != old_to_new_constrains.end()) {
++                                saved_cores[j][k] = ~old_to_new_constrains[~saved_cores[j][k]];
++                            }
++                        }
++                        for (int k = 0; k < core_to_constrains_lits[j].size(); k++) {
++                            if (old_to_new_constrains.find(core_to_constrains_lits[j][k]) != old_to_new_constrains.end()) {
++                                core_to_constrains_lits[j][k] = old_to_new_constrains[core_to_constrains_lits[j][k]];
++                            }
++                        }
++                    }
++                }
++            }
++        } 
++        if (reuse_previous_cores && reusable_core_idx == -1) {
++            // Set for the new core all the constrains that were created by the core
++            for (int j = 0; j < constrains_created.size(); j++) {
++                new_core_to_constrains_lits[new_core_to_constrains_lits.size() - 1].push(constrains_created[j]);
++            }
++        } 
+ SwitchSearchMethod:        
+         if (opt_minimization == 1 && opt_to_bin_search && LB_goalvalue + 5 < UB_goalvalue &&
+             cpuTime() >= opt_unsat_cpu + start_solving_cpu && sat_solver.conflicts > opt_unsat_conflicts) {
+@@ -1199,7 +1375,7 @@ SwitchSearchMethod:
+                 }
+             }
+         }
+-      }         
++      }       
+     } // END OF LOOP: while(1)
+       if (gbmo_remain_goal_ps.size() == 0 || !satisfied) break;
+ 
+@@ -1242,6 +1418,31 @@ SwitchSearchMethod:
+         if (UB_goalvalue   != Int_MAX) UB_goalvalue *= goal_gcd;
+     }
+     if (ipamir_used) reset_soft_cls(soft_cls, fixed_soft_cls, modified_soft_cls, goal_gcd);
++    if (reuse_previous_cores) {
++
++        printf("Num saved core used here: %d/%d of average size %f\n", num_saved_cores_used, saved_cores_used.size(), avg_size_core_used / (float) num_saved_cores_used);
++
++        // Ensure all sizes match because each index corresponds to a core, its assumptions, and its constraints
++        assert(new_saved_cores.size() == new_core_to_constrains_lits.size());
++
++        int orig_size = saved_cores.size();
++
++        // Append new saved cores and constraints to the global variables
++        for (int i = 0; i < new_saved_cores.size(); i++) {
++            saved_cores.push();
++            new (&saved_cores[i + orig_size]) Minisat::vec<Lit>();
++            new_saved_cores[i].copyTo(saved_cores[i + orig_size]);
++
++            core_to_constrains_lits.push();
++            new (&core_to_constrains_lits[i + orig_size]) Minisat::vec<Lit>();
++            new_core_to_constrains_lits[i].copyTo(core_to_constrains_lits[i + orig_size]);
++        }
++
++        printf("Updated saved cores count: %d\n", saved_cores.size());
++
++        new_saved_cores.clear();
++        new_core_to_constrains_lits.clear();
++    }
+ #ifdef USE_SCIP
+     extern bool opt_scip_parallel;
+     char test = OPT_NONE;
+diff --git a/MsSolver.h b/MsSolver.h
+index 4caddfc..34dd348 100755
+--- a/MsSolver.h
++++ b/MsSolver.h
+@@ -139,6 +139,11 @@ class MsSolver final : public PbSolver {
+     Lit                 max_input_lit;  // IMPAMIR: the maximal value of literals created during reading an instance
+     void *              termCallbackState;
+     int               (*termCallback)(void *state);
++
++    bool reuse_previous_cores = false;
++    Minisat::vec<Minisat::vec<Lit>> saved_cores;
++    Minisat::vec<Minisat::vec<Lit>> core_to_constrains_lits;
++    Minisat::vec<Lit> previous_soft_cls;
+ #ifdef USE_SCIP
+     ScipSolver          scip_solver;
+ #endif
+@@ -192,6 +197,10 @@ class MsSolver final : public PbSolver {
+     void    maxsat_solve(solve_Command cmd = sc_Minimize); 
+     void    preprocess_soft_cls(Minisat::vec<Lit>& assump_ps, vec<Int>& assump_Cs, const Int& max_assump_Cs, 
+                                            IntLitQueue& delayed_assump, Int& delayed_assump_sum);
++
++    // Functions when using parameter reusePreviousCores
++    void    removeNonReusableCores();
++    int     findReusableCore(const Minisat::vec<bool>& saved_cores_used, const Minisat::vec<Lit>& assump_ps);
+ } ;
+ 
+ #endif
+diff --git a/ipamir.cc b/ipamir.cc
+index 89a888d..639f166 100644
+--- a/ipamir.cc
++++ b/ipamir.cc
+@@ -38,7 +38,7 @@ struct MySolver {
+ 
+     MySolver() : nomodel(true), solving_count(0)
+     {
+-        opt_verbosity = 0;
++        opt_verbosity = 1;
+         solver = new MsSolver(opt_verbosity > 0, true);
+         solver->ipamir_used = true;
+         opt_maxsat = true, opt_maxsat_msu = true; 
+@@ -81,11 +81,15 @@ IPAMIR_API const char * ipamir_signature ()
+  * Required state: N/A
+  * State after: INPUT
+  */
+-IPAMIR_API void * ipamir_init ()
++IPAMIR_API void * ipamir_init (bool reusePreviousCores)
+ {
+     increase_stack_size(256);
+     MySolver *s = new MySolver;
+     pb_solver = s->solver;
++    if (reusePreviousCores) {
++        printf("__ Experimental mode: reuse previous cores __ \n");
++        pb_solver->reuse_previous_cores = true;
++    }
+     return (void*)s;
+ }
+ 
+diff --git a/ipamir.h b/ipamir.h
+index ab2b27f..abc2860 100644
+--- a/ipamir.h
++++ b/ipamir.h
+@@ -65,7 +65,7 @@ IPAMIR_API const char * ipamir_signature ();
+  * Required state: N/A
+  * State after: INPUT
+  */
+-IPAMIR_API void * ipamir_init ();
++IPAMIR_API void * ipamir_init (bool reusePreviousCores = false);
+ 
+ /**
+  * Release the solver, i.e., all its resources and allocated memory. The solver

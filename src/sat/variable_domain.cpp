@@ -39,3 +39,8 @@ void VariableDomain::unlock() {
 bool VariableDomain::isLocked() {
     return _locked;
 }
+
+void VariableDomain::clear() {
+    _running_var_id = 1;
+    _locked = false;
+}

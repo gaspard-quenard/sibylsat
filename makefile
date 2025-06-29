@@ -4,7 +4,7 @@
 TARGET=$(shell basename "`pwd`")
 IPASIRSOLVER ?= glucose4
 
-all: clean
+all: # clean
 	mkdir -p build
 	cd build && cmake .. -DCMAKE_BUILD_TYPE=RELEASE -DIPASIRSOLVER=$(IPASIRSOLVER) && make -j && cp sibylsat .. && cd ..
 

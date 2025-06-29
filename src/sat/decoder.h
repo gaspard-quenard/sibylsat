@@ -26,6 +26,7 @@ public:
         Layer& finalLayer = *_layers.back();
         int li = finalLayer.index();
         //VariableDomain::lock();
+        int primitiveNameId = _htn.nameId("__PRIMITIVE___");
 
         std::vector<PlanItem> plan(finalLayer.size());
         //log("(actions at layer %i)\n", li);
@@ -33,18 +34,18 @@ public:
             //log("%i\n", pos);
 
             // Print out the state
-            Log::d("PLANDBG %i,%i S ", li, pos);
-            for (const auto& [sig, fVar] : finalLayer[pos].getVariableTable(VarType::FACT)) {
-                if (_sat.holds(fVar)) Log::log_notime(Log::V4_DEBUG, "%s ", TOSTR(sig));
-            }
-            Log::log_notime(Log::V4_DEBUG, "\n");
+            // Log::d("PLANDBG %i,%i S ", li, pos);
+            // for (const auto& [sig, fVar] : finalLayer[pos].getVariableTable(VarType::FACT)) {
+            //     if (_sat.holds(fVar)) Log::log_notime(Log::V4_DEBUG, "%s ", TOSTR(sig));
+            // }
+            // Log::log_notime(Log::V4_DEBUG, "\n");
 
             int chosenActions = 0;
             //State newState = state;
             for (const auto& [sig, aVar] : finalLayer[pos].getVariableTable(VarType::OP)) {
                 if (!_sat.holds(aVar)) continue;
 
-                if (sig._name_id == _htn.nameId("__PRIMITIVE___")) continue;
+                if (sig._name_id == primitiveNameId) continue;
 
                 USignature aSig = sig;
                 if (mode == PRIMITIVE_ONLY && !_htn.isAction(aSig)) continue;
@@ -316,7 +317,7 @@ public:
                 v = 0; // Set the id to 0 for the root
             }
 
-            Log::i("[%i] %s:%s @ (%i,%i)\n", v, TOSTR(rDecoded.getTaskSignature()), TOSTR(decRSig), layer, pos);
+            Log::d("[%i] %s:%s @ (%i,%i)\n", v, TOSTR(rDecoded.getTaskSignature()), TOSTR(decRSig), layer, pos);
 
             hierarchy.push_back(PlanItem(v, rDecoded.getTaskSignature(), decRSig, std::vector<int>()));
             PlanItem& item = hierarchy.back();
@@ -348,12 +349,12 @@ public:
                     }
                     int v = classicalPlan[aPos].id;
                     item.subtaskIds.push_back(v);
-                    Log::i("    -> [%i] %s\n", v, TOSTR(nextActionOrReductionTrue));
+                    Log::d("    -> [%i] %s\n", v, TOSTR(nextActionOrReductionTrue));
                 } else if (_htn.isReduction(nextActionOrReductionTrue)) {
                     // int v = nextActionOrReductionTrue._unique_id;
                     int v = _vars.getVariable(VarType::OP, nextLayer, nextPos, nextActionOrReductionTrue);
                     item.subtaskIds.push_back(v);
-                    Log::i("    -> [%i] %s\n", v, TOSTR(nextActionOrReductionTrue));
+                    Log::d("    -> [%i] %s\n", v, TOSTR(nextActionOrReductionTrue));
                     layerPosToCall.insert(std::pair(nextLayer, nextPos));
                 } else {
                     assert(false || Log::e("Plan error: Invalid action/reduction %s at %i,%i!\n", TOSTR(nextActionOrReductionTrue), nextLayer, nextPos));

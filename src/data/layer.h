@@ -31,6 +31,13 @@ public:
 
     Position* getPointerPos(size_t pos);
     void updatePos(size_t pos, Position* newPos);
+    void popPosition() {
+        // Delete the last position
+        if (!_content.empty()) {
+            delete _content.back();
+            _content.pop_back();
+        }
+    };
     
     void consolidate();
 };

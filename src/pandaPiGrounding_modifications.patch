@@ -192,7 +192,7 @@ index 5a84b21..6add05d 100644
  	std::vector<bool> prunedFacts (initiallyReachableFacts.size());
  	std::vector<bool> prunedTasks (initiallyReachableTasks.size());
 diff --git a/src/grounding.h b/src/grounding.h
-index d51bca9..c22abfe 100644
+index d51bca9..36e6cd6 100644
 --- a/src/grounding.h
 +++ b/src/grounding.h
 @@ -16,6 +16,8 @@ struct grounding_configuration{
@@ -208,7 +208,7 @@ index d51bca9..c22abfe 100644
  	bool outputSASPlus = false; 
  
  	// output formatting
-+	bool writeFullMethodName = false;
++	bool writeFullMethodsName = false;
  	bool outputSASVariablesOnly = false;
  	sas_delete_output_mode sas_mode = SAS_AS_INPUT;
  	bool noopForEmptyMethods = false;
@@ -218,7 +218,7 @@ index d51bca9..c22abfe 100644
  	// compilations to apply
  	bool compileNegativeSASVariables = false;
 diff --git a/src/liftedGPG.cpp b/src/liftedGPG.cpp
-index 5a41cb2..3d8a1fc 100644
+index 5a41cb2..cb9b369 100644
 --- a/src/liftedGPG.cpp
 +++ b/src/liftedGPG.cpp
 @@ -1,4 +1,5 @@
@@ -264,15 +264,16 @@ index 5a41cb2..3d8a1fc 100644
  	GpgTdg tdg (domain, problem, groundedTasksPg);
  	std::vector<GpgTdg::ResultType *> groundedMethods;
 diff --git a/src/main.cpp b/src/main.cpp
-index c036b9a..96d5783 100644
+index c036b9a..b8bfa45 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
-@@ -38,8 +38,12 @@ int main (int argc, char * argv[])
+@@ -38,8 +38,13 @@ int main (int argc, char * argv[])
  
  	config.quietMode = args_info.quiet_flag;
  	config.printTimings = args_info.print_timings_flag;
 +	config.onlyWriteStateFeatures = args_info.only_write_state_features_flag;
 +	config.quickComputeStateFeatures = args_info.quick_compute_state_features_flag;
++	config.writeFullMethodsName = args_info.write_full_methods_name_flag;
  
  	config.computeInvariants = args_info.invariants_flag;
 +	config.exitAfterInvariants = args_info.exit_after_invariants_flag;
@@ -281,14 +282,15 @@ index c036b9a..96d5783 100644
  
  	// SAS mode
 diff --git a/src/options.ggo b/src/options.ggo
-index 9dc115c..91750d6 100644
+index 9dc115c..a81b641 100644
 --- a/src/options.ggo
 +++ b/src/options.ggo
-@@ -17,10 +17,15 @@ option "quiet" q "activate quiet mode. Grounder will make no output." flag off
+@@ -17,10 +17,16 @@ option "quiet" q "activate quiet mode. Grounder will make no output." flag off
  option "print-timings" T "print detailed timings of individual operations." flag off
  option "output-domain" O "write internal data structures representing the lifted input to standard out (only for debugging)." flag off
  option "plan" P "specify a plan. One the methods pertaining to this plan will be grounded. Provide a file(name) in which the plan is." string
 +option "only-write-state-features" 9 "Only write the state features in the output file" flag off
++option "write-full-methods-name" 8 "Write the methods with their parameters in the output file" flag off
 +option "quick-compute-state-features" 7 "If the problem is slow to compute, compute the state features more quickly but lose in optimality. Need flag only-write-state-features" flag off
  
  
@@ -301,7 +303,7 @@ index 9dc115c..91750d6 100644
  
  section "Transformations"
 diff --git a/src/output.cpp b/src/output.cpp
-index e3fa94c..0ed941e 100644
+index e3fa94c..2b61c28 100644
 --- a/src/output.cpp
 +++ b/src/output.cpp
 @@ -278,6 +278,7 @@ void write_grounded_HTN(std::ostream & pout, const Domain & domain, const Proble
@@ -312,3 +314,29 @@ index e3fa94c..0ed941e 100644
  
  	pout << ";; Mutex Groups" << std::endl;
  	pout << number_of_sas_groups << std::endl;
+@@ -902,15 +903,17 @@ void write_grounded_HTN(std::ostream & pout, const Domain & domain, const Proble
+ 		if (prunedMethods[method.groundedNo]) continue;
+ 		number_of_output_methods++;
+ 		// output their name
+-		pout << domain.decompositionMethods[method.methodNo].name << std::endl;
+-		/* method names may not contained variables for verification
+-		 * TODO maybe add a FLAG here (for debugging the planner)
+-		<< "[";
+-		for (unsigned int i = 0; i < method.arguments.size(); i++){
+-			if (i) pout << ",";
+-			pout << domain.constants[method.arguments[i]];
++		pout << domain.decompositionMethods[method.methodNo].name;
++
++		if (config.writeFullMethodsName) {		
++			pout << "[";
++			for (unsigned int i = 0; i < method.arguments.size(); i++){
++				if (i) pout << ",";
++				pout << domain.constants[method.arguments[i]];
++			}
++			pout << "]";
+ 		}
+-		pout << "]" << std::endl;*/
++		pout << std::endl;
+ 
+ 		// the abstract task
+ 		int atOutputNo = reachableTasks[method.groundedAddEffects[0]].outputNo;

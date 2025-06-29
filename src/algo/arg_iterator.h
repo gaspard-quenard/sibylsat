@@ -6,6 +6,7 @@
 
 #include "util/hashmap.h"
 #include "data/signature.h"
+#include "util/bitvec.h"
 #include "util/log.h"
 
 class HtnInstance;
@@ -85,6 +86,15 @@ public:
     }
 
     static ArgIterator getFullInstantiation(const USignature& sig, HtnInstance& _htn, const std::vector<int>& sorts = {}, const std::vector<FlatHashSet<int>>& constantsAllowedPerSorts = {});
+};
+
+
+
+class ArgIterator2 {
+
+public:
+
+    static BitVec getFullInstantiation2(const USignature& sig, bool negated, HtnInstance& _htn, const std::vector<int>& sorts = {});
 };
 
 #endif

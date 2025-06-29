@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.11.4)
 project (sibylsat)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 
 if(NOT IPASIRSOLVER)
@@ -42,11 +42,21 @@ else()
     set(SOLVERLIBS "-ldummyfuncs")
 endif()
 
+
+# If using UWrMaxSat with IPAMIR, update includes and libraries
+if("${IPASIRSOLVER}" STREQUAL "uwrmaxsat")
+    set(IPAMIRDIR "${CMAKE_CURRENT_SOURCE_DIR}/lib")
+    include_directories(${IPAMIRDIR})
+    link_directories(${IPAMIRDIR})
+    set(SOLVERLIBS "-luwrmaxsat")
+    add_compile_definitions(USE_IPAMIR)
+endif()
+
 # Source files (without main.cpp)
 
 set(BASE_SOURCES
-    src/algo/arg_iterator.cpp src/algo/domination_resolver.cpp src/algo/fact_analysis.cpp src/algo/instantiator.cpp src/algo/network_traversal.cpp src/algo/planner.cpp src/algo/plan_writer.cpp src/algo/retroactive_pruning.cpp
-    src/data/action.cpp src/data/htn_instance.cpp src/data/htn_op.cpp src/data/layer.cpp src/data/position.cpp src/data/reduction.cpp src/data/signature.cpp src/data/substitution.cpp src/data/sas_plus.cpp
+    src/algo/arg_iterator.cpp src/algo/domination_resolver.cpp src/algo/fact_analysis.cpp src/algo/instantiator.cpp src/algo/network_traversal.cpp src/algo/planner.cpp src/algo/plan_writer.cpp src/algo/retroactive_pruning.cpp src/algo/separate_tasks_scheduler.cpp
+    src/data/action.cpp src/data/htn_instance.cpp src/data/htn_op.cpp src/data/layer.cpp src/data/position.cpp src/data/reduction.cpp src/data/signature.cpp src/data/substitution.cpp src/data/sas_plus.cpp src/data/tdg.cpp
     src/sat/binary_amo.cpp src/sat/encoding.cpp src/sat/literal_tree.cpp src/sat/plan_optimizer.cpp src/sat/variable_domain.cpp
     src/util/log.cpp src/util/names.cpp src/util/params.cpp src/util/random.cpp src/util/signal_manager.cpp src/util/timer.cpp src/util/project_utils.cpp
 )
@@ -73,10 +83,14 @@ if("${SOLVERLIBS}" MATCHES ".*dummyfuncs.*")
         STATIC lib/dummyfuncs/dummyfuncs.cpp
     )
 endif()
-if("${SOLVERLIBS}" MATCHES ".*[A-Za-z].*")
-    target_link_libraries(sibylsat lotane ${BASE_LIBS} ipasir${IPASIRSOLVER} ${SOLVERLIBS})
+if("${IPASIRSOLVER}" STREQUAL "uwrmaxsat")
+    target_link_libraries(sibylsat lotane ${BASE_LIBS} ${SOLVERLIBS})
 else()
-    target_link_libraries(sibylsat lotane ${BASE_LIBS} ipasir${IPASIRSOLVER})
+    if("${SOLVERLIBS}" MATCHES ".*[A-Za-z].*")
+        target_link_libraries(sibylsat lotane ${BASE_LIBS} ipasir${IPASIRSOLVER} ${SOLVERLIBS})
+    else()
+        target_link_libraries(sibylsat lotane ${BASE_LIBS} ipasir${IPASIRSOLVER})
+    endif()
 endif()
 
 
