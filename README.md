@@ -81,16 +81,7 @@ By default, the executable is launched with the best sibylsat configuration. In 
 
 * `-mutex=<0|1>`: Filter possible effects of abstract tasks using mutexes. Very useful to sibylsat to find better abstract plans. Default is 1.
 * `-macroActions=<0|1>`: Join consecutive actions in subtasks methods into a single macro action. Default is 1.
-* `-preprocessFacts=<0|1>`: Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts. Default is 1.
-* `-restrictSortsInFA=<0|1>`: Restrict the sorts of the possible effects of methods to the most constrained sort. For example. If a method has a parameter of sort 'car' an call a primtive subtask with this parameter, but the parameter sort of the primitive task is vehicle (which is a super sort of car), the possible effects of the method will be restricted to the sort car. Default is 1.
-
-
-You can launch the original Lilotane planner by using the following options:
-
-
-```bash
-./sibylsat path/to/domain.hddl path/to/problem.hddl -sibylsat=0 -mutex=0 -macroActions=0 -preprocessFacts=0 -restrictSortsInFA=0
-```
+* `-optimal=<0|1>`: Use the technique proposed in [6] to find optimal solution for TOHTN problems. Note that you must link SibylSat with a MaxSat solver beforehand (setting the IPASIR solver to uwrmaxsat in makefile and then run `make` again) Default is 0.
 
 
 Some useful parameters as well:
@@ -125,7 +116,7 @@ Specifically: CaDiCaL, Cryptominisat, Lingeling and Riss are Free Software while
 
 SibylSat is based on a fork of the Lilotane planner developed by Dominik Schreiber <dominik.schreiber@kit.edu> [1]. SibylSat itself is developed by Gaspard Quenard <gaspard.quenard@univ-grenoble-alpes.fr>
 
-If you use SibylSat in academic work, please cite [0].
+If you use SibylSat in academic work, please cite [0]. If you use SibylSat to find optimal solution (using parameter **-optimal**), please cite [6].
 
 ---
 
@@ -140,3 +131,5 @@ If you use SibylSat in academic work, please cite [0].
 [4] Behnke, G. et al. (2020). [**HDDL - Addendum.**](http://gki.informatik.uni-freiburg.de/competition/hddl.pdf) Universität Freiburg.
 
 [5] Behnke, G. et al. (2020). [**Plan verification.**](http://gki.informatik.uni-freiburg.de/ipc2020/format.pdf) Universität Freiburg.
+
+[6] Quenard,  G.,  Pellier,  D., &  Fiorino,  H.  (2025).  [**SibylSatOpt: a MaxSAT-based Greedy Optimal Search for TOHTN Planning.**](https://ojs.aaai.org/index.php/ICAPS/article/view/36124) In Proceedings of the International Conference on Automated Planning and Scheduling. Vol. 35. No. 1. 2025.
