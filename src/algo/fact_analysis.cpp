@@ -449,7 +449,14 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
     std::vector<bool> occursInPreconditions(args.size(), false);
 
     // Check each precondition regarding its valid decodings w.r.t. current state
-    // const SigSet* preSets[2] = {&op.getPreconditions(), &op.getExtraPreconditions()};
+    struct PreconditionConstraint
+    {
+        std::vector<int> varIndices;              // indices in op args
+        std::vector<std::vector<int>> tuples;     // aligned with varIndices
+    };
+
+    std::vector<PreconditionConstraint> constraints;
+
     const SigSet *preSets[1] = {&op.getPreconditions()};
     for (const auto &preSet : preSets)
         for (const auto &preSig : *preSet)
@@ -471,20 +478,28 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
                 }
             }
 
-            // if (!_htn.hasQConstants(preSig._usig) && _htn.isFullyGround(preSig._usig))
-            // {
-            //     // Check base condition; if unsatisfied, discard op
-            //     if (!isReachable(preSig))
-            //         return std::vector<FlatHashSet<int>>();
-            //     // Add constants to respective argument domains
-            //     for (size_t i = 0; i < preSig._usig._args.size(); i++)
-            //     {
-            //         domainPerVariable[opArgIndices[i]].insert(preSig._usig._args[i]);
-            //     }
-            //     continue;
-            // }
+            PreconditionConstraint constraint;
+            std::vector<int> preArgToVarPos(preSig._usig._args.size(), -1);
+            FlatHashMap<int, int> varIndexToPos;
+            for (size_t preIdx = 0; preIdx < opArgIndices.size(); ++preIdx)
+            {
+                int opArgIdx = opArgIndices[preIdx];
+                if (opArgIdx < 0)
+                    continue;
+                auto it = varIndexToPos.find(opArgIdx);
+                if (it == varIndexToPos.end())
+                {
+                    int pos = static_cast<int>(constraint.varIndices.size());
+                    varIndexToPos[opArgIdx] = pos;
+                    constraint.varIndices.push_back(opArgIdx);
+                    preArgToVarPos[preIdx] = pos;
+                }
+                else
+                {
+                    preArgToVarPos[preIdx] = it->second;
+                }
+            }
 
-            // Compute sorts of the condition's args w.r.t. op signature
             std::vector<int> preSorts(preSig._usig._args.size());
             for (size_t i = 0; i < preSorts.size(); i++)
             {
@@ -494,110 +509,134 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
             // Check possible decodings of precondition
             bool any = false;
             bool anyValid = false;
-            // for (const auto &decUSig : _htn.decodeObjects(preSig._usig, _htn.getEligibleArgs(preSig._usig, preSorts)))
-            // {
-            //     any = true;
-            //     assert(_htn.isFullyGround(decUSig));
 
-            //     Log::i("*** Decoding %s of precondition %s\n", TOSTR(decUSig), TOSTR(preSig._usig));
+            auto addTuple = [&](const USignature &decUSig) {
+                if (constraint.varIndices.empty())
+                    return;
+                std::vector<int> tuple(constraint.varIndices.size(), -1);
+                for (size_t i = 0; i < preArgToVarPos.size(); ++i)
+                {
+                    int pos = preArgToVarPos[i];
+                    if (pos < 0)
+                        continue;
+                    int val = decUSig._args[i];
+                    if (tuple[pos] >= 0 && tuple[pos] != val)
+                        return; // same variable appears twice with different values
+                    tuple[pos] = val;
+                }
+                constraint.tuples.push_back(std::move(tuple));
+            };
 
-            //     // Valid?
-            //     if (!isReachable(decUSig, preSig._negated))
-            //     {
-            //         Log::i("*** Discard %s as decoding of precondition %s because it is not reachable\n", TOSTR(decUSig), TOSTR(preSig._usig));
-            //         continue;
-            //     }
-
-            //     // Valid precondition decoding found: Increase domain of concerned variables
-            //     anyValid = true;
-            //     for (size_t i = 0; i < opArgIndices.size(); i++)
-            //     {
-            //         int opArgIdx = opArgIndices[i];
-            //         if (opArgIdx >= 0)
-            //         {
-            //             domainPerVariable[opArgIdx].insert(decUSig._args[i]);
-            //         }
-            //     }
-            // }
-
-
-            // Special case with equality predicate since I do not store all their possible values in ground facts as it could be very large
             if (_htn.isEqualityPredicate(preSig._usig._name_id))
             {
-                // Log::i("Equality predicate %s\n", TOSTR(preSig._usig));
-                // Check if the precondition is fully grounded
                 if (!_htn.hasQConstants(preSig._usig) && _htn.isFullyGround(preSig._usig))
                 {
                     bool equality_correct = preSig._negated ? preSig._usig._args[0] != preSig._usig._args[1] : preSig._usig._args[0] == preSig._usig._args[1];
                     if (!equality_correct) continue;
-                    for (size_t i = 0; i < preSig._usig._args.size(); i++)
-                    {
-                        domainPerVariable[opArgIndices[i]].insert(preSig._usig._args[i]);
-                    }
-                    continue;
-                } else {
+                    addTuple(preSig._usig);
+                    any = true; anyValid = true;
+                }
+                else
+                {
                     for (const auto &decUSig : _htn.decodeObjects(preSig._usig, _htn.getEligibleArgs(preSig._usig, preSorts)))
                     {
                         any = true;
-                        // Valid?
                         bool equality_correct = preSig._negated ? decUSig._args[0] != decUSig._args[1] : decUSig._args[0] == decUSig._args[1];
                         if (!equality_correct) continue;
-                        // Valid precondition decoding found: Increase domain of concerned variables
                         anyValid = true;
-                        for (size_t i = 0; i < opArgIndices.size(); i++)
-                        {
-                            int opArgIdx = opArgIndices[i];
-                            if (opArgIdx >= 0)
-                            {
-                                domainPerVariable[opArgIdx].insert(decUSig._args[i]);
-                            }
-                        }
+                        addTuple(decUSig);
                     }
                 }
-            } else {
-
+            }
+            else
+            {
                 if (!_htn.hasQConstants(preSig._usig) && _htn.isFullyGround(preSig._usig)) {
-                    // Get directly the predicateId
                     int predId = _htn.getGroundFactId(preSig._usig, preSig._negated);
                     if (predId >= 0 && isReachableBitVec(predId, preSig._negated))
                     {
-                        for (size_t i = 0; i < preSig._usig._args.size(); i++)
-                        {
-                            domainPerVariable[opArgIndices[i]].insert(preSig._usig._args[i]);
-                        }
-                    } 
-                    continue;
-                }
-
-                // Test with the BitVec. Can work even if the predicate is fully grounded
-                // Log::i("Sorts: %s\n", TOSTR(preSorts));
-                BitVec result = ArgIterator2::getFullInstantiation2(preSig._usig, preSig._negated, _htn, preSorts);
-                for (std::size_t pred_idx : result)
-                {
-                    any = true;
-                    const USignature &decUSig = _htn.getGroundPositiveFact(pred_idx);
-                    // Log::i("___ Decoding %s of precondition %s\n", TOSTR(decUSig), TOSTR(preSig._usig));
-                    if (!isReachableBitVec(pred_idx, preSig._negated))
-                    {
-                        // Log::i("___ Discard %s as decoding of precondition %s because it is not reachable\n", TOSTR(decUSig), TOSTR(preSig._usig));
-                        // printReachableFactsBitVec();
-                        continue;
+                        addTuple(preSig._usig);
+                        any = true; anyValid = true;
                     }
-                    anyValid = true;
-                    for (size_t i = 0; i < opArgIndices.size(); i++)
+                }
+                else
+                {
+                    BitVec result = ArgIterator2::getFullInstantiation2(preSig._usig, preSig._negated, _htn, preSorts);
+                    for (std::size_t pred_idx : result)
                     {
-                        int opArgIdx = opArgIndices[i];
-                        if (opArgIdx >= 0)
+                        any = true;
+                        const USignature &decUSig = _htn.getGroundPositiveFact(pred_idx);
+                        // Log::i("___ Decoding %s of precondition %s\n", TOSTR(decUSig), TOSTR(preSig._usig));
+                        if (!isReachableBitVec(pred_idx, preSig._negated))
                         {
-                            domainPerVariable[opArgIdx].insert(decUSig._args[i]);
+                            // Log::i("___ Discard %s as decoding of precondition %s because it is not reachable\n", TOSTR(decUSig), TOSTR(preSig._usig));
+                            continue;
                         }
+                        anyValid = true;
+                        addTuple(decUSig);
                     }
                 }
             }
 
             if (any && !anyValid)
                 return std::vector<FlatHashSet<int>>();
+
+            if (!constraint.varIndices.empty())
+                constraints.push_back(std::move(constraint));
         }
+
+    // Initialize domains from constraints
+    std::vector<bool> domainInitialized(args.size(), false);
+    for (const auto &c : constraints)
+    {
+        if (c.tuples.empty())
+            return std::vector<FlatHashSet<int>>();
+        for (size_t pos = 0; pos < c.varIndices.size(); ++pos)
+        {
+            int varIdx = c.varIndices[pos];
+            for (const auto &t : c.tuples)
+                domainPerVariable[varIdx].insert(t[pos]);
+            domainInitialized[varIdx] = true;
+        }
+    }
+
+    // Propagate constraints until fixpoint
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        for (const auto &c : constraints)
+        {
+            for (size_t pos = 0; pos < c.varIndices.size(); ++pos)
+            {
+                int varIdx = c.varIndices[pos];
+                FlatHashSet<int> supported;
+                supported.reserve(domainPerVariable[varIdx].size());
+                for (const auto &t : c.tuples)
+                {
+                    bool ok = true;
+                    for (size_t other = 0; other < c.varIndices.size(); ++other)
+                    {
+                        if (other == pos) continue;
+                        int otherVarIdx = c.varIndices[other];
+                        if (domainPerVariable[otherVarIdx].count(t[other]) == 0)
+                        {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if (ok)
+                        supported.insert(t[pos]);
+                }
+                if (supported.size() < domainPerVariable[varIdx].size())
+                {
+                    domainPerVariable[varIdx] = std::move(supported);
+                    if (domainPerVariable[varIdx].empty())
+                        return std::vector<FlatHashSet<int>>();
+                    changed = true;
+                }
+            }
+        }
+    }
 
     for (size_t i = 0; i < args.size(); i++)
     {
