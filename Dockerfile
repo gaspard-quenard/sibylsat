@@ -21,11 +21,10 @@ WORKDIR /sibylsat
 # Clone the SibylSat repository (including submodules for the IPC benchmarks)
 RUN git clone --recurse-submodules https://github.com/gaspard-quenard/sibylsat.git /sibylsat # Clone into the /sibylsat directory
 
-# Create build directory and compile SibylSat
-WORKDIR /sibylsat/build
-RUN cmake .. -DCMAKE_BUILD_TYPE=RELEASE -DIPASIRSOLVER=glucose4 && make -j
-
 WORKDIR /sibylsat
+
+# Build SibylSat
+RUN make
 
 # Switch to bash shell when container starts
 CMD ["/bin/bash"]

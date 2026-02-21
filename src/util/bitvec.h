@@ -2,6 +2,7 @@
 #define BITVEC_H
 #include <vector>
 #include <cstdint>
+#include <bit>
 
 struct BitVec
 {
