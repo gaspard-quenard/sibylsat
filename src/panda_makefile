@@ -45,6 +45,7 @@ build/hddl.cpp: src/hddl.y
 	bison -v -d -o build/hddl.cpp src/hddl.y
 
 build/libmain.cpp:
+	mkdir -p $(@D)
 	sed 's/^int main(int argc, char\*\* argv)/int run_pandaPIparser(int argc, char\*\* argv, ParsedProblem\& pp)/' src/main.cpp \
 	| sed -z 's/^/\n#include "libpanda.hpp"\n\n/' \
 	| sed 's,simple_hddl_output(,//simple_hddl_output(,g' \
@@ -64,6 +65,7 @@ build/%.o: src/%.cpp
 
 # Add the rule to generate cmdline.c and cmdline.h
 build/cmdline.c build/cmdline.h: src/options.ggo
+	mkdir -p $(@D)
 	gengetopt --include-getopt --default-optional --unamed-opts --output-dir=build -i src/options.ggo
 
 # Ensure cmdline.h is generated before compiling main.o
