@@ -340,3 +340,16 @@ index e3fa94c..2b61c28 100644
  
  		// the abstract task
  		int atOutputNo = reachableTasks[method.groundedAddEffects[0]].outputNo;
+
+diff --git a/src/parser.cpp b/src/parser.cpp
+index f572371..0f2a3d2 100644
+--- a/src/parser.cpp
++++ b/src/parser.cpp
+@@ -1,6 +1,7 @@
++#include <algorithm>
+ #include <cassert>
+ #include <fstream>
+ #include <functional>
+ #include <iostream>
+ #include <map>
+ #include <sstream>
