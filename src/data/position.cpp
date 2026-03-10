@@ -9,17 +9,24 @@
 NodeHashMap<int, USigSet> Position::EMPTY_USIG_TO_USIG_SET_MAP_ID;
 IndirectFactSupportMapId Position::EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
 
-Position::Position() : _layer_idx(-1), _pos(-1) {}
+Position::Position() : _layer_idx(-1), _pos(-1), _offset(0) {}
 void Position::setPos(size_t layerIdx, size_t pos) {_layer_idx = layerIdx; _pos = pos;}
 void Position::setParentPosition(Position* parent) {
     if (_parent_position == parent) return;
     assert(_parent_position == nullptr || _parent_position == parent);
     _parent_position = parent;
-    if (parent == nullptr) return;
+    if (parent == nullptr) {
+        _offset = 0;
+        return;
+    }
 
     auto& siblings = parent->_children_positions;
-    if (std::find(siblings.begin(), siblings.end(), this) == siblings.end()) {
+    auto it = std::find(siblings.begin(), siblings.end(), this);
+    if (it == siblings.end()) {
+        _offset = siblings.size();
         siblings.push_back(this);
+    } else {
+        _offset = std::distance(siblings.begin(), it);
     }
 }
 
@@ -89,12 +96,12 @@ void Position::removeQFactDecoding(const USignature& qFact, const USignature& de
     set[qFact].erase(decFact);
 }
 
-bool Position::hasQFactDecodings(const USignature& qFact, bool negated) {
+bool Position::hasQFactDecodings(const USignature& qFact, bool negated) const {
     auto& set = negated ? _neg_qfact_decodings : _pos_qfact_decodings;
     return set.count(qFact);
 }
 
-const USigSet& Position::getQFactDecodings(const USignature& qFact, bool negated) {
+const USigSet& Position::getQFactDecodings(const USignature& qFact, bool negated) const {
     auto& set = negated ? _neg_qfact_decodings : _pos_qfact_decodings;
     assert(set.count(qFact) || Log::e("No qfact decodings for %s!\n", TOSTR(qFact)));
     return set.at(qFact);
@@ -177,6 +184,7 @@ bool Position::hasReduction(const USignature& red) const {return _reductions.cou
 
 size_t Position::getLayerIndex() const {return _layer_idx;}
 size_t Position::getPositionIndex() const {return _pos;}
+size_t Position::getOffset() const {return _offset;}
 size_t Position::getOriginalLayerIndex() const {return _original_layer_idx;}
 size_t Position::getOriginalPositionIndex() const {return _original_pos;}
 

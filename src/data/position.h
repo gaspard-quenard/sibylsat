@@ -31,6 +31,7 @@ public:
 private:
     size_t _layer_idx;
     size_t _pos;
+    size_t _offset = 0;
 
     Position* _parent_position = nullptr;
     std::vector<Position*> _children_positions;
@@ -122,10 +123,10 @@ public:
     void addQConstantTypeConstraint(const USignature& op, const TypeConstraint& c);
     void addSubstitutionConstraint(const USignature& op, SubstitutionConstraint&& constr);
 
-    bool hasQFactDecodings(const USignature& qFact, bool negated);
+    bool hasQFactDecodings(const USignature& qFact, bool negated) const;
     void addQFactDecoding(const USignature& qFact, const USignature& decFact, bool negated);
     void removeQFactDecoding(const USignature& qFact, const USignature& decFact, bool negated);
-    const USigSet& getQFactDecodings(const USignature& qfact, bool negated);
+    const USigSet& getQFactDecodings(const USignature& qfact, bool negated) const;
 
     void addAction(const USignature& action);
     void addAction(USignature&& action);
@@ -180,6 +181,7 @@ public:
 
     size_t getLayerIndex() const;
     size_t getPositionIndex() const;
+    size_t getOffset() const;
     size_t getOriginalLayerIndex() const;
     size_t getOriginalPositionIndex() const;
     
@@ -242,11 +244,12 @@ public:
 
 
     void setExpansionSize(size_t size) {_max_expansion_size = size;}
+    void setOffset(size_t offset) {_offset = offset;}
 
     void setAbovePos(size_t abovePos) {_above_pos = abovePos;}
     void setOriginalLayerIdx(size_t originalLayerIdx) {_original_layer_idx = originalLayerIdx;}
     void setOriginalPos(size_t originalPos) {_original_pos = originalPos;}
-    size_t getAbovePos() {return _above_pos;}
+    size_t getAbovePos() const {return _above_pos;}
 
     void setHeuristicValue(const USignature& reduction, int value) {
         assert(_reductions.count(reduction) || Log::e("Unknown reduction %s queried!\n", Names::to_string(reduction).c_str()));

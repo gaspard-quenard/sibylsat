@@ -131,7 +131,7 @@ private:
     void refreshLeafMetadata();
     
     void createNextPosition(Position& newPos, Position* parent, size_t parentPos, Position* left);
-    void createNextPositionFromAbove(Position& newPos, Position& above, size_t offset);
+    void createNextPositionFromAbove(Position& newPos, Position& above);
     void createNextPositionFromLeft(Position& newPos, Position& left);
     void createNextPositionFromLeftSimplified(Position& newPos);
 
@@ -149,8 +149,8 @@ private:
     std::optional<Reduction> createValidReduction(Position& pos, const USignature& rSig, const USignature& task);
 
     void propagateInitialState(Position& newPos, const Position& above);
-    void propagateActions(Position& newPos, Position& above, size_t offset);
-    void propagateReductions(Position& newPos, Position& above, size_t offset);
+    void propagateActions(Position& newPos, Position& above);
+    void propagateReductions(Position& newPos, Position& above);
     std::vector<USignature> instantiateAllActionsOfTask(Position& pos, const USignature& task);
     std::vector<USignature> instantiateAllReductionsOfTask(Position& pos, const USignature& task);
     void initializeNextEffectsBitVec(Position& pos);

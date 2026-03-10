@@ -31,12 +31,6 @@ private:
     size_t _new_init_pos = 0;
 
     std::function<void()> _termination_callback;
-    
-    size_t _depth;
-    size_t _pos;
-    size_t _old_pos;
-    size_t _offset;
-    Position* _above_position = nullptr;
 
     NodeHashSet<Substitution, Substitution::Hasher> _forbidden_substitutions;
     FlatHashSet<int> _new_fact_vars;
@@ -128,17 +122,26 @@ public:
     }
 
 private:
+    struct EncodingEnvironment {
+        Position* left = nullptr;
+        Position* above = nullptr;
+        Position* reuseAbove = nullptr;
+    };
+
+    Position* getLeftPosition(const Position& pos) const;
+    Position* getAbovePosition(const Position& pos) const;
+    EncodingEnvironment buildEnvironment(Position& pos, bool reuseCurrentPosition = false) const;
     void encodeOperationVariables(Position& pos);
-    void encodeFactVariables(Position& pos, Position& left, Position& above);
-    void encodeFrameAxioms(Position& pos, Position& left, bool onlyForNewRelevantsFacts = false);
+    void encodeFactVariables(Position& pos, const EncodingEnvironment& env);
+    void encodeFrameAxioms(Position& pos, Position& left, const EncodingEnvironment& env, bool onlyForNewRelevantsFacts = false);
     void encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int opVar, const IntPairTree& tree);
     void encodeOperationConstraints(Position& pos);
     void encodeSubstitutionVars(const USignature& opSig, int opVar, int qconst);
-    void encodeQFactSemantics(Position& pos, bool encodeOnlyEffectQFacts = false);
+    void encodeQFactSemantics(Position& pos, const EncodingEnvironment& env, bool encodeOnlyEffectQFacts = false);
     void encodeActionEffects(Position& pos, Position& left);
     void encodeQConstraints(Position& pos);
-    void encodeSubtaskRelationships(Position& pos, Position& above);
-    void encodeMutexPredicates(Position& pos, Position& above, USigSet& possibleEffects);
+    void encodeSubtaskRelationships(Position& pos, const EncodingEnvironment& env);
+    void encodeMutexPredicates(Position& pos, const EncodingEnvironment& env, USigSet& possibleEffects);
     int encodeQConstEquality(int q1, int q2);
 
 

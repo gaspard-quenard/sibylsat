@@ -645,8 +645,7 @@ void Planner::createNextPosition(Position& newPos, Position* parent, size_t pare
 
     // Generate this new position's content based on the facts and the position above.
     if (parent != nullptr) {
-        size_t offset = parent->getChildrenPositions().empty() ? 0 : parent->getChildrenPositions().size() - 1;
-        createNextPositionFromAbove(newPos, *parent, offset);
+        createNextPositionFromAbove(newPos, *parent);
     }
 
     // Eliminate operations which are dominated by another operation
@@ -665,11 +664,11 @@ void Planner::createNextPosition(Position& newPos, Position* parent, size_t pare
     }
 }
 
-void Planner::createNextPositionFromAbove(Position& newPos, Position& above, size_t offset) {
+void Planner::createNextPositionFromAbove(Position& newPos, Position& above) {
     // _stats.beginTiming(TimingStage::EXPANSION_ABOVE);
     //eliminateInvalidParentsAtCurrentState(offset);
-    propagateActions(newPos, above, offset);
-    propagateReductions(newPos, above, offset);
+    propagateActions(newPos, above);
+    propagateReductions(newPos, above);
     addPreconditionConstraints(newPos);
 
     // if (offset == 0) {
@@ -1228,7 +1227,8 @@ void Planner::propagateInitialState(Position& newPos, const Position& above) {
 
 }
 
-void Planner::propagateActions(Position& newPos, Position& above, size_t offset) {
+void Planner::propagateActions(Position& newPos, Position& above) {
+    size_t offset = newPos.getOffset();
     // Check validity of actions at above position
     std::vector<USignature> actionsToPrune;
     size_t numActionsBefore = above.getActions().size();
@@ -1295,7 +1295,8 @@ void Planner::propagateActions(Position& newPos, Position& above, size_t offset)
     }
 }
 
-void Planner::propagateReductions(Position& newPos, Position& above, size_t offset) {
+void Planner::propagateReductions(Position& newPos, Position& above) {
+    size_t offset = newPos.getOffset();
     NodeHashMap<USignature, USigSet, USignatureHasher> subtaskToParents;
     NodeHashSet<USignature, USignatureHasher> reductionsWithChildren;
 

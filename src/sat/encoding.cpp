@@ -9,53 +9,32 @@
 #include "util/log.h"
 #include "util/timer.h"
 
-namespace {
-Position* getSemanticParent(Position* rootPosition, Position& position) {
-    Position* parent = position.getParentPosition();
-    return parent == rootPosition ? nullptr : parent;
-}
-
-Position* getLeftLeaf(const std::vector<Position*>& leafPositions, const Position& position) {
-    size_t pos = position.getPositionIndex();
-    if (pos == 0 || pos > leafPositions.size()) {
+Position* Encoding::getLeftPosition(const Position& pos) const {
+    size_t positionIndex = pos.getPositionIndex();
+    if (positionIndex == 0 || positionIndex > _leaf_positions.size()) {
         return nullptr;
     }
-    return leafPositions[pos - 1];
+    return _leaf_positions[positionIndex - 1];
 }
 
-size_t getChildOffset(const Position& position) {
-    Position* parent = position.getParentPosition();
-    if (parent == nullptr) {
-        return 0;
-    }
-    const auto& children = parent->getChildrenPositions();
-    for (size_t idx = 0; idx < children.size(); idx++) {
-        if (children[idx] == &position) {
-            return idx;
-        }
-    }
-    return 0;
+Position* Encoding::getAbovePosition(const Position& pos) const {
+    Position* parent = pos.getParentPosition();
+    return parent == _root_position ? nullptr : parent;
 }
+
+Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, bool reuseCurrentPosition) const {
+    Encoding::EncodingEnvironment env;
+    env.left = getLeftPosition(pos);
+    env.above = getAbovePosition(pos);
+    env.reuseAbove = reuseCurrentPosition ? &pos : (pos.getOffset() == 0 ? env.above : nullptr);
+    return env;
 }
 
 void Encoding::encode(Position& newPos) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos);
     _termination_callback();
 
     _stats.beginPosition();
-
-    _depth = newPos.getLayerIndex();
-    _pos = newPos.getPositionIndex();
-
-    // Calculate relevant environment of the position
-    Position NULL_POS;
-    NULL_POS.setPos(-1, -1);
-    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
-    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
-    Position* abovePtr = getSemanticParent(_root_position, newPos);
-    _above_position = abovePtr;
-    _offset = abovePtr != nullptr ? getChildOffset(newPos) : 0;
-    _old_pos = abovePtr != nullptr ? abovePtr->getPositionIndex() : 0;
-    Position& above = (abovePtr != nullptr ? *abovePtr : NULL_POS);
     
     // 1st pass over all operations (actions and reductions): 
     // encode as variables, define primitiveness
@@ -63,19 +42,19 @@ void Encoding::encode(Position& newPos) {
 
     // Encode true facts at this position and decide for each fact
     // whether to encode it or to reuse the previous variable
-    encodeFactVariables(newPos, left, above);
+    encodeFactVariables(newPos, env);
 
     // 2nd pass over all operations: Init substitution vars where necessary,
     // encode precondition constraints and at-{most,least}-one constraints
     encodeOperationConstraints(newPos);
 
     // Link qfacts to their possible decodings
-    encodeQFactSemantics(newPos);
+    encodeQFactSemantics(newPos, env);
 
     // Effects of "old" actions to the left
-    if (_pos != 0 && _pos != _new_init_pos) {
+    if (newPos.getPositionIndex() != 0 && newPos.getPositionIndex() != _new_init_pos && env.left != nullptr) {
         // Encode frame axioms for the left position
-        encodeActionEffects(newPos, left);
+        encodeActionEffects(newPos, *env.left);
     }
     
 
@@ -85,7 +64,7 @@ void Encoding::encode(Position& newPos) {
 
     // Expansion and predecessor specification for each element
     // and prohibition of impossible children
-    encodeSubtaskRelationships(newPos, above);
+    encodeSubtaskRelationships(newPos, env);
 
     if (_use_sibylsat_expansion && !_optimal) {
         encodePreventionIdenticalSignatureThanParentsForAllMethods(newPos);
@@ -163,20 +142,20 @@ void Encoding::encodeOperationVariables(Position& newPos) {
     _stats.end(STAGE_REDUCTIONCONSTRAINTS);
 }
 
-void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& above) {
+void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnvironment& env) {
 
     _new_fact_vars.clear();
 
     _stats.begin(STAGE_FACTVARENCODING);
 
     // Reuse ground fact variables from above position
-    if (newPos.getLayerIndex() > 0 && _offset == 0) {
-        for (const auto& [factSig, factVar] : above.getVariableTable(VarType::FACT)) {
+    if (newPos.getLayerIndex() > 0 && env.reuseAbove != nullptr) {
+        for (const auto& [factSig, factVar] : env.reuseAbove->getVariableTable(VarType::FACT)) {
             if (!_htn.hasQConstants(factSig)) newPos.setVariable(VarType::FACT, factSig, factVar);
         }
     }
 
-    if (_pos == 0 || _pos == _new_init_pos) {
+    if (newPos.getPositionIndex() == 0 || newPos.getPositionIndex() == _new_init_pos) {
         _new_relevants_facts_to_encode.clear();
         // Encode all relevant definitive facts
         const USigSet* defFacts[] = {&newPos.getTrueFacts(), &newPos.getFalseFacts()};
@@ -198,18 +177,19 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
     } else {
         // Encode frame axioms which will assign variables to all ground facts
         // that have some support to change at this position
-        encodeFrameAxioms(newPos, left);
+        assert(env.left != nullptr);
+        encodeFrameAxioms(newPos, *env.left, env);
     }
 
-    auto reuseQFact = [&](const USignature& qfact, int var, Position& otherPos, bool negated) {
+    auto reuseQFact = [&](const USignature& qfact, int var, const Position* otherPos, bool negated) {
         if (!newPos.hasQFactDecodings(qfact, negated)) return true;
-        if (var == 0 || !otherPos.hasQFactDecodings(qfact, negated)
-                || otherPos.getQFactDecodings(qfact, negated).size() < newPos.getQFactDecodings(qfact, negated).size())
+        if (otherPos == nullptr || var == 0 || !otherPos->hasQFactDecodings(qfact, negated)
+                || otherPos->getQFactDecodings(qfact, negated).size() < newPos.getQFactDecodings(qfact, negated).size())
             return false;
-        const auto& otherDecodings = otherPos.getQFactDecodings(qfact, negated);
+        const auto& otherDecodings = otherPos->getQFactDecodings(qfact, negated);
         for (const auto& decFact : newPos.getQFactDecodings(qfact, negated)) {
             int decFactVar = newPos.getVariableOrZero(VarType::FACT, decFact);
-            int otherDecFactVar = otherPos.getVariableOrZero(VarType::FACT, decFact);
+            int otherDecFactVar = otherPos->getVariableOrZero(VarType::FACT, decFact);
             if (decFactVar == 0 || otherDecFactVar == 0 
                     || decFactVar != otherDecFactVar 
                     || !otherDecodings.count(decFact)) {
@@ -226,15 +206,15 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
         if (newPos.hasVariable(VarType::FACT, qfact)) continue;
 
         // Reuse variable from above?
-        int aboveVar = above.getVariableOrZero(VarType::FACT, qfact);
-        if (_offset == 0 && aboveVar != 0) {
+        int aboveVar = env.reuseAbove != nullptr ? env.reuseAbove->getVariableOrZero(VarType::FACT, qfact) : 0;
+        if (aboveVar != 0) {
             // Reuse qfact variable from above
             newPos.setVariable(VarType::FACT, qfact, aboveVar);
 
         } else {
             // Reuse variable from left?
-            int leftVar = left.getVariableOrZero(VarType::FACT, qfact);           
-            if (reuseQFact(qfact, leftVar, left, true) && reuseQFact(qfact, leftVar, left, false)) {
+            int leftVar = env.left != nullptr ? env.left->getVariableOrZero(VarType::FACT, qfact) : 0;
+            if (reuseQFact(qfact, leftVar, env.left, true) && reuseQFact(qfact, leftVar, env.left, false)) {
                 // Reuse qfact variable from above
                 newPos.setVariable(VarType::FACT, qfact, leftVar);
 
@@ -262,7 +242,7 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
                     // Variable is already encoded. If the variable is new, constrain it.
                     if (_new_fact_vars.count(var)) _sat.addClause((i == 0 ? 1 : -1) * var);
                 }
-                Log::d("(%i,%i) DEFFACT %s\n", _depth, _pos, TOSTR(factSig));
+                Log::d("(%i,%i) DEFFACT %s\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex(), TOSTR(factSig));
             }
         }
         negated = true;
@@ -270,24 +250,17 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
     _stats.end(STAGE_TRUEFACTS);
 }
 
-void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForNewRelevantsFacts) {
-    static Position NULL_POS;
-
+void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encoding::EncodingEnvironment& env, bool onlyForNewRelevantsFacts) {
     using SupportsId = const NodeHashMap<int, USigSet>;
 
     _stats.begin(STAGE_DIRECTFRAMEAXIOMS);
 
     bool nonprimFactSupport = _params.isNonzero("nps") || _use_sibylsat_expansion;
     bool hasPrimitiveOps = left.hasPrimitiveOps() || _use_sibylsat_expansion;
-
-    int layerIdx = newPos.getLayerIndex();
-    int pos = newPos.getPositionIndex();
     int prevVarPrim = _vars.getVarPrimitiveOrZero(left);
 
     // Check if frame axioms can be skipped because
     // the above position had a superset of operations
-    // Position& above = layerIdx > 0 ? _layers[layerIdx-1]->at(_old_pos) : NULL_POS;
-    Position& above = newPos.getParentPosition() != nullptr ? *newPos.getParentPosition() : NULL_POS;
     bool skipRedundantFrameAxioms = false;
 
     // Retrieve supports from left position
@@ -362,7 +335,7 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForN
         // Skip frame axiom encoding if nothing can change
         if (var == factVar) continue; 
         // Skip frame axioms if they were already encoded
-        if (skipRedundantFrameAxioms && above.hasVariable(VarType::FACT, fact)) continue;
+        if (skipRedundantFrameAxioms && env.above != nullptr && env.above->hasVariable(VarType::FACT, fact)) continue;
         // No primitive ops at this position: No need for encoding frame axioms
         if (!hasPrimitiveOps) continue;
         skipped--;
@@ -428,7 +401,7 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForN
 
     if (_mutex_predicates) {
         // _stats.beginTiming(TimingStage::ENCODING_MUTEXES);
-        encodeMutexPredicates(newPos, above, positiveFacts);
+        encodeMutexPredicates(newPos, env, positiveFacts);
         // _stats.endTiming(TimingStage::ENCODING_MUTEXES);
     }
 }
@@ -454,10 +427,6 @@ void Encoding::encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int
 }
 
 void Encoding::encodeOperationConstraints(Position& newPos) {
-
-    size_t layerIdx = newPos.getLayerIndex();
-    size_t pos = newPos.getPositionIndex();
-
     // Store all operations occurring here, for one big clause ORing them
     std::vector<int> elementVars(newPos.getActions().size() + newPos.getReductions().size(), 0);
     int numOccurringOps = 0;
@@ -562,16 +531,10 @@ void Encoding::encodeSubstitutionVars(const USignature& opSig, int opVar, int ar
     }
 }
 
-void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFacts) {
-    static Position NULL_POS;
-    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
-    Position& left = leftPtr != nullptr ? *leftPtr : NULL_POS;
-    Position* abovePtr = (_offset == 0) ? _above_position : nullptr;
-    Position& above = abovePtr != nullptr ? *abovePtr : NULL_POS;
-
+void Encoding::encodeQFactSemantics(Position& newPos, const Encoding::EncodingEnvironment& env, bool encodeOnlyEffectQFacts) {
     USigSet qfactsEffsFromLeft;
-    if (encodeOnlyEffectQFacts) {
-        for (const auto& aSig : left.getActions()) {
+    if (encodeOnlyEffectQFacts && env.left != nullptr) {
+        for (const auto& aSig : env.left->getActions()) {
             if (_htn.isActionRepetition(aSig._name_id)) continue;
             const SigSet& effects = _htn.getOpTable().getAction(aSig).getEffects();
             for (const Signature& eff : effects) {
@@ -579,7 +542,7 @@ void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFact
                 qfactsEffsFromLeft.insert(eff._usig);
             }
         }
-        for (const auto& rSig: left.getReductions()) {
+        for (const auto& rSig: env.left->getReductions()) {
             const SigSet& effects = _htn.getOpTable().getReduction(rSig).getEffects();
             for (const Signature& eff : effects) {
                 if (!_htn.hasQConstants(eff._usig)) continue;
@@ -609,8 +572,9 @@ void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFact
             // QFactDecodings for every Q facts of the current position (since it is the same position).
             if (!encodeOnlyEffectQFacts || !_use_sibylsat_expansion) {
                 if (!_new_fact_vars.count(qfactVar)) {
-                    if (abovePtr != nullptr && above.getVariableOrZero(VarType::FACT, qfactSig) == qfactVar
-                                    && above.hasQFactDecodings(qfactSig, negated)) {
+                    if (env.reuseAbove != nullptr
+                            && env.reuseAbove->getVariableOrZero(VarType::FACT, qfactSig) == qfactVar
+                            && env.reuseAbove->hasQFactDecodings(qfactSig, negated)) {
                         filterAbove = true;
 
                         /*
@@ -622,8 +586,8 @@ void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFact
                         */
 
                     }
-                    if (!filterAbove && leftPtr != nullptr) {
-                        if (left.getVariableOrZero(VarType::FACT, qfactSig) == qfactVar)
+                    if (!filterAbove && env.left != nullptr) {
+                        if (env.left->getVariableOrZero(VarType::FACT, qfactSig) == qfactVar)
                             continue;
                     }
                 }
@@ -634,7 +598,7 @@ void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFact
                 
                 int decFactVar = newPos.getVariableOrZero(VarType::FACT, decFactSig);
                 if (decFactVar == 0) continue;
-                if (filterAbove && above.getQFactDecodings(qfactSig, negated).count(decFactSig)) continue;
+                if (filterAbove && env.reuseAbove->getQFactDecodings(qfactSig, negated).count(decFactSig)) continue;
 
                 // Assemble list of substitution variables
                 for (size_t i = 0; i < qfactSig._args.size(); i++) {
@@ -806,7 +770,7 @@ void Encoding::encodeQConstraints(Position& newPos) {
     _stats.end(STAGE_SUBSTITUTIONCONSTRAINTS);
 }
 
-void Encoding::encodeSubtaskRelationships(Position& newPos, Position& above) {
+void Encoding::encodeSubtaskRelationships(Position& newPos, const Encoding::EncodingEnvironment& env) {
 
     if (newPos.getActions().size() == 1 && newPos.getReductions().empty() 
             && newPos.hasAction(_htn.getBlankActionSig()) && !_use_sibylsat_expansion) {
@@ -814,6 +778,12 @@ void Encoding::encodeSubtaskRelationships(Position& newPos, Position& above) {
         // No subtask relationships need to be encoded.
         return;
     }
+
+    if (env.above == nullptr) {
+        return;
+    }
+
+    Position& above = *env.above;
 
     // expansions
     _stats.begin(STAGE_EXPANSIONS);
@@ -926,7 +896,7 @@ void Encoding::addAssumptionsPrimPlan(bool permanent, int assumptions_until) {
     _stats.end(STAGE_ASSUMPTIONS);
 }
 
-void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& possibleEffects) {
+void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvironment& env, USigSet& possibleEffects) {
     _stats.begin(STAGE_MUTEX);
     // Encode the SAS+ constrains for this fact
     // Indicate that if this fact is true then all the other facts that are in the same lifted fam ground that this fact must be false
@@ -934,9 +904,9 @@ void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& po
 
     FlatHashSet<int> groupsDone;
 
-    if (_offset == 0) {
+    if (pos.getOffset() == 0 && env.above != nullptr) {
         // Do not add all the groups already done by the parent if we are the first child (since we will reuse the same predicates)
-        for (const int& group_mutex: above.getGroupMutexEncoded()) {
+        for (const int& group_mutex: env.above->getGroupMutexEncoded()) {
             groupsDone.insert(group_mutex);
         }
     }
@@ -1016,29 +986,17 @@ void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& po
 }
 
 void Encoding::encodeOnlyEffsAndFrameAxioms(Position& newPos) {
-
-    _depth = newPos.getLayerIndex();
-    _pos = newPos.getPositionIndex();
-
-    // Calculate relevant environment of the position
-    Position NULL_POS;
-    NULL_POS.setPos(-1, -1);
-    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
-    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
-    _above_position = &newPos;
-    _offset = 0;
-    _old_pos = newPos.getPositionIndex();
-    Position& above = newPos;
- 
-    encodeFactVariables(newPos, left, above);
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, /*reuseCurrentPosition=*/true);
+    assert(env.left != nullptr);
+    encodeFactVariables(newPos, env);
 
 
     // Should add qfact decoding if there is an effect of left that is a qfact (but only for the qfact that are in the effects of all actions in left)
     // Example: ACTION__drive__ID71-truck_0-Q_3-3_location%0_e4354a979566ec9d-city_loc_3__4_4 => not at-truck_0-Q_3-3_location%0_e4354a979566ec9d__4_5
     // Link qfacts to their possible decodings
     
-    encodeQFactSemantics(newPos, /*encodeOnlyQFactsEffs=*/true);
-    encodeActionEffects(newPos, left);
+    encodeQFactSemantics(newPos, env, /*encodeOnlyQFactsEffs=*/true);
+    encodeActionEffects(newPos, *env.left);
 }
 
 void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Position& pos) {
@@ -1068,7 +1026,7 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
             auto [methodPos, methodSig] = methodsToCheck.front();
             methodsToCheck.pop();
 
-            Position* parentPos = getSemanticParent(_root_position, *methodPos);
+            Position* parentPos = getAbovePosition(*methodPos);
             if (parentPos == nullptr) continue;
             if (!methodPos->getPredecessors().count(methodSig)) continue;
 
@@ -1195,20 +1153,17 @@ void Encoding::encodeNewRelevantsFacts(Position& initPos) {
 
 
 void Encoding::propagateRelevantsFacts(Position& newPos) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos);
 
     if (_new_relevants_facts_to_encode.empty()) {
         return;
     }
 
-    _depth = newPos.getLayerIndex();
-    _pos = newPos.getPositionIndex();
+    if (env.left == nullptr) {
+        return;
+    }
 
-    // Calculate relevant environment of the position
-    Position NULL_POS;
-    NULL_POS.setPos(-1, -1);
-    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
-    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
-    encodeFrameAxioms(newPos, left, /*onlyForNewRelevantsFacts=*/true);
+    encodeFrameAxioms(newPos, *env.left, env, /*onlyForNewRelevantsFacts=*/true);
 }
 
 
@@ -1291,10 +1246,7 @@ const USignature Encoding::getOpHoldingAt(const Position& position) {
 }
 
 void Encoding::printStatementsAtPosition(const Position& newPos) {
-    Position NULL_POS;
-    NULL_POS.setPos(-1, -1);
-    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
-    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
+    Position* left = getLeftPosition(newPos);
     Log::i("STATE AT (%i,%i) (original: %i,%i)\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex(), (int) newPos.getOriginalLayerIndex(), (int) newPos.getOriginalPositionIndex());
     for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::FACT)) {
         if (!_htn.isFullyGround(sig) || _htn.hasQConstants(sig)) continue; // skip non-ground facts)
@@ -1302,8 +1254,8 @@ void Encoding::printStatementsAtPosition(const Position& newPos) {
         // Log::i("  FACT %s => %s\n", TOSTR(sig), _sat.holds(aVar) ? "TRUE" : "FALSE");
         Log::i("  FACT %s (%d) => TRUE\n", TOSTR(sig), aVar);
         // Print the value on the left if it is not the same
-        if (leftPtr != nullptr && left.hasVariable(VarType::FACT, sig)) {
-            int leftVar = left.getVariableOrZero(VarType::FACT, sig);
+        if (left != nullptr && left->hasVariable(VarType::FACT, sig)) {
+            int leftVar = left->getVariableOrZero(VarType::FACT, sig);
             Log::i("    LEFT FACT %s (%d) => %s\n", TOSTR(sig), leftVar, _sat.holds(leftVar) ? "TRUE" : "FALSE");
         }
     }
