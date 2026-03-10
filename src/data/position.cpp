@@ -185,8 +185,6 @@ bool Position::hasReduction(const USignature& red) const {return _reductions.cou
 size_t Position::getLayerIndex() const {return _layer_idx;}
 size_t Position::getPositionIndex() const {return _pos;}
 size_t Position::getOffset() const {return _offset;}
-size_t Position::getOriginalLayerIndex() const {return _original_layer_idx;}
-size_t Position::getOriginalPositionIndex() const {return _original_pos;}
 
 const USigSet& Position::getQFacts() const {return _qfacts;}
 const USigSet& Position::getTrueFacts() const {return _true_facts;}

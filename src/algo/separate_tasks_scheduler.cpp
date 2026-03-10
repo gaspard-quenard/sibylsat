@@ -195,7 +195,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                     int varAction = leaf.getVariableOrZero(VarType::OP, aSig);
                     int varPosPrecondition = leaf.getVariableOrZero(VarType::FACT, posPrecondition._usig);
                     Log::e("Action %s (var: %d) has a positive precondition %s (var: %d) that is not satisfied in the reachable state after tasks accomplished\n", TOSTR(action.getSignature()), varAction, TOSTR(posPrecondition._usig), varPosPrecondition);
-                    Log::e("Original layer position: (%d,%d)\n", (int) leaf.getOriginalLayerIndex(), (int) leaf.getOriginalPositionIndex());
+                    Log::e("Leaf position: (%d,%d)\n", (int) leaf.getLayerIndex(), (int) leaf.getPositionIndex());
                     Log::e("This means that the action is not applicable in the reachable state after tasks accomplished\n");
                     Log::e("This is a bug in the planner, please report it\n");
                     exit(1);

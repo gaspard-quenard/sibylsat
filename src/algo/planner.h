@@ -42,12 +42,7 @@ private:
     RetroactivePruning _pruning;
     DominationResolver _domination_resolver;
     PlanWriter _plan_writer;
-
-
-
     size_t _depth;
-    size_t _pos;
-    size_t _old_pos;
 
     const int _verbosity;
 
@@ -129,8 +124,9 @@ private:
     void expandAllLeaves();
     void expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop);
     void refreshLeafMetadata();
+    void refreshLeafLeftPositions();
     
-    void createNextPosition(Position& newPos, Position* parent, size_t parentPos, Position* left);
+    void createNextPosition(Position& newPos, Position* parent, Position* left);
     void createNextPositionFromAbove(Position& newPos, Position& above);
     void createNextPositionFromLeft(Position& newPos, Position& left);
     void createNextPositionFromLeftSimplified(Position& newPos);

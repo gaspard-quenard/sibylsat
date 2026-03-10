@@ -322,7 +322,7 @@ void Planner::improvePlan(int& iteration) {
 void Planner::incrementPosition(const Position& pos) {
     _num_instantiated_actions += pos.getActions().size();
     _num_instantiated_reductions += pos.getReductions().size();
-    _pos++; _num_instantiated_positions++;
+    _num_instantiated_positions++;
 }
 
 void Planner::refreshLeafMetadata() {
@@ -331,12 +331,17 @@ void Planner::refreshLeafMetadata() {
     }
 }
 
+void Planner::refreshLeafLeftPositions() {
+    for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
+        _leaf_positions[pos]->setLeftPosition(pos > 0 ? _leaf_positions[pos - 1] : nullptr);
+    }
+}
+
 void Planner::createInitialLeaves() {
 
     const int initSize = 2;
     Log::i("Creating initial leaves of size %i\n", initSize);
     _depth = 0;
-    _pos = 0;
 
     _root_position = new Position();
     _root_position->setPos(-1, 0);
@@ -350,9 +355,6 @@ void Planner::createInitialLeaves() {
 
     _leaf_positions = {rootReductionPosition, goalPosition};
     refreshLeafMetadata();
-
-    rootReductionPosition->setOriginalLayerIdx(_depth);
-    rootReductionPosition->setOriginalPos(_pos);
 
     /***** DEPTH 0, POSITION 0 ******/
 
@@ -373,92 +375,84 @@ void Planner::createInitialLeaves() {
 
     /***** DEPTH 0, POSITION 1 ******/
 
-    createNextPosition(*goalPosition, /*parent=*/nullptr, /*parentPos=*/0, rootReductionPosition);
+    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition);
 
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
     goalPosition->addAction(goalSig);
     goalPosition->addAxiomaticOp(goalSig);
     addPreconditionConstraints(*goalPosition);
-    goalPosition->setPos(_depth, _pos);
-    goalPosition->setOriginalLayerIdx(_depth);
-    goalPosition->setOriginalPos(_pos);
+    goalPosition->setPos(_depth, 1);
 
     rootReductionPosition->clearAfterInstantiation();
     goalPosition->clearAfterInstantiation();
 
-    _enc.encode(*rootReductionPosition, /*previousLeaf=*/nullptr);
-    _enc.encode(*goalPosition, /*previousLeaf=*/nullptr);
+    _enc.encode(*rootReductionPosition);
+    _enc.encode(*goalPosition);
 }
 
 void Planner::expandAllLeaves() {
 
     std::vector<Position*> currentLeaves = _leaf_positions;
-    std::vector<size_t> nextLeafStarts(currentLeaves.size(), 0);
     size_t nextLeafCount = 0;
     for (Position* leaf : currentLeaves) {
         nextLeafCount += leaf->getMaxExpansionSize();
     }
 
     _depth++;
-    _pos = 0;
+    size_t nextPos = 0;
     _leaf_positions.clear();
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
     Log::i("Instantiating ...\n");
     _stats.beginTiming(TimingStage::EXPANSION);
-    for (_old_pos = 0; _old_pos < currentLeaves.size(); _old_pos++) {
-        nextLeafStarts[_old_pos] = _pos;
-        Position& above = *currentLeaves[_old_pos];
+    for (size_t oldPos = 0; oldPos < currentLeaves.size(); oldPos++) {
+        Position& above = *currentLeaves[oldPos];
         size_t maxOffset = above.getMaxExpansionSize();
 
         for (size_t offset = 0; offset < maxOffset; offset++) {
             Position* current = new Position();
             current->setParentPosition(&above);
             _leaf_positions.push_back(current);
-            current->setPos(_depth, _pos);
-            Position* left = _pos > 0 ? _leaf_positions[_pos-1] : nullptr;
+            current->setPos(_depth, nextPos);
+            Position* left = nextPos > 0 ? _leaf_positions[nextPos - 1] : nullptr;
             current->setLeftPosition(left);
-            createNextPosition(*current, &above, _old_pos, left);
+            createNextPosition(*current, &above, left);
             Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
                     current->getReductions().size(),
                     current->getActions().size(),
                     current->getQFacts().size(),
                     current->getPosFactSupportsId().size() + current->getNegFactSupportsId().size());
-            if (_pos > 0) {
-                _leaf_positions[_pos-1]->clearAfterInstantiation();
+            if (nextPos > 0) {
+                _leaf_positions[nextPos - 1]->clearAfterInstantiation();
             }
 
             incrementPosition(*current);
+            nextPos++;
             checkTermination();
         }
     }
-    if (_pos > 0) {
-        _leaf_positions[_pos-1]->clearAfterInstantiation();
+    if (nextPos > 0) {
+        _leaf_positions[nextPos - 1]->clearAfterInstantiation();
     }
     _stats.endTiming(TimingStage::EXPANSION);
     Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
 
     Log::i("Encoding ...\n");
     _stats.beginTiming(TimingStage::ENCODING);
-    for (_old_pos = 0; _old_pos < currentLeaves.size(); _old_pos++) {
-        Position* previousLeaf = _old_pos > 0 ? currentLeaves[_old_pos - 1] : nullptr;
-        size_t newPos = nextLeafStarts[_old_pos];
-        size_t maxOffset = currentLeaves[_old_pos]->getMaxExpansionSize();
-        for (size_t offset = 0; offset < maxOffset; offset++) {
-            Position& leaf = *_leaf_positions[newPos + offset];
-            Log::v("- Position (%i,%i)\n", _depth, leaf.getPositionIndex());
-            _enc.encode(leaf, previousLeaf);
-        }
+    for (Position* leaf : _leaf_positions) {
+        Log::v("- Position (%i,%i)\n", _depth, leaf->getPositionIndex());
+        _enc.encode(*leaf);
     }
     _stats.endTiming(TimingStage::ENCODING);
+    refreshLeafLeftPositions();
 }
 
 void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
+    enum class LeafEncodingAction { NONE, FULL, NEW_RELEVANTS, EFFECTS_AND_FRAME, PROPAGATE_RELEVANTS };
 
     std::vector<Position*> currentLeaves = _leaf_positions;
-    std::vector<size_t> nextLeafStarts(currentLeaves.size(), 0);
 
     _stats.beginTiming(TimingStage::EXPANSION);
 
@@ -467,9 +461,11 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
         Position& oldPos = *currentLeaves[pos];
         nextLeafCount += oldPos.getMaxExpansionSize() - 1;
     }
+    std::vector<LeafEncodingAction> encodingActions;
+    encodingActions.reserve(nextLeafCount);
 
     _depth++;
-    _pos = 0;
+    size_t nextPos = 0;
     _leaf_positions.clear();
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
@@ -493,39 +489,37 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
         if (_separate_tasks_scheduler->addTasksAsClauses()) {
             _enc.setNewInitPos(num_position_already_done);
 
-            for (_old_pos = 0; _old_pos < num_position_already_done; _old_pos++) {
-                nextLeafStarts[_old_pos] = _pos;
-                Position* carriedLeaf = currentLeaves[_old_pos];
-                carriedLeaf->setPos(_depth, _pos);
-                carriedLeaf->setLeftPosition(_pos > 0 ? _leaf_positions[_pos - 1] : nullptr);
+            for (int oldPos = 0; oldPos < num_position_already_done; oldPos++) {
+                Position* carriedLeaf = currentLeaves[oldPos];
+                carriedLeaf->setPos(_depth, nextPos);
                 _leaf_positions.push_back(carriedLeaf);
-                _pos++;
+                encodingActions.push_back(LeafEncodingAction::NONE);
+                nextPos++;
             }
         }
         Log::i("Done !\n");
     }
 
-    int init_pos_expanding = _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? num_position_already_done : 0;
+    size_t initPosExpanding = _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? num_position_already_done : 0;
+    size_t initPosEncoding = _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? num_position_already_done : 0;
+    bool needsEffectsAndFrame = false;
 
     Log::i("Instantiating ...\n");
 
-    for (_old_pos = init_pos_expanding; _old_pos < currentLeaves.size(); _old_pos++)  {
+    for (size_t oldPos = initPosExpanding; oldPos < currentLeaves.size(); oldPos++)  {
 
-        nextLeafStarts[_old_pos] = _pos;
+        if (!positionsToDevelop.count(oldPos)) {
 
-        if (!positionsToDevelop.count(_old_pos)) {
-
-            Position* newPosPtr = currentLeaves[_old_pos];
-            newPosPtr->setPos(_depth, _pos);
-            newPosPtr->setLeftPosition(_pos > 0 ? _leaf_positions[_pos - 1] : nullptr);
+            Position* newPosPtr = currentLeaves[oldPos];
+            newPosPtr->setPos(_depth, nextPos);
             _leaf_positions.push_back(newPosPtr);
             Position& newPos = *newPosPtr;
 
-            if (_pos == 0) {
+            if (nextPos == 0) {
                 propagateInitialState(newPos, *currentLeaves[0]);
             } else if (_separate_tasks_scheduler
                 && _depth > 0
-                && _pos == _separate_tasks_scheduler->getPositionsDone(currentLeaves.size())
+                && nextPos == (size_t) _separate_tasks_scheduler->getPositionsDone(currentLeaves.size())
                 && _separate_tasks_scheduler->addTasksAsClauses()) {
                 for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
                     const USignature& sig = _htn.getGroundPositiveFact(i);
@@ -536,7 +530,7 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
                     }
                 }
             } else {
-                Position& leftPos = *_leaf_positions[_pos - 1];
+                Position& leftPos = *_leaf_positions[nextPos - 1];
 
                 if (left_pos_is_developed) {
                     newPos.clearFactSupportsId();
@@ -547,29 +541,37 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
             }
 
             left_pos_is_developed = false;
-            _pos++;
+            encodingActions.push_back(
+                oldPos == initPosEncoding ? LeafEncodingAction::NEW_RELEVANTS
+                : needsEffectsAndFrame ? LeafEncodingAction::EFFECTS_AND_FRAME
+                : LeafEncodingAction::PROPAGATE_RELEVANTS);
+            needsEffectsAndFrame = false;
+            nextPos++;
         } else {
             size_t expansion_size = 1;
-            for (const auto& method : currentLeaves[_old_pos]->getReductions()) {
+            for (const auto& method : currentLeaves[oldPos]->getReductions()) {
                 const Reduction& subR = _htn.getOpTable().getReduction(method);
                 expansion_size = std::max(expansion_size, subR.getSubtasks().size());
             }
 
-            currentLeaves[_old_pos]->setExpansionSize(expansion_size);
+            currentLeaves[oldPos]->setExpansionSize(expansion_size);
 
             for (size_t offset = 0; offset < expansion_size; offset++) {
                 Position* current = new Position();
-                current->setParentPosition(currentLeaves[_old_pos]);
+                current->setParentPosition(currentLeaves[oldPos]);
                 _leaf_positions.push_back(current);
-                current->setPos(_depth, _pos);
-                Position* left = _pos > 0 ? _leaf_positions[_pos-1] : nullptr;
+                current->setPos(_depth, nextPos);
+                Position* left = nextPos > 0 ? _leaf_positions[nextPos - 1] : nullptr;
                 current->setLeftPosition(left);
-                createNextPosition(*current, currentLeaves[_old_pos], _old_pos, left);
+                createNextPosition(*current, currentLeaves[oldPos], left);
                 incrementPosition(*current);
+                encodingActions.push_back(LeafEncodingAction::FULL);
+                nextPos++;
             }
 
             num_pos_developed++;
             left_pos_is_developed = true;
+            needsEffectsAndFrame = true;
             if (num_pos_developed == positionsToDevelop.size()) {
                 all_pos_developed = true;
             }
@@ -579,36 +581,30 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
     _stats.endTiming(TimingStage::EXPANSION);
 
     Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
-    Log::i("New leaf count: %zu (%d)\n", _leaf_positions.size(), _pos);
+    Log::i("New leaf count: %zu (%zu)\n", _leaf_positions.size(), nextPos);
 
-    int init_pos_encoding = _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? num_position_already_done : 0;
     Log::i("Encoding ...\n");
     _stats.beginTiming(TimingStage::ENCODING);
-    bool encodeOnlyEffsAndFA = false;
-    for (_old_pos = init_pos_encoding; _old_pos < currentLeaves.size(); _old_pos++) {
-        Position* previousLeaf = _old_pos > 0 ? currentLeaves[_old_pos - 1] : nullptr;
-
-        if (_old_pos == init_pos_encoding && !positionsToDevelop.count(_old_pos)) {
-            _enc.encodeNewRelevantsFacts(*_leaf_positions[nextLeafStarts[init_pos_encoding]]);
-        }
-
-        if (positionsToDevelop.count(_old_pos)) {
-            size_t newPos = nextLeafStarts[_old_pos];
-            size_t maxOffset = currentLeaves[_old_pos]->getMaxExpansionSize();
-            for (size_t offset = 0; offset < maxOffset; offset++) {
-                _enc.encode(*_leaf_positions[newPos + offset], previousLeaf);
-            }
-            encodeOnlyEffsAndFA = true;
-
-        } else if (encodeOnlyEffsAndFA) {
-            _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[nextLeafStarts[_old_pos]], previousLeaf);
-            encodeOnlyEffsAndFA = false;
-        }
-        else if (_old_pos != init_pos_encoding) {
-            _enc.propagateRelevantsFacts(*_leaf_positions[nextLeafStarts[_old_pos]], previousLeaf);
+    for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
+        switch (encodingActions[pos]) {
+        case LeafEncodingAction::NONE:
+            break;
+        case LeafEncodingAction::FULL:
+            _enc.encode(*_leaf_positions[pos]);
+            break;
+        case LeafEncodingAction::NEW_RELEVANTS:
+            _enc.encodeNewRelevantsFacts(*_leaf_positions[pos]);
+            break;
+        case LeafEncodingAction::EFFECTS_AND_FRAME:
+            _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[pos]);
+            break;
+        case LeafEncodingAction::PROPAGATE_RELEVANTS:
+            _enc.propagateRelevantsFacts(*_leaf_positions[pos]);
+            break;
         }
     }
     _stats.endTiming(TimingStage::ENCODING);
+    refreshLeafLeftPositions();
 
     for (int pos : positionsToDevelop) {
         Log::v("Freeing position %d of depth %d\n", pos, _depth - 1);
@@ -619,18 +615,18 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
     }
 }
 
-void Planner::createNextPosition(Position& newPos, Position* parent, size_t parentPos, Position* left) {
+void Planner::createNextPosition(Position& newPos, Position* parent, Position* left) {
+    size_t pos = newPos.getPositionIndex();
+
     // Useful informations for sibylsat expansion
-    newPos.setPos(_depth, _pos);
+    newPos.setPos(_depth, pos);
     if (parent != nullptr) {
         newPos.setParentPosition(parent);
     }
-    newPos.setOriginalLayerIdx(_depth);
-    newPos.setOriginalPos(_pos);
     newPos.initFactChangesBitVec(_htn.getNumPositiveGroundFacts());
 
     // Set up all facts that may hold at this position.
-    if (_pos == 0) {
+    if (pos == 0) {
         assert(parent != nullptr || _depth == 0);
         if (_depth > 0) {
             propagateInitialState(newPos, *parent);
@@ -638,7 +634,7 @@ void Planner::createNextPosition(Position& newPos, Position* parent, size_t pare
     }  
     else if (_separate_tasks_scheduler 
                 && _depth > 0
-                && _pos == _separate_tasks_scheduler->getPositionsDone(_leaf_positions.size())
+                && pos == (size_t) _separate_tasks_scheduler->getPositionsDone(_leaf_positions.size())
                 && _separate_tasks_scheduler->addTasksAsClauses()) {
                     // Only need to indicate the true facts and false facts of the 'new' initial state
                     // Log::i("Propagating initial state facts for position %i\n", _pos);

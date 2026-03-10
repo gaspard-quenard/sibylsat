@@ -9,22 +9,42 @@
 #include "util/log.h"
 #include "util/timer.h"
 
+Position* Encoding::getLeftPosition(const Position& pos) const {
+    size_t positionIndex = pos.getPositionIndex();
+    if (positionIndex == 0 || positionIndex > _leaf_positions.size()) {
+        return nullptr;
+    }
+    return _leaf_positions[positionIndex - 1];
+}
+
 Position* Encoding::getAbovePosition(const Position& pos) const {
     Position* parent = pos.getParentPosition();
     return parent == _root_position ? nullptr : parent;
 }
 
-Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, Position* previousLeaf, bool reuseCurrentPosition) const {
+Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, EncodingContext context) const {
     Encoding::EncodingEnvironment env;
-    env.left = pos.getLeftPosition();
+    env.left = getLeftPosition(pos);
     env.above = getAbovePosition(pos);
-    env.leftOfAbove = previousLeaf;
-    env.reusedFacts = reuseCurrentPosition ? &pos : (pos.getOffset() == 0 ? env.above : nullptr);
+    switch (context) {
+    case EncodingContext::CurrentLeaf:
+        env.leftOfAbove = env.above != nullptr ? env.above->getLeftPosition() : nullptr;
+        env.reusedFacts = pos.getOffset() == 0 ? env.above : nullptr;
+        break;
+    case EncodingContext::CarriedLeaf:
+        env.leftOfAbove = pos.getLeftPosition();
+        env.reusedFacts = pos.getOffset() == 0 ? env.above : nullptr;
+        break;
+    case EncodingContext::CarriedLeafReuseSelf:
+        env.leftOfAbove = pos.getLeftPosition();
+        env.reusedFacts = &pos;
+        break;
+    }
     return env;
 }
 
-void Encoding::encode(Position& newPos, Position* previousLeaf) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos, previousLeaf);
+void Encoding::encode(Position& newPos) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::CurrentLeaf);
     _termination_callback();
 
     _stats.beginPosition();
@@ -982,8 +1002,8 @@ void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvi
     _stats.end(STAGE_MUTEX);
 }
 
-void Encoding::encodeOnlyEffsAndFrameAxioms(Position& newPos, Position* previousLeaf) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos, previousLeaf, /*reuseCurrentPosition=*/true);
+void Encoding::encodeOnlyEffsAndFrameAxioms(Position& newPos) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::CarriedLeafReuseSelf);
     assert(env.left != nullptr);
     encodeFactVariables(newPos, env);
 
@@ -1150,8 +1170,8 @@ void Encoding::encodeNewRelevantsFacts(Position& initPos) {
 }
 
 
-void Encoding::propagateRelevantsFacts(Position& newPos, Position* previousLeaf) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos, previousLeaf);
+void Encoding::propagateRelevantsFacts(Position& newPos) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::CarriedLeaf);
 
     if (_new_relevants_facts_to_encode.empty()) {
         return;
@@ -1244,8 +1264,8 @@ const USignature Encoding::getOpHoldingAt(const Position& position) {
 }
 
 void Encoding::printStatementsAtPosition(const Position& newPos) {
-    Position* left = newPos.getLeftPosition();
-    Log::i("STATE AT (%i,%i) (original: %i,%i)\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex(), (int) newPos.getOriginalLayerIndex(), (int) newPos.getOriginalPositionIndex());
+    Position* left = getLeftPosition(newPos);
+    Log::i("STATE AT (%i,%i)\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex());
     for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::FACT)) {
         if (!_htn.isFullyGround(sig) || _htn.hasQConstants(sig)) continue; // skip non-ground facts)
         if (!_sat.holds(aVar)) continue; // skip false facts

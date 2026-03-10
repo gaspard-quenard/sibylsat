@@ -37,10 +37,6 @@ private:
     std::vector<Position*> _children_positions;
     Position* _left_position = nullptr;
 
-    // Some useful attributes for sibylsat
-    size_t _original_pos = -1;
-    size_t _original_layer_idx = -1;
-
     USigSet _actions;
     USigSet _reductions;
 
@@ -184,9 +180,6 @@ public:
     size_t getLayerIndex() const;
     size_t getPositionIndex() const;
     size_t getOffset() const;
-    size_t getOriginalLayerIndex() const;
-    size_t getOriginalPositionIndex() const;
-    
     void clearAfterInstantiation();
     void clearAtPastPosition();
     void clearAtPastLayer();
@@ -247,8 +240,6 @@ public:
 
     void setExpansionSize(size_t size) {_max_expansion_size = size;}
     void setOffset(size_t offset) {_offset = offset;}
-    void setOriginalLayerIdx(size_t originalLayerIdx) {_original_layer_idx = originalLayerIdx;}
-    void setOriginalPos(size_t originalPos) {_original_pos = originalPos;}
 
     void setHeuristicValue(const USignature& reduction, int value) {
         assert(_reductions.count(reduction) || Log::e("Unknown reduction %s queried!\n", Names::to_string(reduction).c_str()));
