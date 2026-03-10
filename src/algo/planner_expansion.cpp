@@ -75,227 +75,218 @@ void Planner::createInitialLeaves() {
     _enc.encode(*goalPosition);
 }
 
-void Planner::expandAllLeaves() {
-
-    std::vector<Position*> currentLeaves = _leaf_positions;
-    size_t nextLeafCount = 0;
-    for (Position* leaf : currentLeaves) {
-        nextLeafCount += leaf->getMaxExpansionSize();
-    }
-
-    _depth++;
-    size_t nextPos = 0;
-    _leaf_positions.clear();
-    _leaf_positions.reserve(nextLeafCount);
-    Log::i("New leaf count: %zu\n", nextLeafCount);
-
-    Log::i("Instantiating ...\n");
-    _stats.beginTiming(TimingStage::EXPANSION);
-    for (size_t oldPos = 0; oldPos < currentLeaves.size(); oldPos++) {
-        Position& above = *currentLeaves[oldPos];
-        size_t maxOffset = above.getMaxExpansionSize();
-
-        for (size_t offset = 0; offset < maxOffset; offset++) {
-            Position* current = new Position();
-            current->setParentPosition(&above);
-            _leaf_positions.push_back(current);
-            current->setPos(_depth, nextPos);
-            Position* left = nextPos > 0 ? _leaf_positions[nextPos - 1] : nullptr;
-            current->setLeftPosition(left);
-            createNextPosition(*current, &above, left);
-            Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
-                    current->getReductions().size(),
-                    current->getActions().size(),
-                    current->getQFacts().size(),
-                    current->getPosFactSupportsId().size() + current->getNegFactSupportsId().size());
-            if (nextPos > 0) {
-                _leaf_positions[nextPos - 1]->clearAfterInstantiation();
-            }
-
-            incrementPosition(*current);
-            nextPos++;
-            checkTermination();
-        }
-    }
-    if (nextPos > 0) {
-        _leaf_positions[nextPos - 1]->clearAfterInstantiation();
-    }
-    _stats.endTiming(TimingStage::EXPANSION);
-    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
-
-    Log::i("Encoding ...\n");
-    _stats.beginTiming(TimingStage::ENCODING);
-    for (Position* leaf : _leaf_positions) {
-        Log::v("- Position (%i,%i)\n", _depth, leaf->getPositionIndex());
-        _enc.encode(*leaf);
-    }
-    _stats.endTiming(TimingStage::ENCODING);
-    refreshLeafLeftPositions();
-}
-
-void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
+void Planner::expandLeaves(std::vector<Position*> nodesToDevelop) {
     enum class LeafEncodingAction { NONE, FULL, NEW_RELEVANTS, EFFECTS_AND_FRAME, PROPAGATE_RELEVANTS };
 
     std::vector<Position*> currentLeaves = _leaf_positions;
-
-    _stats.beginTiming(TimingStage::EXPANSION);
-
-    size_t nextLeafCount = currentLeaves.size();
-    for (int pos: positionsToDevelop) {
-        Position& oldPos = *currentLeaves[pos];
-        nextLeafCount += oldPos.getMaxExpansionSize() - 1;
+    FlatHashSet<Position*> nodesToDevelopSet;
+    nodesToDevelopSet.reserve(nodesToDevelop.size());
+    for (Position* node : nodesToDevelop) {
+        nodesToDevelopSet.insert(node);
     }
+    const bool expandAll = nodesToDevelopSet.size() == currentLeaves.size();
+
+    size_t nextLeafCount = 0;
+    if (expandAll) {
+        for (Position* leaf : currentLeaves) {
+            nextLeafCount += leaf->getMaxExpansionSize();
+        }
+    } else {
+        nextLeafCount = currentLeaves.size();
+        for (Position* node : nodesToDevelopSet) {
+            nextLeafCount += node->getMaxExpansionSize() - 1;
+        }
+    }
+
     std::vector<LeafEncodingAction> encodingActions;
-    encodingActions.reserve(nextLeafCount);
+    if (!expandAll) {
+        encodingActions.reserve(nextLeafCount);
+    }
 
     _depth++;
-    size_t nextPos = 0;
+    size_t nextLeafIndex = 0;
     _leaf_positions.clear();
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
-    int num_pos_developed = 0;
-    bool all_pos_developed = false;
-    bool left_pos_is_developed = false;
+    _stats.beginTiming(TimingStage::EXPANSION);
 
-    int num_position_already_done = _separate_tasks ? _separate_tasks_scheduler->getPositionsDone(currentLeaves.size()) : 0;
-    if (num_position_already_done > 0) {
-        Log::i("Propagating initial state facts for positions already done (%i)\n", num_position_already_done);
+    size_t developedLeafCount = 0;
+    const size_t totalLeavesToDevelop = nodesToDevelopSet.size();
+    bool allLeavesDeveloped = false;
+    bool leftLeafIsDeveloped = false;
+
+    int numPositionsAlreadyDone = !expandAll && _separate_tasks ? _separate_tasks_scheduler->getPositionsDone(currentLeaves.size()) : 0;
+    if (numPositionsAlreadyDone > 0) {
+        Log::i("Propagating initial state facts for positions already done (%i)\n", numPositionsAlreadyDone);
         Position tmpInitialPosition;
         tmpInitialPosition.setPos(_depth, 0);
         propagateInitialState(tmpInitialPosition, *currentLeaves[0]);
-        const BitVec& reachable_state_pos_after_tasks_accomplished = _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec();
-        const BitVec& reachable_state_neg_after_tasks_accomplished = _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec();
+        const BitVec& reachable_state_pos_after_tasks_accomplished =
+            _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec();
+        const BitVec& reachable_state_neg_after_tasks_accomplished =
+            _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec();
         _analysis.setReachableFactsBitVec(
             reachable_state_pos_after_tasks_accomplished,
             reachable_state_neg_after_tasks_accomplished
         );
         if (_separate_tasks_scheduler->addTasksAsClauses()) {
-            _enc.setNewInitPos(num_position_already_done);
+            _enc.setNewInitPos(numPositionsAlreadyDone);
 
-            for (int oldPos = 0; oldPos < num_position_already_done; oldPos++) {
-                Position* carriedLeaf = currentLeaves[oldPos];
-                carriedLeaf->setPos(_depth, nextPos);
+            for (int leafIndex = 0; leafIndex < numPositionsAlreadyDone; leafIndex++) {
+                Position* carriedLeaf = currentLeaves[leafIndex];
+                carriedLeaf->setPos(_depth, nextLeafIndex);
                 _leaf_positions.push_back(carriedLeaf);
                 encodingActions.push_back(LeafEncodingAction::NONE);
-                nextPos++;
+                nextLeafIndex++;
             }
         }
         Log::i("Done !\n");
     }
 
-    size_t initPosExpanding = _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? num_position_already_done : 0;
-    size_t initPosEncoding = _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? num_position_already_done : 0;
+    size_t firstLeafToExpand =
+        !expandAll && _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? numPositionsAlreadyDone : 0;
+    size_t firstLeafToEncode =
+        !expandAll && _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? numPositionsAlreadyDone : 0;
     bool needsEffectsAndFrame = false;
 
     Log::i("Instantiating ...\n");
 
-    for (size_t oldPos = initPosExpanding; oldPos < currentLeaves.size(); oldPos++)  {
+    for (size_t leafIndex = firstLeafToExpand; leafIndex < currentLeaves.size(); leafIndex++)  {
+        Position* currentLeaf = currentLeaves[leafIndex];
+        const bool developLeaf = expandAll || nodesToDevelopSet.count(currentLeaf);
 
-        if (!positionsToDevelop.count(oldPos)) {
+        if (!developLeaf) {
+            Position& carriedLeaf = *currentLeaf;
+            carriedLeaf.setPos(_depth, nextLeafIndex);
+            _leaf_positions.push_back(currentLeaf);
 
-            Position* newPosPtr = currentLeaves[oldPos];
-            newPosPtr->setPos(_depth, nextPos);
-            _leaf_positions.push_back(newPosPtr);
-            Position& newPos = *newPosPtr;
-
-            if (nextPos == 0) {
-                propagateInitialState(newPos, *currentLeaves[0]);
+            if (nextLeafIndex == 0) {
+                propagateInitialState(carriedLeaf, *currentLeaves[0]);
             } else if (_separate_tasks_scheduler
                 && _depth > 0
-                && nextPos == (size_t) _separate_tasks_scheduler->getPositionsDone(currentLeaves.size())
+                && nextLeafIndex == (size_t) _separate_tasks_scheduler->getPositionsDone(currentLeaves.size())
                 && _separate_tasks_scheduler->addTasksAsClauses()) {
                 for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
                     const USignature& sig = _htn.getGroundPositiveFact(i);
                     if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
-                        newPos.addTrueFact(sig);
+                        carriedLeaf.addTrueFact(sig);
                     } else {
-                        newPos.addFalseFact(sig);
+                        carriedLeaf.addFalseFact(sig);
                     }
                 }
             } else {
-                Position& leftPos = *_leaf_positions[nextPos - 1];
+                Position& leftLeaf = *_leaf_positions[nextLeafIndex - 1];
 
-                if (left_pos_is_developed) {
-                    newPos.clearFactSupportsId();
-                    createNextPositionFromLeft(newPos, leftPos);
-                } else if (!all_pos_developed) {
-                    createNextPositionFromLeftSimplified(newPos);
+                if (leftLeafIsDeveloped) {
+                    carriedLeaf.clearFactSupportsId();
+                    createNextPositionFromLeft(carriedLeaf, leftLeaf);
+                } else if (!allLeavesDeveloped) {
+                    createNextPositionFromLeftSimplified(carriedLeaf);
                 }
             }
 
-            left_pos_is_developed = false;
+            leftLeafIsDeveloped = false;
             encodingActions.push_back(
-                oldPos == initPosEncoding ? LeafEncodingAction::NEW_RELEVANTS
+                leafIndex == firstLeafToEncode ? LeafEncodingAction::NEW_RELEVANTS
                 : needsEffectsAndFrame ? LeafEncodingAction::EFFECTS_AND_FRAME
                 : LeafEncodingAction::PROPAGATE_RELEVANTS);
             needsEffectsAndFrame = false;
-            nextPos++;
-        } else {
-            size_t expansion_size = 1;
-            for (const auto& method : currentLeaves[oldPos]->getReductions()) {
-                const Reduction& subR = _htn.getOpTable().getReduction(method);
-                expansion_size = std::max(expansion_size, subR.getSubtasks().size());
+            nextLeafIndex++;
+            continue;
+        }
+
+        Position& above = *currentLeaf;
+        size_t expansionSize = expandAll ? above.getMaxExpansionSize() : 1;
+        if (!expandAll) {
+            for (const auto& method : above.getReductions()) {
+                const Reduction& subReduction = _htn.getOpTable().getReduction(method);
+                expansionSize = std::max(expansionSize, subReduction.getSubtasks().size());
             }
+            above.setExpansionSize(expansionSize);
+        }
 
-            currentLeaves[oldPos]->setExpansionSize(expansion_size);
+        for (size_t offset = 0; offset < expansionSize; offset++) {
+            Position* current = new Position();
+            current->setParentPosition(&above);
+            _leaf_positions.push_back(current);
+            current->setPos(_depth, nextLeafIndex);
+            Position* left = nextLeafIndex > 0 ? _leaf_positions[nextLeafIndex - 1] : nullptr;
+            current->setLeftPosition(left);
+            createNextPosition(*current, &above, left);
 
-            for (size_t offset = 0; offset < expansion_size; offset++) {
-                Position* current = new Position();
-                current->setParentPosition(currentLeaves[oldPos]);
-                _leaf_positions.push_back(current);
-                current->setPos(_depth, nextPos);
-                Position* left = nextPos > 0 ? _leaf_positions[nextPos - 1] : nullptr;
-                current->setLeftPosition(left);
-                createNextPosition(*current, currentLeaves[oldPos], left);
-                incrementPosition(*current);
+            if (expandAll) {
+                Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
+                        current->getReductions().size(),
+                        current->getActions().size(),
+                        current->getQFacts().size(),
+                        current->getPosFactSupportsId().size() + current->getNegFactSupportsId().size());
+                if (nextLeafIndex > 0) {
+                    _leaf_positions[nextLeafIndex - 1]->clearAfterInstantiation();
+                }
+            } else {
                 encodingActions.push_back(LeafEncodingAction::FULL);
-                nextPos++;
             }
 
-            num_pos_developed++;
-            left_pos_is_developed = true;
+            incrementPosition(*current);
+            nextLeafIndex++;
+        }
+
+        if (!expandAll) {
+            developedLeafCount++;
+            leftLeafIsDeveloped = true;
             needsEffectsAndFrame = true;
-            if (num_pos_developed == positionsToDevelop.size()) {
-                all_pos_developed = true;
+            if (developedLeafCount == totalLeavesToDevelop) {
+                allLeavesDeveloped = true;
             }
         }
     }
 
+    if (expandAll && nextLeafIndex > 0) {
+        _leaf_positions[nextLeafIndex - 1]->clearAfterInstantiation();
+    }
     _stats.endTiming(TimingStage::EXPANSION);
 
     Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
-    Log::i("New leaf count: %zu (%zu)\n", _leaf_positions.size(), nextPos);
-
     Log::i("Encoding ...\n");
     _stats.beginTiming(TimingStage::ENCODING);
-    for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
-        switch (encodingActions[pos]) {
-        case LeafEncodingAction::NONE:
-            break;
-        case LeafEncodingAction::FULL:
-            _enc.encode(*_leaf_positions[pos]);
-            break;
-        case LeafEncodingAction::NEW_RELEVANTS:
-            _enc.encodeNewRelevantsFacts(*_leaf_positions[pos]);
-            break;
-        case LeafEncodingAction::EFFECTS_AND_FRAME:
-            _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[pos]);
-            break;
-        case LeafEncodingAction::PROPAGATE_RELEVANTS:
-            _enc.propagateRelevantsFacts(*_leaf_positions[pos]);
-            break;
+    if (expandAll) {
+        for (Position* leaf : _leaf_positions) {
+            Log::v("- Position (%i,%i)\n", _depth, leaf->getPositionIndex());
+            _enc.encode(*leaf);
+        }
+    } else {
+        Log::i("New leaf count: %zu (%zu)\n", _leaf_positions.size(), nextLeafIndex);
+        for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
+            switch (encodingActions[leafIndex]) {
+            case LeafEncodingAction::NONE:
+                break;
+            case LeafEncodingAction::FULL:
+                _enc.encode(*_leaf_positions[leafIndex]);
+                break;
+            case LeafEncodingAction::NEW_RELEVANTS:
+                _enc.encodeNewRelevantsFacts(*_leaf_positions[leafIndex]);
+                break;
+            case LeafEncodingAction::EFFECTS_AND_FRAME:
+                _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[leafIndex]);
+                break;
+            case LeafEncodingAction::PROPAGATE_RELEVANTS:
+                _enc.propagateRelevantsFacts(*_leaf_positions[leafIndex]);
+                break;
+            }
         }
     }
     _stats.endTiming(TimingStage::ENCODING);
     refreshLeafLeftPositions();
 
-    for (int pos : positionsToDevelop) {
-        Log::v("Freeing position %d of depth %d\n", pos, _depth - 1);
-        currentLeaves[pos]->clearFullPos();
-    }
-    for (Position* leaf : _leaf_positions) {
-        leaf->clearDecodings();
+    if (!expandAll) {
+        for (Position* node : nodesToDevelopSet) {
+            Log::v("Freeing position %zu of depth %zu\n", node->getPositionIndex(), node->getLayerIndex());
+            node->clearFullPos();
+        }
+        for (Position* leaf : _leaf_positions) {
+            leaf->clearDecodings();
+        }
     }
 }
 

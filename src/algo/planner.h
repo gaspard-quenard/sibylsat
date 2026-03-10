@@ -47,7 +47,7 @@ private:
     const int _verbosity;
 
     const bool _use_sibylsat_expansion;
-    FlatHashSet<int> _sibylsat_positions_to_develop;
+    std::vector<Position*> _sibylsat_nodes_to_develop;
 
     // For optimal planning
     const bool _optimal;
@@ -59,14 +59,9 @@ private:
     const bool _separate_tasks;
     std::unique_ptr<SeparateTasksScheduler> _separate_tasks_scheduler;
     
-
-    float _sat_time_limit = 0;
-    float _init_plan_time_limit = 0;
     bool _nonprimitive_support;
     float _optimization_factor;
-    float _time_at_first_plan = 0;
 
-    bool _has_plan;
     Plan _plan;
 
     // statistics
@@ -82,13 +77,13 @@ public:
             _optimal(_params.isNonzero("optimal")),
             _separate_tasks(_params.isNonzero("separateTasks") && _htn.getInitReduction().getSubtasks().size() > 1 && _use_sibylsat_expansion && !_optimal),
             _instantiator(params, htn, _analysis), 
-            _enc(_params, _htn, _analysis, _root_position, _leaf_positions, [this](){checkTermination();}), 
+            _enc(_params, _htn, _analysis, _root_position, _leaf_positions), 
             _minres(_htn), 
             _pruning(_enc),
             _domination_resolver(_htn),
             _plan_writer(_htn, _params),
-            _init_plan_time_limit(_params.getFloatParam("T")), _nonprimitive_support(_params.isNonzero("nps")), 
-            _optimization_factor(_params.getFloatParam("of")), _has_plan(false) {
+            _nonprimitive_support(_params.isNonzero("nps")), 
+            _optimization_factor(_params.getFloatParam("of")) {
 
         // Mine additional preconditions for reductions from their subtasks
         PreconditionInference::infer(_htn, _analysis, PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
@@ -108,11 +103,7 @@ public:
         }
     }
     int findPlan();
-    void improvePlan(int& iteration);
-
-    friend int terminateSatCall(void* state);
-    void checkTermination();
-    bool cancelOptimization();
+    void optimizeCurrentPlan();
 
     const bool mustRestartPlanner() const { 
         return (_separate_tasks && _separate_tasks_scheduler->mustRestartPlanner());
@@ -121,10 +112,15 @@ public:
 private:
 
     void createInitialLeaves();
-    void expandAllLeaves();
-    void expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop);
+    void expandLeaves(std::vector<Position*> nodesToDevelop);
+    void expandCurrentLeaves();
     void refreshLeafMetadata();
     void refreshLeafLeftPositions();
+
+    bool findGloballyOptimalSolutionInCurrentTree();
+    bool findPrimitiveSolutionInCurrentTree();
+    bool findAbstractPlanToDevelop();
+    void collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>& abstractPlan, int leafLimit = -1);
     
     void createNextPosition(Position& newPos, Position* parent, Position* left);
     void createNextPositionFromAbove(Position& newPos, Position& above);
@@ -155,8 +151,6 @@ private:
 
     void setSoftLitsForCurrentLeaves();
 
-    int getTerminateSatCall();
-    void clearDonePositions(int offset);
     void printStatistics();
 
 };

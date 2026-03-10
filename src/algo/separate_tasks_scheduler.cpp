@@ -266,7 +266,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
     int a = 0;
 }
 
-bool SeparateTasksScheduler::handleVirtualPlanFailure(Encoding &enc, int layerSize){
+bool SeparateTasksScheduler::handleAbstractPlanFailure(Encoding &enc, int layerSize){
 //     _phase      = Phase::EXPLORE;
 // _hi_batch   = _lo_batch = _best_batch = 1;
 // _best_tp    = 0.0;
@@ -279,7 +279,7 @@ bool SeparateTasksScheduler::handleVirtualPlanFailure(Encoding &enc, int layerSi
         }
     } else { // !_add_tasks_as_clauses: try to relax assumptions
         while (!_vars_tasks_accomplished.empty()) {
-            Log::w("Failed to find a virtual plan! Relax the assumptions of the tasks accomplished\n");
+            Log::w("Failed to find an abstract plan! Relax the assumptions of the tasks accomplished\n");
             _num_failed_sat++;
             if (!_num_tasks_solved_at_each_step.empty()) {
                 int lastSolved = _num_tasks_solved_at_each_step.back();
@@ -299,14 +299,14 @@ bool SeparateTasksScheduler::handleVirtualPlanFailure(Encoding &enc, int layerSi
             }
             int result = enc.solve();
 
-            bool solved_virtual_plan = (result == 10);
-            Log::i("Solved virtual plan: %d\n", solved_virtual_plan);
-            if (solved_virtual_plan) {
+            bool solved_abstract_plan = (result == 10);
+            Log::i("Solved abstract plan: %d\n", solved_abstract_plan);
+            if (solved_abstract_plan) {
                 _num_pos_done = _num_pos_done_at_each_step.back();
                 return true;
             }
         }
-        Log::w("No virtual plan found. Problem is impossible! Exiting.\n");
+        Log::w("No abstract plan found. Problem is impossible! Exiting.\n");
         return false;
     }
     return false;

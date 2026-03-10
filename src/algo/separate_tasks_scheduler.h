@@ -122,13 +122,13 @@ public:
     }
 
     /**
-     * In case the virtual plan cannot be found, relax the previously added assumptions.
+     * In case the abstract plan cannot be found, relax the previously added assumptions.
      * Depending on the setting, this may trigger a restart of the full planner.
      *
      * @param enc The encoding object.
-     * @return True if a virtual plan was eventually found; false otherwise.
+     * @return True if a abstract plan was eventually found; false otherwise.
      */
-    bool handleVirtualPlanFailure(Encoding &enc, int layerSize);
+    bool handleAbstractPlanFailure(Encoding &enc, int layerSize);
 
     /**
      * @return True if the scheduler indicates that the full planner must be restarted.

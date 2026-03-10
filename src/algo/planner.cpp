@@ -3,326 +3,185 @@
 
 #include "planner.h"
 #include "util/log.h"
-#include "util/signal_manager.h"
-#include "util/timer.h"
 #include "sat/plan_optimizer.h"
 
-int terminateSatCall(void* state) {return ((Planner*) state)->getTerminateSatCall();}
-
 int Planner::findPlan() {
-
-    // _stats.beginTiming(TimingStage::PLANNER);
     
     int iteration = 0;
     Log::i("Iteration %i.\n", iteration);
 
     createInitialLeaves();
 
-    // Bounds on depth to solve / explore
-    int firstSatCallIteration = _params.getIntParam("d");
-    int maxIterations = _params.getIntParam("D");
-    _sat_time_limit = _params.getFloatParam("stl");
-
+    const int maxIterations = _params.getIntParam("D");
     bool solved = false;
-    bool solvedVirtualPlan = false;
-    _enc.setTerminateCallback(this, terminateSatCall);
-    if (iteration >= firstSatCallIteration) {
-        _enc.addAssumptionsPrimPlan();
-        int result = _enc.solve();
-        if (result == 0) {
-            Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
-            _sat_time_limit = 0;
-        }
-        solved = result == 10;
-    } 
 
     if (_use_sibylsat_expansion) {
-        // Only develop the position which contains the _top_method
-        _sibylsat_positions_to_develop.insert(0);
+        // Only develop the leaf which contains the _top_method
+        _sibylsat_nodes_to_develop.push_back(_leaf_positions[0]);
     }
     
-    // Next depths
-    while (!solved && (maxIterations == 0 || iteration < maxIterations)) {
-
-        if (iteration >= firstSatCallIteration) {
-
-            _enc.printFailedVars();
-
-            if (_params.isNonzero("cs")) { // check solvability
-                Log::i("Not solved at depth %i with assumptions\n", _depth);
-
-                // Attempt to solve formula again, now without assumptions
-                // (is usually simple; if it fails, we know the entire problem is unsolvable)
-                int result = _enc.solve();
-                if (result == 20) {
-                    Log::w("Unsolvable at depth %i even without assumptions!\n", _depth);
-                    break;
-                } else {
-                    Log::i("Not proven unsolvable - expanding by another layer\n");
-                }
-            } else {
-                Log::i("Unsolvable at depth %i -- expanding.\n", _depth);
-            }
-        }
+    // Main loop of the search. We keep expanding the tree until we find a solution, or reach the maximum depth limit
+    while (!solved) {
 
         iteration++;      
         Log::i("Iteration %i.\n", iteration);
 
+        if (maxIterations != 0 && iteration > maxIterations) {
+            Log::e("Reached maximum depth limit (%i). Stopping search.\n", maxIterations);
+            break;
+        }
+
         if (_separate_tasks) {
             _separate_tasks_scheduler->displayAdvancementBar();
         }
-        
-        if (_use_sibylsat_expansion) {
-            // Only develop the positions where the associate reduction is true in the last virtual plan
-            expandSelectedLeaves(_sibylsat_positions_to_develop);
-        } else {
-            // Lilotane: Breadth first expansion
-            expandAllLeaves();
+
+        expandCurrentLeaves();
+
+        solved = _optimal ? findGloballyOptimalSolutionInCurrentTree() : findPrimitiveSolutionInCurrentTree();
+        if (solved) {
+            break;
         }
 
-        if (_optimal) {
-            // Clear current soft literals in the formula...
-            _enc.clearSoftLits();
-            //... and add the new ones
-            Log::i("Add weight for each operation of the current leaves\n");
-            setSoftLitsForCurrentLeaves();
-
-            // Now, find the optimal abstract plan in this new set of leaves
-            int objective_value_best_plan = 0;
-            int result = _enc.solve();
-            if (result == 0) {
-                Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
-                _sat_time_limit = 0;
-            }
-            solved = result == 10;
-            if (solved) {
-                objective_value_best_plan = _enc.getObjectiveValue();
-                std::vector<PlanItem> virtualPlan = _enc.extractVirtualPlan();
-
-                // Check if the virtual plan is primitive
-                // In case it is, we can stop the search. Otherwise, we can already deduce the next positions to develop
-                bool planIsPrimitive = true;
-                _sibylsat_positions_to_develop.clear();
-                int pos = -1;
-                for (const PlanItem& item : virtualPlan) {
-                    pos++;
-                    if (item.id == -1) continue;
-                    if (_htn.isReduction(item.reduction)) {
-                        planIsPrimitive = false;
-                        _sibylsat_positions_to_develop.insert(pos);
-                    }
-                }
-                if (planIsPrimitive) {
-                    Log::i("The plan is primitive\n");
-                    break;
-                } else {
-                    Log::i("The plan is not primitive. Number of positions to develop: %zu/%zu\n", 
-                            _sibylsat_positions_to_develop.size(), _leaf_positions.size());
-                }
-            } else {
-                Log::e("No solution possible !\n");
-                exit(1);
-            }
-
-            Log::i("Objective value of the best abstract plan: %d\n", objective_value_best_plan);
-            // Now, add the assumption to only look for a primitive plan, and check if the primitive plan
-            // has an objective value equal or less than the best plan
-            _enc.addAssumptionsPrimPlan();
-            result = _enc.solve();
-            if (result == 0) {
-                Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
-                _sat_time_limit = 0;
-            }
-            solved = result == 10;
-            if (solved) {
-                Log::i("Found a primitive plan with objective value %d\n", _enc.getObjectiveValue());
-                int objective_value_best_primitive_plan = _enc.getObjectiveValue();
-                if (objective_value_best_primitive_plan == objective_value_best_plan) {
-                    Log::i("The primitive plan is optimal\n");
-                    solved = true;
-                    break;
-                } else {
-                    Log::i("The primitive plan is not optimal (%d > %d)\n", objective_value_best_primitive_plan, objective_value_best_plan);
-                    solved = false;
-                }
-            }
-        } else {
-            if (iteration >= firstSatCallIteration) {
-
-                if (_separate_tasks) {
-                    _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
-                }
-
-                // In case, we try to solve the init tasks separately, we only need the assumptions of primtive plan for the K first tasks
-                int assumptions_until = _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
-                _enc.addAssumptionsPrimPlan(/*permanent=*/false, /*assumptions_until=*/assumptions_until);
-                int result = _enc.solve();
-                if (result == 0) {
-                    Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
-                    _sat_time_limit = 0;
-                }
-                solved = result == 10;
-            } 
-            if (_separate_tasks && solved) {
-                if (_separate_tasks_scheduler->updateAfterSolved(_enc, _leaf_positions)) {
-                    Log::i("Solved the problem for all tasks\n");
-                    break;
-                } else {
-                    solved = false;
-                }
-            }
-
-            if (_use_sibylsat_expansion && !solved) {
-                Log::i("Failed to find a solution at depth %i. Trying to find a virtual plan...\n", _depth);
-
-                if (_separate_tasks) {
-                    _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
-                }
-                // Find a virtual plan to develop
-                int result = _enc.solve();
-                if (result == 0) {
-                    Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
-                    _sat_time_limit = 0;
-                }
-                solvedVirtualPlan = result == 10;
-
-                if (!solvedVirtualPlan && _separate_tasks) {
-                    solvedVirtualPlan = _separate_tasks_scheduler->handleVirtualPlanFailure(_enc, _leaf_positions.size());
-                }
-
-                if (!solvedVirtualPlan) {
-                     Log::w("No virtual plan found. Problem is impossible ! Exiting.\n");
-                     break;
-                }
-
-                Log::i("Found a virtual plan\n");
-
-                // Extract the virtual plan and use it to determinate which positions need to be developed
-                // Iterate the last layer and get the op holding at the position. If it is a reduction, we need to develop it
-                _sibylsat_positions_to_develop.clear();
-                int pos_to_develop_limit = _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
-                for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
-                    if (_separate_tasks && pos >= pos_to_develop_limit) {
-                        break;
-                    }
-                    const USignature& opSig = _enc.getOpHoldingAt(*_leaf_positions[pos]);
-                    // Log::i("Position %zu: %s\n", pos, TOSTR(opSig));
-                    if (_htn.isReduction(opSig)) {
-                        Log::d("  Reduction %s is true at depth %i, position %i\n", TOSTR(opSig), _depth, pos);
-                        _sibylsat_positions_to_develop.insert(pos);
-                    }
-                }
-                Log::i("Number of positions to develop: %zu\n", _sibylsat_positions_to_develop.size());
-            }
+        if (!_optimal && _use_sibylsat_expansion && !findAbstractPlanToDevelop()) {
+            break;
         }
     }
 
     if (!solved) {
-        if (iteration >= firstSatCallIteration) _enc.printFailedVars();
         Log::w("No success. Exiting.\n");
         return 1;
     }
 
     Log::i("Found a solution at depth %i.\n", (int) _depth);
-    _time_at_first_plan = Timer::elapsedSeconds();
+    if (_optimization_factor != 0) {
+        optimizeCurrentPlan();
+    }
 
-    improvePlan(iteration);
-
-    // _stats.endTiming(TimingStage::PLANNER);
-
+    _plan = _enc.extractPlan();
     _plan_writer.outputPlan(_plan);
     printStatistics();    
     return 0;
 }
 
-void Planner::improvePlan(int& iteration) {
+void Planner::expandCurrentLeaves() {
+    if (_use_sibylsat_expansion) {
+        expandLeaves(_sibylsat_nodes_to_develop);
+    } else {
+        expandLeaves(_leaf_positions);
+    }
+}
 
-    // Compute extra layers after initial solution as desired
-    PlanOptimizer optimizer(_htn, _leaf_positions, _enc);
-    int maxIterations = _params.getIntParam("D");
-    int extraLayers = _params.getIntParam("el");
-    int upperBound = _leaf_positions.size()-1;
-    if (extraLayers != 0) {
+bool Planner::findGloballyOptimalSolutionInCurrentTree() {
+    _enc.clearSoftLits();
+    Log::i("Add weight for each operation of the current leaves\n");
+    setSoftLitsForCurrentLeaves();
 
-        // Extract initial plan (for anytime purposes)
-        _plan = _enc.extractPlan();
-        _has_plan = true;
-        upperBound = optimizer.getPlanLength(std::get<0>(_plan));
-        Log::i("Initial plan at most shallow layer has length %i\n", upperBound);
-        
-        if (extraLayers == -1) {
-
-            // Indefinitely increase bound and solve until program is interrupted or max depth reached
-            size_t el = 1;
-            do {
-                // Extra layers without solving
-                for (size_t x = 0; x < el && (maxIterations == 0 || iteration < maxIterations); x++) {
-                    iteration++;      
-                    Log::i("Iteration %i. (extra)\n", iteration);
-                    expandAllLeaves();
-                }
-                // Solve again (to get another plan)
-                _enc.addAssumptionsPrimPlan();
-                int result = _enc.solve();
-                if (result != 10) break;
-                // Extract plan at layer, update bound
-                auto thisLayerPlan = _enc.extractPlan();
-                int newLength = optimizer.getPlanLength(std::get<0>(thisLayerPlan));
-                // Update plan only if it is better than any previous plan
-                if (newLength < upperBound || !_has_plan) {
-                    upperBound = newLength;
-                    _plan = thisLayerPlan;
-                    _has_plan = true;
-                }
-                Log::i("Initial plan at depth %i has length %i\n", iteration, newLength);
-                // Optimize
-                optimizer.optimizePlan(upperBound, _plan, PlanOptimizer::ConstraintAddition::TRANSIENT);
-                // Double number of extra layers in next iteration
-                el *= 2;
-            } while (maxIterations == 0 || iteration < maxIterations);
-
-        } else {
-            // Extra layers without solving
-            for (int x = 0; x < extraLayers; x++) {
-                iteration++;      
-                Log::i("Iteration %i. (extra)\n", iteration);
-                expandAllLeaves();
-            }
-
-            // Solve again (to get another plan)
-            _enc.addAssumptionsPrimPlan();
-            _enc.solve();
-        }
+    const int result = _enc.solve();
+    if (result != 10) {
+        Log::e("No solution possible !\n");
+        exit(1);
     }
 
-    if (extraLayers != -1) {
-        if (_optimization_factor != 0) {
+    const int bestAbstractObjectiveValue = _enc.getObjectiveValue();
+    collectLeavesToDevelopFromAbstractPlan(_enc.extractAbstractPlan());
+    if (_sibylsat_nodes_to_develop.empty()) {
+        Log::i("The plan is primitive\n");
+        return true;
+    }
 
-            // Extract plan at final layer, update bound
-            auto finalLayerPlan = _enc.extractPlan();
-            int newLength = optimizer.getPlanLength(std::get<0>(finalLayerPlan));
-            // Update plan only if it is better than any previous plan
-            if (newLength < upperBound || !_has_plan) {
-                upperBound = newLength;
-                _plan = finalLayerPlan;
-                _has_plan = true;
-            }
-            Log::i("Initial plan at final leaves has length %i\n", newLength);
-            // Optimize
-            optimizer.optimizePlan(upperBound, _plan, PlanOptimizer::ConstraintAddition::PERMANENT);
+    Log::i("The plan is not primitive. Number of leaves to develop: %zu/%zu\n",
+            _sibylsat_nodes_to_develop.size(), _leaf_positions.size());
+    Log::i("Objective value of the best abstract plan: %d\n", bestAbstractObjectiveValue);
 
-        } else {
-            // Just extract plan
-            _plan = _enc.extractPlan();
-            _has_plan = true;
+    _enc.addAssumptionsPrimPlan();
+    const int primitiveResult = _enc.solve();
+    if (primitiveResult != 10) {
+        return false;
+    }
+
+    const int bestPrimitiveObjectiveValue = _enc.getObjectiveValue();
+    Log::i("Found a primitive plan with objective value %d\n", bestPrimitiveObjectiveValue);
+    if (bestPrimitiveObjectiveValue == bestAbstractObjectiveValue) {
+        Log::i("The primitive plan is globally optimal\n");
+        return true;
+    }
+
+    Log::i("The primitive plan is not optimal (%d > %d)\n",
+            bestPrimitiveObjectiveValue, bestAbstractObjectiveValue);
+    return false;
+}
+
+bool Planner::findPrimitiveSolutionInCurrentTree() {
+    if (_separate_tasks) {
+        _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
+    }
+
+    const int assumptionsUntil =
+            _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
+    _enc.addAssumptionsPrimPlan(/*permanent=*/false, /*assumptions_until=*/assumptionsUntil);
+    if (_enc.solve() != 10) {
+        return false;
+    }
+
+    if (!_separate_tasks) {
+        return true;
+    }
+
+    if (_separate_tasks_scheduler->updateAfterSolved(_enc, _leaf_positions)) {
+        Log::i("Solved the problem for all tasks\n");
+        return true;
+    }
+
+    return false;
+}
+
+bool Planner::findAbstractPlanToDevelop() {
+    Log::i("Failed to find a solution at depth %i. Trying to find an abstract plan...\n", _depth);
+
+    if (_separate_tasks) {
+        _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
+    }
+
+    bool foundAbstractPlan = _enc.solve() == 10;
+    if (!foundAbstractPlan && _separate_tasks) {
+        foundAbstractPlan = _separate_tasks_scheduler->handleAbstractPlanFailure(_enc, _leaf_positions.size());
+    }
+
+    if (!foundAbstractPlan) {
+        Log::w("No abstract plan found. Problem is impossible ! Exiting.\n");
+        return false;
+    }
+
+    Log::i("Found an abstract plan\n");
+    const int leafLimit =
+            _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
+    collectLeavesToDevelopFromAbstractPlan(_enc.extractAbstractPlan(), leafLimit);
+    Log::i("Number of leaves to develop: %zu\n", _sibylsat_nodes_to_develop.size());
+    return true;
+}
+
+void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>& abstractPlan, int leafLimit) {
+    _sibylsat_nodes_to_develop.clear();
+    const size_t maxLeafIndex =
+            leafLimit < 0 ? _leaf_positions.size() : std::min(_leaf_positions.size(), static_cast<size_t>(leafLimit));
+    for (size_t leafIndex = 0; leafIndex < abstractPlan.size() && leafIndex < maxLeafIndex; leafIndex++) {
+        const PlanItem& item = abstractPlan[leafIndex];
+        if (item.id == -1) {
+            continue;
+        }
+        if (_htn.isReduction(item.reduction)) {
+            Log::d("  Reduction %s is true at depth %i, leaf %zu\n", TOSTR(item.reduction), _depth, leafIndex);
+            _sibylsat_nodes_to_develop.push_back(_leaf_positions[leafIndex]);
         }
     }
 }
 
-// Tree expansion and instantiation logic lives in planner_expansion.cpp.
-
-void Planner::clearDonePositions(int offset) {
-    (void) offset;
+void Planner::optimizeCurrentPlan() {
+    PlanOptimizer optimizer(_htn, _leaf_positions, _enc);
+    Plan optimizedPlan;
+    const int upperBound = _leaf_positions.empty() ? 0 : static_cast<int>(_leaf_positions.size()) - 1;
+    Log::i("Optimize the current depth with plan length upper bound %d\n", upperBound);
+    optimizer.optimizePlan(upperBound, optimizedPlan, PlanOptimizer::ConstraintAddition::TRANSIENT);
 }
 
 void Planner::setSoftLitsForCurrentLeaves() {
@@ -366,13 +225,6 @@ void Planner::setSoftLitsForCurrentLeaves() {
             if (heuristicValue > 0) {
                 // printf("%d -%d 0\n", heuristicValue, aVar);
                 Log::d("Add soft lit for op %s (%d) with heuristic value %d\n", TOSTR(op), var, heuristicValue);
-                // TODO If op is a repetition, get the original action instead (to keep the same heuristic value)
-                // if (_htn.isActionRepetition(op._name_id)) {
-                //     // Get the action from the repetiion
-
-                //     // Get the parent action
-                //      pos.getPredecessors().at(op)
-                // }
                     _enc.addSoftLit(var, heuristicValue);
                     _last_number_of_soft_lits++;
             }
@@ -380,58 +232,6 @@ void Planner::setSoftLitsForCurrentLeaves() {
     }
 }
 
-void Planner::checkTermination() {
-    bool exitSet = SignalManager::isExitSet();
-    bool cancelOpt = cancelOptimization();
-    if (exitSet) {
-        if (_has_plan) {
-            Log::i("Termination signal caught - printing last found plan.\n");
-            _plan_writer.outputPlan(_plan);
-        } else {
-            Log::i("Termination signal caught.\n");
-        }
-    } else if (cancelOpt) {
-        Log::i("Cancelling optimization according to provided limit.\n");
-        _plan_writer.outputPlan(_plan);
-    } else if (_time_at_first_plan == 0 
-            && _init_plan_time_limit > 0
-            && Timer::elapsedSeconds() > _init_plan_time_limit) {
-        Log::i("Time limit to find an initial plan exceeded.\n");
-        exitSet = true;
-    }
-    if (exitSet || cancelOpt) {
-        printStatistics();
-        Log::i("Exiting happily.\n");
-        exit(0);
-    }
-}
-
-bool Planner::cancelOptimization() {
-    return _time_at_first_plan > 0 &&
-            _optimization_factor > 0 &&
-            Timer::elapsedSeconds() > (1+_optimization_factor) * _time_at_first_plan;
-}
-
-int Planner::getTerminateSatCall() {
-    // Breaking out of first SAT call after some time
-    if (_sat_time_limit > 0 &&
-        _enc.getTimeSinceSatCallStart() > _sat_time_limit) {
-        return 1;
-    }
-    // Termination due to initial planning time limit (-T)
-    if (_time_at_first_plan == 0 &&
-        _init_plan_time_limit > 0 &&
-        Timer::elapsedSeconds() > _init_plan_time_limit) {
-        return 1;
-    }
-    // Plan length optimization limit hit
-    if (cancelOptimization()) {
-        return 1;
-    }
-    // Termination by interruption signal
-    if (SignalManager::isExitSet()) return 1;
-    return 0;
-}
 
 void Planner::printStatistics() {
     Log::i("# number of depths: %zu\n", _depth + 1);

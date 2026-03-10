@@ -42,10 +42,8 @@ void Parameters::setDefaults() {
     setParam("cleanup", "0"); // clean up before exit?
     setParam("co", "1"); // colored output
     setParam("cs", "0"); // check solvability (without assumptions)
-    setParam("d", "0"); // min depth to start SAT solving at
     setParam("D", "0"); // max depth (= num iterations)
     setParam("edo", "1"); // eliminate dominated operations
-    setParam("el", "0"); // extra layers after initial solution (-1: expand indefinitely)
     setParam("ip", "0"); // implicit primitiveness
     setParam("mp", "2"); // mine preconditions
     setParam("nps", "0"); // non-primitive fact supports
@@ -63,10 +61,8 @@ void Parameters::setDefaults() {
     setParam("sqq", "1"); // share q-constants
     setParam("srfa", "1"); // skip redundant frame axioms
     setParam("stats", "0"); // output domain statistics and exit
-    setParam("stl", "0"); // SAT time limit
     setParam("psr", "1"); // primitivize simple reductions
     setParam("svp", "0"); // set variable phases
-    setParam("T", "0"); // max. time (secs) for finding an initial plan
     setParam("tc", "1"); // tree conversion for DNF2CNF
     setParam("v", "2"); // verbosity
     setParam("aar", "1"); // acknowledge action repetitions
@@ -106,9 +102,7 @@ void Parameters::printUsage() {
     Log::i(" -co=<0|1>           Colored terminal output\n");
     Log::i(" -cs=<0|1>           Check solvability: When some layer is UNSAT, re-run SAT solver without assumptions\n");
     Log::i("                     to see whether the formula has become generally unsatisfiable\n");
-    Log::i(" -d=<depth>          Minimum depth to begin SAT solving at\n");
     Log::i(" -D=<depth>          Maximum depth to explore (0 : no limit)\n");
-    Log::i(" -el=<int>           Number of extra layers to encode after an initial solution was found (use with -of=...)\n");
     Log::i(" -ip=<0|1>           Implicit primitiveness instead of defining each op as primitive XOR nonprimitive\n");
     Log::i(" -mp=<0|1|2>         Mine preconditions for reductions from their (recursive) subtasks:\n");
     Log::i("                     0=none, 1=use mined prec. for instantiation only, 2=use mined prec. everywhere\n");
@@ -128,8 +122,6 @@ void Parameters::printUsage() {
     Log::i(" -sqq=<0|1>          Share q-constants among operations of a position if they have the same effective domain\n");
     Log::i(" -srfa=<0|1>         Skip redundant frame axioms\n");
     Log::i(" -stats=<0|1>        Output domain statistics and exit\n");
-    Log::i(" -stl=<limit>        SAT time limit: Set limit in seconds for a SAT solver call. Limit is discarded after first such interrupt.\n");
-    Log::i(" -T=<0|secs>         Try finding an initial plan for up to #secs (without optimization: total allowed runtime; 0: no limit)\n");
     Log::i(" -tc=<0|1>           Use tree conversion for DNF 2 CNF transformation instead of distributive law\n");
     Log::i(" -v=<verb>           Verbosity: 0=essential 1=warnings 2=information 3=verbose 4=debug\n");
     Log::i(" -vp=<0|1>           Verify plan (using pandaPIparser) before printing it\n");

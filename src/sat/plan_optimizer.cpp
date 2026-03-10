@@ -241,6 +241,18 @@ int PlanOptimizer::findMinBySat(int lower, int upper, std::function<int(int)> va
         }
     }
 
+    if (mode == TRANSIENT) {
+        _stats.begin(STAGE_PLANLENGTHCOUNTING);
+        for (int bound = originalUpper; bound > current; bound--) {
+            _sat.assume(-varMap(bound));
+        }
+        _stats.end(STAGE_PLANLENGTHCOUNTING);
+
+        Log::i("Recovering an optimal plan of length <= %i\n", current);
+        const int result = _enc.solve();
+        assert(result == 10);
+    }
+
     return current;
 }
 

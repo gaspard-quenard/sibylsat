@@ -30,8 +30,6 @@ private:
 
     size_t _new_init_pos = 0;
 
-    std::function<void()> _termination_callback;
-
     NodeHashSet<Substitution, Substitution::Hasher> _forbidden_substitutions;
     FlatHashSet<int> _new_fact_vars;
 
@@ -44,8 +42,6 @@ private:
     const bool _use_q_constant_mutexes;
     const bool _implicit_primitiveness;
 
-    float _sat_call_start_time;
-
     const bool _use_sibylsat_expansion;
 
     const bool _optimal;
@@ -56,11 +52,10 @@ private:
     NodeHashMap<USignature, int, USignatureHasher> _new_relevants_facts_to_encode;
 
 public:
-    Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, Position*& rootPosition, std::vector<Position*>& leafPositions, std::function<void()> terminationCallback) : 
+    Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, Position*& rootPosition, std::vector<Position*>& leafPositions) : 
             _params(params), _htn(htn), _analysis(analysis), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(Statistics::getInstance()),
             _sat(params), _vars(_params, _htn),
             _decoder(_htn, _root_position, _leaf_positions, _sat, _vars),
-            _termination_callback(terminationCallback),
             _use_q_constant_mutexes(_params.getIntParam("qcm") > 0), 
             _implicit_primitiveness(params.isNonzero("ip")),
             _use_sibylsat_expansion(params.isNonzero("sibylsat")),
@@ -71,9 +66,7 @@ public:
     void addAssumptionsPrimPlan(bool permanent = false, int assumptions_until = -1);
     void addUnitConstraint(int lit);
     
-    void setTerminateCallback(void * state, int (*terminate)(void * state));
     int solve();
-    float getTimeSinceSatCallStart();    
 
     void printFailedVars();
     void printSatisfyingAssignment();
@@ -81,7 +74,7 @@ public:
     Plan extractPlan() {
         return _decoder.extractPlan();
     }
-    std::vector<PlanItem> extractVirtualPlan() {
+    std::vector<PlanItem> extractAbstractPlan() {
         return _decoder.extractClassicalPlan(Decoder::ALL);
     }
     SatInterface& getSatInterface() {return _sat;}

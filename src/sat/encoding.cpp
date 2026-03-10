@@ -7,7 +7,6 @@
 #include "sat/binary_amo.h"
 #include "sat/dnf2cnf.h"
 #include "util/log.h"
-#include "util/timer.h"
 
 Position* Encoding::getLeftPosition(const Position& pos) const {
     size_t positionIndex = pos.getPositionIndex();
@@ -45,7 +44,6 @@ Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, Encoding
 
 void Encoding::encode(Position& newPos) {
     Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::CurrentLeaf);
-    _termination_callback();
 
     _stats.beginPosition();
     
@@ -1183,13 +1181,6 @@ void Encoding::propagateRelevantsFacts(Position& newPos) {
 
     encodeFrameAxioms(newPos, *env.left, env, /*onlyForNewRelevantsFacts=*/true);
 }
-
-
-
-void Encoding::setTerminateCallback(void * state, int (*terminate)(void * state)) {
-    _sat.setTerminateCallback(state, terminate);
-}
-
 void onClauseLearnt(void* state, int* cls) {
     std::string str = "";
     int i = 0; while (cls[i] != 0) str += std::to_string(cls[i++]) + " ";
@@ -1203,11 +1194,7 @@ int Encoding::solve() {
     if (_params.isNonzero("plc"))
         _sat.setLearnCallback(/*maxLength=*/100, this, onClauseLearnt);
 
-    _sat_call_start_time = Timer::elapsedSeconds();
     int result = _sat.solve();
-    _sat_call_start_time = 0;
-
-    _termination_callback();
 
     return result;
 }
@@ -1216,11 +1203,6 @@ void Encoding::addUnitConstraint(int lit) {
     _stats.begin(STAGE_FORBIDDENOPERATIONS);
     _sat.addClause(lit);
     _stats.end(STAGE_FORBIDDENOPERATIONS);
-}
-
-float Encoding::getTimeSinceSatCallStart() {
-    if (_sat_call_start_time == 0) return 0;
-    return Timer::elapsedSeconds() - _sat_call_start_time;
 }
 
 void Encoding::printFailedVars() {
