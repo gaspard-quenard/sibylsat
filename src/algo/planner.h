@@ -15,6 +15,7 @@
 #include "algo/retroactive_pruning.h"
 #include "algo/domination_resolver.h"
 #include "algo/plan_writer.h"
+#include "algo/tree_expander.h"
 #include "sat/encoding.h"
 #include "data/tdg.h"
 #include "algo/separate_tasks_scheduler.h"
@@ -42,7 +43,7 @@ private:
     RetroactivePruning _pruning;
     DominationResolver _domination_resolver;
     PlanWriter _plan_writer;
-    size_t _depth;
+    size_t _depth = 0;
 
     const int _verbosity;
 
@@ -69,6 +70,8 @@ private:
     size_t _num_instantiated_actions = 0;
     size_t _num_instantiated_reductions = 0;
 
+    TreeExpander _tree_expander;
+
 public:
     Planner(Parameters& params, HtnInstance& htn) : _params(params), _htn(htn), _stats(Statistics::getInstance()),
             _verbosity(params.getIntParam("v")),
@@ -83,7 +86,28 @@ public:
             _domination_resolver(_htn),
             _plan_writer(_htn, _params),
             _nonprimitive_support(_params.isNonzero("nps")), 
-            _optimization_factor(_params.getFloatParam("of")) {
+            _optimization_factor(_params.getFloatParam("of")),
+            _tree_expander(
+                    _params,
+                    _htn,
+                    _root_position,
+                    _leaf_positions,
+                    _analysis,
+                    _instantiator,
+                    _enc,
+                    _stats,
+                    _pruning,
+                    _domination_resolver,
+                    _tdg,
+                    _separate_tasks_scheduler,
+                    _depth,
+                    _use_sibylsat_expansion,
+                    _separate_tasks,
+                    _nonprimitive_support,
+                    _optimal,
+                    _num_instantiated_positions,
+                    _num_instantiated_actions,
+                    _num_instantiated_reductions) {
 
         // Mine additional preconditions for reductions from their subtasks
         PreconditionInference::infer(_htn, _analysis, PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
@@ -110,44 +134,42 @@ public:
     }
 
 private:
+    /**
+     * Expand the given leaves in the search tree.
+     */
+    void expandLeaves(const std::vector<Position*>& leavesToExpand);
 
-    void createInitialLeaves();
-    void expandLeaves(std::vector<Position*> nodesToDevelop);
-    void expandCurrentLeaves();
-    void refreshLeafMetadata();
-    void refreshLeafLeftPositions();
+    /**
+     * Launch two SAT calls:
+     * 1) The first one looks for the best primitive plan in the search tree, and returns its cost.
+     * 2) The second one looks for the best abstract plan in the search tree, and returns its cost.
 
-    bool findGloballyOptimalSolutionInCurrentTree();
-    bool findPrimitiveSolutionInCurrentTree();
-    bool findAbstractPlanToDevelop();
+     * Then compare the cost of the best primitive plan to the cost of the best abstract plan.
+     * The plan is globally optimal if its cost is equal to the cost of the best abstract plan in the search tree.
+     * Return true if the plan is globally optimal, false otherwise.
+     * If the plan is not globally optimal, fill `_sibylsat_nodes_to_develop` with the leaves 
+     * which contains a method in the optimal abstract plan.
+     */
+    bool findGloballyOptimalSolutionInSearchTree();
+
+    /**
+     * Launch a SAT call on the search tree for any primitive plan.
+     * Return true if a primitive plan is found, false otherwise.
+     */
+    bool findPrimitiveSolutionInSearchTree();
+
+    /**
+     * Launch a SAT call on the search tree for any abstract plan and select the leaves whose
+     * reductions must be expanded next (any leaves which contains a reduction in the abstract plan). 
+     * Return false if no abstract plan is found, true otherwise.
+     */
+    bool findAbstractPlanInSearchTree();
+
+    /**
+     * Fill `_sibylsat_nodes_to_develop` from an abstract plan, optionally
+     * restricted to its first `leafLimit` leaves.
+     */
     void collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>& abstractPlan, int leafLimit = -1);
-    
-    void createNextPosition(Position& newPos, Position* parent, Position* left);
-    void createNextPositionFromAbove(Position& newPos, Position& above);
-    void createNextPositionFromLeft(Position& newPos, Position& left);
-    void createNextPositionFromLeftSimplified(Position& newPos);
-
-    void incrementPosition(const Position& pos);
-
-    void addPreconditionConstraints(Position& pos);
-    void addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isActionRepetition);
-    std::optional<SubstitutionConstraint> addPreconditionBitVec(Position& pos, const USignature& op, const Signature& fact, bool addQFact = true);
-    
-    enum EffectMode { INDIRECT, DIRECT, DIRECT_NO_QFACT };
-    bool addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode);
-    void addGroundEffectBitVec(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode);
-    bool addPseudoGroundEffect(Position& pos, Position& left, const USignature& op, const Signature& fact, EffectMode mode);
-
-    std::optional<Reduction> createValidReduction(Position& pos, const USignature& rSig, const USignature& task);
-
-    void propagateInitialState(Position& newPos, const Position& above);
-    void propagateActions(Position& newPos, Position& above);
-    void propagateReductions(Position& newPos, Position& above);
-    std::vector<USignature> instantiateAllActionsOfTask(Position& pos, const USignature& task);
-    std::vector<USignature> instantiateAllReductionsOfTask(Position& pos, const USignature& task);
-    void initializeNextEffectsBitVec(Position& pos);
-    void initializeFactBitVec(Position& newPos, const int predId);
-    void addQConstantTypeConstraints(Position& pos, const USignature& op);
 
     void setSoftLitsForCurrentLeaves();
 

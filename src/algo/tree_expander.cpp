@@ -1,27 +1,59 @@
+#include <algorithm>
 #include <assert.h>
 
-#include "planner.h"
+#include "tree_expander.h"
 #include "util/log.h"
 
-void Planner::incrementPosition(const Position& pos) {
+TreeExpander::TreeExpander(
+        Parameters& params,
+        HtnInstance& htn,
+        Position*& rootPosition,
+        std::vector<Position*>& leafPositions,
+        FactAnalysis& analysis,
+        Instantiator& instantiator,
+        Encoding& enc,
+        Statistics& stats,
+        RetroactivePruning& pruning,
+        DominationResolver& dominationResolver,
+        std::optional<TDG>& tdg,
+        std::unique_ptr<SeparateTasksScheduler>& separateTasksScheduler,
+        size_t& depth,
+        bool useSibylsatExpansion,
+        bool separateTasks,
+        bool nonprimitiveSupport,
+        bool optimal,
+        size_t& numInstantiatedPositions,
+        size_t& numInstantiatedActions,
+        size_t& numInstantiatedReductions)
+        : _params(params), _htn(htn), _root_position(rootPosition), _leaf_positions(leafPositions),
+          _analysis(analysis), _instantiator(instantiator), _enc(enc), _stats(stats), _pruning(pruning),
+          _domination_resolver(dominationResolver), _tdg(tdg),
+          _separate_tasks_scheduler(separateTasksScheduler), _depth(depth),
+          _use_sibylsat_expansion(useSibylsatExpansion), _separate_tasks(separateTasks),
+          _nonprimitive_support(nonprimitiveSupport), _optimal(optimal),
+          _num_instantiated_positions(numInstantiatedPositions),
+          _num_instantiated_actions(numInstantiatedActions),
+          _num_instantiated_reductions(numInstantiatedReductions) {}
+
+void TreeExpander::incrementPosition(const Position& pos) {
     _num_instantiated_actions += pos.getActions().size();
     _num_instantiated_reductions += pos.getReductions().size();
     _num_instantiated_positions++;
 }
 
-void Planner::refreshLeafMetadata() {
+void TreeExpander::refreshLeafMetadata() {
     for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
         _leaf_positions[pos]->setPos(_depth, pos);
     }
 }
 
-void Planner::refreshLeafLeftPositions() {
+void TreeExpander::refreshLeafLeftPositions() {
     for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
         _leaf_positions[pos]->setLeftPosition(pos > 0 ? _leaf_positions[pos - 1] : nullptr);
     }
 }
 
-void Planner::createInitialLeaves() {
+void TreeExpander::createInitialLeaves() {
 
     const int initSize = 2;
     Log::i("Creating initial leaves of size %i\n", initSize);
@@ -75,7 +107,7 @@ void Planner::createInitialLeaves() {
     _enc.encode(*goalPosition);
 }
 
-void Planner::expandLeaves(std::vector<Position*> nodesToDevelop) {
+void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
     enum class LeafEncodingAction { NONE, FULL, NEW_RELEVANTS, EFFECTS_AND_FRAME, PROPAGATE_RELEVANTS };
 
     std::vector<Position*> currentLeaves = _leaf_positions;
@@ -290,7 +322,7 @@ void Planner::expandLeaves(std::vector<Position*> nodesToDevelop) {
     }
 }
 
-void Planner::createNextPosition(Position& newPos, Position* parent, Position* left) {
+void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left) {
     size_t pos = newPos.getPositionIndex();
 
     newPos.setPos(_depth, pos);
@@ -337,13 +369,13 @@ void Planner::createNextPosition(Position& newPos, Position* parent, Position* l
     }
 }
 
-void Planner::createNextPositionFromAbove(Position& newPos, Position& above) {
+void TreeExpander::createNextPositionFromAbove(Position& newPos, Position& above) {
     propagateActions(newPos, above);
     propagateReductions(newPos, above);
     addPreconditionConstraints(newPos);
 }
 
-void Planner::createNextPositionFromLeft(Position& newPos, Position& left) {
+void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) {
     assert(left.getLayerIndex() == newPos.getLayerIndex());
     assert(left.getPositionIndex()+1 == newPos.getPositionIndex());
 
@@ -387,14 +419,14 @@ void Planner::createNextPositionFromLeft(Position& newPos, Position& left) {
     }
 }
 
-void Planner::createNextPositionFromLeftSimplified(Position& newPos) {
+void TreeExpander::createNextPositionFromLeftSimplified(Position& newPos) {
     const BitVec& pos_facts_changed = newPos.getFactChangeBitVec(/*negated=*/false);
     const BitVec& neg_facts_changed = newPos.getFactChangeBitVec(/*negated=*/true);
     _analysis.addMultipleReachableFactsBitVec(pos_facts_changed, /*negated=*/false);
     _analysis.addMultipleReachableFactsBitVec(neg_facts_changed, /*negated=*/true);
 }
 
-void Planner::addPreconditionConstraints(Position& pos) {
+void TreeExpander::addPreconditionConstraints(Position& pos) {
     for (const auto& aSig : pos.getActions()) {
         const Action& a = _htn.getOpTable().getAction(aSig);
         bool isRepetition = _htn.isActionRepetition(aSig._name_id);
@@ -405,7 +437,7 @@ void Planner::addPreconditionConstraints(Position& pos) {
     }
 }
 
-void Planner::addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isRepetition) {
+void TreeExpander::addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isRepetition) {
     USignature constrOp = isRepetition ? USignature(_htn.getActionNameFromRepetition(op._name_id), op._args) : op;
 
     for (const Signature& fact : preconditions) {
@@ -433,7 +465,7 @@ void Planner::addPreconditionsAndConstraints(Position& pos, const USignature& op
     }
 }
 
-std::optional<SubstitutionConstraint> Planner::addPreconditionBitVec(Position& pos, const USignature& op, const Signature& fact, bool addQFact) {
+std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Position& pos, const USignature& op, const Signature& fact, bool addQFact) {
 
     const USignature& factAbs = fact.getUnsigned();
 
@@ -561,7 +593,7 @@ std::optional<SubstitutionConstraint> Planner::addPreconditionBitVec(Position& p
 }
 
 
-void Planner::addGroundEffectBitVec(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode) 
+void TreeExpander::addGroundEffectBitVec(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode) 
 {
     if (effects.count() == 0) return;
 
@@ -583,7 +615,7 @@ void Planner::addGroundEffectBitVec(Position& pos, const USignature& opSig, BitV
 }
 
 
-bool Planner::addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode) {
+bool TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode) {
     assert(pos.getPositionIndex() > 0);
 
     if (_analysis.isInvariantBitVec(predId, negated)) return true;
@@ -604,7 +636,7 @@ bool Planner::addGroundEffect(Position& pos, const USignature& opSig, int predId
 }
 
 
-bool Planner::addPseudoGroundEffect(Position& pos, Position& left, const USignature& opSig, const Signature& fact, EffectMode mode) {
+bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const USignature& opSig, const Signature& fact, EffectMode mode) {
     assert(pos.getPositionIndex() > 0);
     USignature factAbs = fact.getUnsigned();
     bool isQFact = _htn.hasQConstants(factAbs);
@@ -698,7 +730,7 @@ bool Planner::addPseudoGroundEffect(Position& pos, Position& left, const USignat
 }
 
 
-void Planner::propagateInitialState(Position& newPos, const Position& above) {
+void TreeExpander::propagateInitialState(Position& newPos, const Position& above) {
     assert(newPos.getLayerIndex() > 0);
     assert(newPos.getPositionIndex() == 0);
 
@@ -719,7 +751,7 @@ void Planner::propagateInitialState(Position& newPos, const Position& above) {
 
 }
 
-void Planner::propagateActions(Position& newPos, Position& above) {
+void TreeExpander::propagateActions(Position& newPos, Position& above) {
     size_t offset = newPos.getOffset();
     std::vector<USignature> actionsToPrune;
     size_t numActionsBefore = above.getActions().size();
@@ -761,7 +793,7 @@ void Planner::propagateActions(Position& newPos, Position& above) {
     }
 }
 
-void Planner::propagateReductions(Position& newPos, Position& above) {
+void TreeExpander::propagateReductions(Position& newPos, Position& above) {
     size_t offset = newPos.getOffset();
     NodeHashMap<USignature, USigSet, USignatureHasher> subtaskToParents;
     NodeHashSet<USignature, USignatureHasher> reductionsWithChildren;
@@ -836,7 +868,7 @@ void Planner::propagateReductions(Position& newPos, Position& above) {
     }
 }
 
-std::vector<USignature> Planner::instantiateAllActionsOfTask(Position& pos, const USignature& task) {
+std::vector<USignature> TreeExpander::instantiateAllActionsOfTask(Position& pos, const USignature& task) {
     std::vector<USignature> result;
 
     if (!_htn.isAction(task)) return result;
@@ -868,7 +900,7 @@ std::vector<USignature> Planner::instantiateAllActionsOfTask(Position& pos, cons
     return result;
 }
 
-std::vector<USignature> Planner::instantiateAllReductionsOfTask(Position& pos, const USignature& task) {
+std::vector<USignature> TreeExpander::instantiateAllReductionsOfTask(Position& pos, const USignature& task) {
     std::vector<USignature> result;
 
     if (!_htn.hasReductions(task._name_id)) return result;
@@ -906,7 +938,7 @@ std::vector<USignature> Planner::instantiateAllReductionsOfTask(Position& pos, c
     return result;
 }
 
-std::optional<Reduction> Planner::createValidReduction(Position& pos, const USignature& sig, const USignature& task) {
+std::optional<Reduction> TreeExpander::createValidReduction(Position& pos, const USignature& sig, const USignature& task) {
     std::optional<Reduction> rOpt;
 
     Reduction red = _htn.toReduction(sig._name_id, sig._args);
@@ -931,7 +963,7 @@ std::optional<Reduction> Planner::createValidReduction(Position& pos, const USig
     return rOpt;
 }
 
-void Planner::initializeNextEffectsBitVec(Position& newPos) {
+void TreeExpander::initializeNextEffectsBitVec(Position& newPos) {
     const USigSet* ops[2] = {&newPos.getActions(), &newPos.getReductions()};
     bool isAction = true;
     for (const auto& set : ops) {
@@ -964,7 +996,7 @@ void Planner::initializeNextEffectsBitVec(Position& newPos) {
     }
 }
 
-void Planner::initializeFactBitVec(Position& newPos, const int predId) {
+void TreeExpander::initializeFactBitVec(Position& newPos, const int predId) {
 
     const USignature& fact = _htn.getGroundPositiveFact(predId);
 
@@ -982,7 +1014,7 @@ void Planner::initializeFactBitVec(Position& newPos, const int predId) {
     }
 }
 
-void Planner::addQConstantTypeConstraints(Position& pos, const USignature& op) {
+void TreeExpander::addQConstantTypeConstraints(Position& pos, const USignature& op) {
     std::vector<TypeConstraint> cs = _htn.getQConstantTypeConstraints(op);
     for (const TypeConstraint& c : cs) {
         pos.addQConstantTypeConstraint(op, c);

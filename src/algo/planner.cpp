@@ -1,4 +1,5 @@
 
+#include <algorithm>
 #include <assert.h> 
 
 #include "planner.h"
@@ -10,7 +11,8 @@ int Planner::findPlan() {
     int iteration = 0;
     Log::i("Iteration %i.\n", iteration);
 
-    createInitialLeaves();
+    // Build the initial search tree before entering the search loop.
+    _tree_expander.createInitialLeaves();
 
     const int maxIterations = _params.getIntParam("D");
     bool solved = false;
@@ -20,14 +22,14 @@ int Planner::findPlan() {
         _sibylsat_nodes_to_develop.push_back(_leaf_positions[0]);
     }
     
-    // Main loop of the search. We keep expanding the tree until we find a solution, or reach the maximum depth limit
+    // Main loop of the search. We keep expanding the search tree until we find a solution, or reach the maximum iteration limit
     while (!solved) {
 
         iteration++;      
         Log::i("Iteration %i.\n", iteration);
 
         if (maxIterations != 0 && iteration > maxIterations) {
-            Log::e("Reached maximum depth limit (%i). Stopping search.\n", maxIterations);
+            Log::e("Reached maximum iteration limit (%i). Stopping search.\n", maxIterations);
             break;
         }
 
@@ -35,14 +37,21 @@ int Planner::findPlan() {
             _separate_tasks_scheduler->displayAdvancementBar();
         }
 
-        expandCurrentLeaves();
+        const std::vector<Position*>& leavesToExpand =
+                _use_sibylsat_expansion ? _sibylsat_nodes_to_develop : _leaf_positions;
 
-        solved = _optimal ? findGloballyOptimalSolutionInCurrentTree() : findPrimitiveSolutionInCurrentTree();
+        // Grow the search tree by expanding the leaves selected for this iteration.
+        expandLeaves(leavesToExpand);
+
+        // Then check if this search tree contains a solution (or a globally optimal solution if the optimal flag is on).
+        solved = _optimal ? findGloballyOptimalSolutionInSearchTree() : findPrimitiveSolutionInSearchTree();
         if (solved) {
             break;
         }
 
-        if (!_optimal && _use_sibylsat_expansion && !findAbstractPlanToDevelop()) {
+        // In SibylSat mode, a failed primitive solve is followed by an abstract
+        // plan extraction to decide which leaves should be expanded next.
+        if (!_optimal && _use_sibylsat_expansion && !findAbstractPlanInSearchTree()) {
             break;
         }
     }
@@ -57,21 +66,18 @@ int Planner::findPlan() {
         optimizeCurrentPlan();
     }
 
+    // Extract the plan from the SAT solver and output it.
     _plan = _enc.extractPlan();
     _plan_writer.outputPlan(_plan);
     printStatistics();    
     return 0;
 }
 
-void Planner::expandCurrentLeaves() {
-    if (_use_sibylsat_expansion) {
-        expandLeaves(_sibylsat_nodes_to_develop);
-    } else {
-        expandLeaves(_leaf_positions);
-    }
+void Planner::expandLeaves(const std::vector<Position*>& leavesToExpand) {
+    _tree_expander.expandLeaves(leavesToExpand);
 }
 
-bool Planner::findGloballyOptimalSolutionInCurrentTree() {
+bool Planner::findGloballyOptimalSolutionInSearchTree() {
     _enc.clearSoftLits();
     Log::i("Add weight for each operation of the current leaves\n");
     setSoftLitsForCurrentLeaves();
@@ -111,7 +117,7 @@ bool Planner::findGloballyOptimalSolutionInCurrentTree() {
     return false;
 }
 
-bool Planner::findPrimitiveSolutionInCurrentTree() {
+bool Planner::findPrimitiveSolutionInSearchTree() {
     if (_separate_tasks) {
         _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
     }
@@ -135,7 +141,7 @@ bool Planner::findPrimitiveSolutionInCurrentTree() {
     return false;
 }
 
-bool Planner::findAbstractPlanToDevelop() {
+bool Planner::findAbstractPlanInSearchTree() {
     Log::i("Failed to find a solution at depth %i. Trying to find an abstract plan...\n", _depth);
 
     if (_separate_tasks) {
