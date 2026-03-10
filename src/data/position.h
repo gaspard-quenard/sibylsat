@@ -35,11 +35,11 @@ private:
 
     Position* _parent_position = nullptr;
     std::vector<Position*> _children_positions;
+    Position* _left_position = nullptr;
 
     // Some useful attributes for sibylsat
     size_t _original_pos = -1;
     size_t _original_layer_idx = -1;
-    size_t _above_pos = -1;
 
     USigSet _actions;
     USigSet _reductions;
@@ -102,6 +102,8 @@ public:
     Position* getParentPosition() const { return _parent_position; }
     const std::vector<Position*>& getChildrenPositions() const { return _children_positions; }
     bool hasParentPosition() const { return _parent_position != nullptr; }
+    void setLeftPosition(Position* left) { _left_position = left; }
+    Position* getLeftPosition() const { return _left_position; }
 
     void addQFact(const USignature& qfact);
     void addTrueFact(const USignature& fact);
@@ -245,11 +247,8 @@ public:
 
     void setExpansionSize(size_t size) {_max_expansion_size = size;}
     void setOffset(size_t offset) {_offset = offset;}
-
-    void setAbovePos(size_t abovePos) {_above_pos = abovePos;}
     void setOriginalLayerIdx(size_t originalLayerIdx) {_original_layer_idx = originalLayerIdx;}
     void setOriginalPos(size_t originalPos) {_original_pos = originalPos;}
-    size_t getAbovePos() const {return _above_pos;}
 
     void setHeuristicValue(const USignature& reduction, int value) {
         assert(_reductions.count(reduction) || Log::e("Unknown reduction %s queried!\n", Names::to_string(reduction).c_str()));

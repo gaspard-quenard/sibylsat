@@ -67,7 +67,7 @@ public:
             _optimal(params.isNonzero("optimal")),
             _mutex_predicates(_params.isNonzero("mutex")) {}
 
-    void encode(Position& pos);
+    void encode(Position& pos, Position* previousLeaf);
     void addAssumptionsPrimPlan(bool permanent = false, int assumptions_until = -1);
     void addUnitConstraint(int lit);
     
@@ -89,10 +89,10 @@ public:
     /**
      * When using sibylsat expansion method. If the left position has been developped, we need to add the frame axioms, effects on this position and QfactSemantics (how those lifted effects can be decoded to a ground predicate)
      */
-    void encodeOnlyEffsAndFrameAxioms(Position& pos);
+    void encodeOnlyEffsAndFrameAxioms(Position& pos, Position* previousLeaf);
     void encodeNewRelevantsFacts(Position& initPos);
     void encodeFrameAxiomsForNewRelevantsFacts(Position& newPos, Position& left);
-    void propagateRelevantsFacts(Position& pos);
+    void propagateRelevantsFacts(Position& pos, Position* previousLeaf);
 
     const USignature getOpHoldingAt(const Position& pos);
     const USignature getDecodingOpHoldingAt(const Position& pos);
@@ -125,12 +125,12 @@ private:
     struct EncodingEnvironment {
         Position* left = nullptr;
         Position* above = nullptr;
-        Position* reuseAbove = nullptr;
+        Position* leftOfAbove = nullptr;
+        Position* reusedFacts = nullptr;
     };
 
-    Position* getLeftPosition(const Position& pos) const;
     Position* getAbovePosition(const Position& pos) const;
-    EncodingEnvironment buildEnvironment(Position& pos, bool reuseCurrentPosition = false) const;
+    EncodingEnvironment buildEnvironment(Position& pos, Position* previousLeaf, bool reuseCurrentPosition = false) const;
     void encodeOperationVariables(Position& pos);
     void encodeFactVariables(Position& pos, const EncodingEnvironment& env);
     void encodeFrameAxioms(Position& pos, Position& left, const EncodingEnvironment& env, bool onlyForNewRelevantsFacts = false);

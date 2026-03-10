@@ -9,29 +9,22 @@
 #include "util/log.h"
 #include "util/timer.h"
 
-Position* Encoding::getLeftPosition(const Position& pos) const {
-    size_t positionIndex = pos.getPositionIndex();
-    if (positionIndex == 0 || positionIndex > _leaf_positions.size()) {
-        return nullptr;
-    }
-    return _leaf_positions[positionIndex - 1];
-}
-
 Position* Encoding::getAbovePosition(const Position& pos) const {
     Position* parent = pos.getParentPosition();
     return parent == _root_position ? nullptr : parent;
 }
 
-Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, bool reuseCurrentPosition) const {
+Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, Position* previousLeaf, bool reuseCurrentPosition) const {
     Encoding::EncodingEnvironment env;
-    env.left = getLeftPosition(pos);
+    env.left = pos.getLeftPosition();
     env.above = getAbovePosition(pos);
-    env.reuseAbove = reuseCurrentPosition ? &pos : (pos.getOffset() == 0 ? env.above : nullptr);
+    env.leftOfAbove = previousLeaf;
+    env.reusedFacts = reuseCurrentPosition ? &pos : (pos.getOffset() == 0 ? env.above : nullptr);
     return env;
 }
 
-void Encoding::encode(Position& newPos) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos);
+void Encoding::encode(Position& newPos, Position* previousLeaf) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, previousLeaf);
     _termination_callback();
 
     _stats.beginPosition();
@@ -149,8 +142,8 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
     _stats.begin(STAGE_FACTVARENCODING);
 
     // Reuse ground fact variables from above position
-    if (newPos.getLayerIndex() > 0 && env.reuseAbove != nullptr) {
-        for (const auto& [factSig, factVar] : env.reuseAbove->getVariableTable(VarType::FACT)) {
+    if (newPos.getLayerIndex() > 0 && env.reusedFacts != nullptr) {
+        for (const auto& [factSig, factVar] : env.reusedFacts->getVariableTable(VarType::FACT)) {
             if (!_htn.hasQConstants(factSig)) newPos.setVariable(VarType::FACT, factSig, factVar);
         }
     }
@@ -206,7 +199,7 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
         if (newPos.hasVariable(VarType::FACT, qfact)) continue;
 
         // Reuse variable from above?
-        int aboveVar = env.reuseAbove != nullptr ? env.reuseAbove->getVariableOrZero(VarType::FACT, qfact) : 0;
+        int aboveVar = env.reusedFacts != nullptr ? env.reusedFacts->getVariableOrZero(VarType::FACT, qfact) : 0;
         if (aboveVar != 0) {
             // Reuse qfact variable from above
             newPos.setVariable(VarType::FACT, qfact, aboveVar);
@@ -261,7 +254,12 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encodin
 
     // Check if frame axioms can be skipped because
     // the above position had a superset of operations
-    bool skipRedundantFrameAxioms = false;
+    Position nullPos;
+    Position* leftOfAbove = env.leftOfAbove != nullptr ? env.leftOfAbove : &nullPos;
+    bool skipRedundantFrameAxioms = _params.isNonzero("srfa") && env.reusedFacts != nullptr
+        && !left.hasNonprimitiveOps() && !leftOfAbove->hasNonprimitiveOps()
+        && left.getActions().size()+left.getReductions().size()
+            <= leftOfAbove->getActions().size()+leftOfAbove->getReductions().size();
 
     // Retrieve supports from left position
     SupportsId* supp[2] = {&newPos.getNegFactSupportsId(), &newPos.getPosFactSupportsId()};
@@ -335,7 +333,7 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encodin
         // Skip frame axiom encoding if nothing can change
         if (var == factVar) continue; 
         // Skip frame axioms if they were already encoded
-        if (skipRedundantFrameAxioms && env.above != nullptr && env.above->hasVariable(VarType::FACT, fact)) continue;
+        if (skipRedundantFrameAxioms && env.reusedFacts->hasVariable(VarType::FACT, fact)) continue;
         // No primitive ops at this position: No need for encoding frame axioms
         if (!hasPrimitiveOps) continue;
         skipped--;
@@ -567,14 +565,13 @@ void Encoding::encodeQFactSemantics(Position& newPos, const Encoding::EncodingEn
                 continue;
 
             bool filterAbove = false;
-            // Carefull here, if we use sibylsat, the above position when we launch this function from 
-            // the encodeOnlyEffsAndFrameAxioms function, will be itself. So obviously, it will have the 
-            // QFactDecodings for every Q facts of the current position (since it is the same position).
+            // When we enrich a carried leaf in the SibylSat path, we reuse the leaf's
+            // own fact variables and must avoid re-encoding semantics already present there.
             if (!encodeOnlyEffectQFacts || !_use_sibylsat_expansion) {
                 if (!_new_fact_vars.count(qfactVar)) {
-                    if (env.reuseAbove != nullptr
-                            && env.reuseAbove->getVariableOrZero(VarType::FACT, qfactSig) == qfactVar
-                            && env.reuseAbove->hasQFactDecodings(qfactSig, negated)) {
+                    if (env.reusedFacts != nullptr
+                            && env.reusedFacts->getVariableOrZero(VarType::FACT, qfactSig) == qfactVar
+                            && env.reusedFacts->hasQFactDecodings(qfactSig, negated)) {
                         filterAbove = true;
 
                         /*
@@ -598,7 +595,7 @@ void Encoding::encodeQFactSemantics(Position& newPos, const Encoding::EncodingEn
                 
                 int decFactVar = newPos.getVariableOrZero(VarType::FACT, decFactSig);
                 if (decFactVar == 0) continue;
-                if (filterAbove && env.reuseAbove->getQFactDecodings(qfactSig, negated).count(decFactSig)) continue;
+                if (filterAbove && env.reusedFacts->getQFactDecodings(qfactSig, negated).count(decFactSig)) continue;
 
                 // Assemble list of substitution variables
                 for (size_t i = 0; i < qfactSig._args.size(); i++) {
@@ -904,9 +901,9 @@ void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvi
 
     FlatHashSet<int> groupsDone;
 
-    if (pos.getOffset() == 0 && env.above != nullptr) {
-        // Do not add all the groups already done by the parent if we are the first child (since we will reuse the same predicates)
-        for (const int& group_mutex: env.above->getGroupMutexEncoded()) {
+    if (env.reusedFacts != nullptr) {
+        // Do not add all the groups already done by the reused fact source.
+        for (const int& group_mutex: env.reusedFacts->getGroupMutexEncoded()) {
             groupsDone.insert(group_mutex);
         }
     }
@@ -985,8 +982,8 @@ void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvi
     _stats.end(STAGE_MUTEX);
 }
 
-void Encoding::encodeOnlyEffsAndFrameAxioms(Position& newPos) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos, /*reuseCurrentPosition=*/true);
+void Encoding::encodeOnlyEffsAndFrameAxioms(Position& newPos, Position* previousLeaf) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, previousLeaf, /*reuseCurrentPosition=*/true);
     assert(env.left != nullptr);
     encodeFactVariables(newPos, env);
 
@@ -1026,7 +1023,8 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
             auto [methodPos, methodSig] = methodsToCheck.front();
             methodsToCheck.pop();
 
-            Position* parentPos = getAbovePosition(*methodPos);
+            Position* parentPos = methodPos->getParentPosition();
+            if (parentPos == _root_position) parentPos = nullptr;
             if (parentPos == nullptr) continue;
             if (!methodPos->getPredecessors().count(methodSig)) continue;
 
@@ -1152,8 +1150,8 @@ void Encoding::encodeNewRelevantsFacts(Position& initPos) {
 }
 
 
-void Encoding::propagateRelevantsFacts(Position& newPos) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos);
+void Encoding::propagateRelevantsFacts(Position& newPos, Position* previousLeaf) {
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, previousLeaf);
 
     if (_new_relevants_facts_to_encode.empty()) {
         return;
@@ -1246,7 +1244,7 @@ const USignature Encoding::getOpHoldingAt(const Position& position) {
 }
 
 void Encoding::printStatementsAtPosition(const Position& newPos) {
-    Position* left = getLeftPosition(newPos);
+    Position* left = newPos.getLeftPosition();
     Log::i("STATE AT (%i,%i) (original: %i,%i)\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex(), (int) newPos.getOriginalLayerIndex(), (int) newPos.getOriginalPositionIndex());
     for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::FACT)) {
         if (!_htn.isFullyGround(sig) || _htn.hasQConstants(sig)) continue; // skip non-ground facts)

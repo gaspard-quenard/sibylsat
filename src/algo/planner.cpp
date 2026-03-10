@@ -343,8 +343,10 @@ void Planner::createInitialLeaves() {
 
     Position* rootReductionPosition = new Position();
     rootReductionPosition->setParentPosition(_root_position);
+    rootReductionPosition->setLeftPosition(nullptr);
     Position* goalPosition = new Position();
     goalPosition->setParentPosition(_root_position);
+    goalPosition->setLeftPosition(rootReductionPosition);
 
     _leaf_positions = {rootReductionPosition, goalPosition};
     refreshLeafMetadata();
@@ -385,13 +387,14 @@ void Planner::createInitialLeaves() {
     rootReductionPosition->clearAfterInstantiation();
     goalPosition->clearAfterInstantiation();
 
-    _enc.encode(*rootReductionPosition);
-    _enc.encode(*goalPosition);
+    _enc.encode(*rootReductionPosition, /*previousLeaf=*/nullptr);
+    _enc.encode(*goalPosition, /*previousLeaf=*/nullptr);
 }
 
 void Planner::expandAllLeaves() {
 
     std::vector<Position*> currentLeaves = _leaf_positions;
+    std::vector<size_t> nextLeafStarts(currentLeaves.size(), 0);
     size_t nextLeafCount = 0;
     for (Position* leaf : currentLeaves) {
         nextLeafCount += leaf->getMaxExpansionSize();
@@ -406,6 +409,7 @@ void Planner::expandAllLeaves() {
     Log::i("Instantiating ...\n");
     _stats.beginTiming(TimingStage::EXPANSION);
     for (_old_pos = 0; _old_pos < currentLeaves.size(); _old_pos++) {
+        nextLeafStarts[_old_pos] = _pos;
         Position& above = *currentLeaves[_old_pos];
         size_t maxOffset = above.getMaxExpansionSize();
 
@@ -415,6 +419,7 @@ void Planner::expandAllLeaves() {
             _leaf_positions.push_back(current);
             current->setPos(_depth, _pos);
             Position* left = _pos > 0 ? _leaf_positions[_pos-1] : nullptr;
+            current->setLeftPosition(left);
             createNextPosition(*current, &above, _old_pos, left);
             Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
                     current->getReductions().size(),
@@ -437,9 +442,15 @@ void Planner::expandAllLeaves() {
 
     Log::i("Encoding ...\n");
     _stats.beginTiming(TimingStage::ENCODING);
-    for (Position* leaf : _leaf_positions) {
-        Log::v("- Position (%i,%i)\n", _depth, leaf->getPositionIndex());
-        _enc.encode(*leaf);
+    for (_old_pos = 0; _old_pos < currentLeaves.size(); _old_pos++) {
+        Position* previousLeaf = _old_pos > 0 ? currentLeaves[_old_pos - 1] : nullptr;
+        size_t newPos = nextLeafStarts[_old_pos];
+        size_t maxOffset = currentLeaves[_old_pos]->getMaxExpansionSize();
+        for (size_t offset = 0; offset < maxOffset; offset++) {
+            Position& leaf = *_leaf_positions[newPos + offset];
+            Log::v("- Position (%i,%i)\n", _depth, leaf.getPositionIndex());
+            _enc.encode(leaf, previousLeaf);
+        }
     }
     _stats.endTiming(TimingStage::ENCODING);
 }
@@ -486,6 +497,7 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
                 nextLeafStarts[_old_pos] = _pos;
                 Position* carriedLeaf = currentLeaves[_old_pos];
                 carriedLeaf->setPos(_depth, _pos);
+                carriedLeaf->setLeftPosition(_pos > 0 ? _leaf_positions[_pos - 1] : nullptr);
                 _leaf_positions.push_back(carriedLeaf);
                 _pos++;
             }
@@ -505,6 +517,7 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
 
             Position* newPosPtr = currentLeaves[_old_pos];
             newPosPtr->setPos(_depth, _pos);
+            newPosPtr->setLeftPosition(_pos > 0 ? _leaf_positions[_pos - 1] : nullptr);
             _leaf_positions.push_back(newPosPtr);
             Position& newPos = *newPosPtr;
 
@@ -550,6 +563,7 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
                 _leaf_positions.push_back(current);
                 current->setPos(_depth, _pos);
                 Position* left = _pos > 0 ? _leaf_positions[_pos-1] : nullptr;
+                current->setLeftPosition(left);
                 createNextPosition(*current, currentLeaves[_old_pos], _old_pos, left);
                 incrementPosition(*current);
             }
@@ -572,6 +586,7 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
     _stats.beginTiming(TimingStage::ENCODING);
     bool encodeOnlyEffsAndFA = false;
     for (_old_pos = init_pos_encoding; _old_pos < currentLeaves.size(); _old_pos++) {
+        Position* previousLeaf = _old_pos > 0 ? currentLeaves[_old_pos - 1] : nullptr;
 
         if (_old_pos == init_pos_encoding && !positionsToDevelop.count(_old_pos)) {
             _enc.encodeNewRelevantsFacts(*_leaf_positions[nextLeafStarts[init_pos_encoding]]);
@@ -581,16 +596,16 @@ void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
             size_t newPos = nextLeafStarts[_old_pos];
             size_t maxOffset = currentLeaves[_old_pos]->getMaxExpansionSize();
             for (size_t offset = 0; offset < maxOffset; offset++) {
-                _enc.encode(*_leaf_positions[newPos + offset]);
+                _enc.encode(*_leaf_positions[newPos + offset], previousLeaf);
             }
             encodeOnlyEffsAndFA = true;
 
         } else if (encodeOnlyEffsAndFA) {
-            _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[nextLeafStarts[_old_pos]]);
+            _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[nextLeafStarts[_old_pos]], previousLeaf);
             encodeOnlyEffsAndFA = false;
         }
         else if (_old_pos != init_pos_encoding) {
-            _enc.propagateRelevantsFacts(*_leaf_positions[nextLeafStarts[_old_pos]]);
+            _enc.propagateRelevantsFacts(*_leaf_positions[nextLeafStarts[_old_pos]], previousLeaf);
         }
     }
     _stats.endTiming(TimingStage::ENCODING);
@@ -608,7 +623,6 @@ void Planner::createNextPosition(Position& newPos, Position* parent, size_t pare
     // Useful informations for sibylsat expansion
     newPos.setPos(_depth, _pos);
     if (parent != nullptr) {
-        newPos.setAbovePos(parentPos);
         newPos.setParentPosition(parent);
     }
     newPos.setOriginalLayerIdx(_depth);
