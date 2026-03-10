@@ -2,7 +2,7 @@
 #ifndef DOMPASCH_LILOTANE_PLAN_OPTIMIZER_H
 #define DOMPASCH_LILOTANE_PLAN_OPTIMIZER_H
 
-#include "data/layer.h"
+#include "data/position.h"
 #include "data/htn_instance.h"
 #include "data/plan.h"
 #include "sat/sat_interface.h"
@@ -13,14 +13,14 @@ class PlanOptimizer {
 
 private:
     HtnInstance& _htn;
-    std::vector<Layer*>& _layers;
+    std::vector<Position*>& _leaf_positions;
     Encoding& _enc;
     SatInterface& _sat;
     Statistics& _stats;
 
 public:
-    PlanOptimizer(HtnInstance& htn, std::vector<Layer*>& layers, Encoding& enc) : 
-            _htn(htn), _layers(layers), _enc(enc), 
+    PlanOptimizer(HtnInstance& htn, std::vector<Position*>& leafPositions, Encoding& enc) : 
+            _htn(htn), _leaf_positions(leafPositions), _enc(enc), 
             _sat(_enc.getSatInterface()), _stats(Statistics::getInstance()) {}
 
     enum ConstraintAddition { TRANSIENT, PERMANENT };

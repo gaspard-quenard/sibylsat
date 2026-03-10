@@ -3,8 +3,7 @@
 
 void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition mode) {
 
-    int layerIdx = _layers.size()-1;
-    Layer& l = *_layers.at(layerIdx);
+    const int depth = _leaf_positions.empty() ? 0 : _leaf_positions.front()->getLayerIndex();
     int currentPlanLength = upperBound;
     Log::v("PLO BEGIN %i\n", currentPlanLength);
 
@@ -16,24 +15,25 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
     Log::d("VARNAME %i (plan_length_equals %i %i)\n", planLengthVars[0], 0, 0);
     // At position zero, the plan length is always equal to zero
     _sat.addClause(planLengthVars[0]);
-    for (size_t pos = 0; pos+1 < l.size(); pos++) {
+    for (size_t pos = 0; pos + 1 < _leaf_positions.size(); pos++) {
+        Position& leaf = *_leaf_positions[pos];
 
         // Collect sets of potential operations
         FlatHashSet<int> emptyActions, actualActions;
-        for (const auto& aSig : l.at(pos).getActions()) {
+        for (const auto& aSig : leaf.getActions()) {
             Log::d("PLO %i %s?\n", pos, TOSTR(aSig));
-            int aVar = l.at(pos).getVariable(VarType::OP, aSig);
+            int aVar = leaf.getVariable(VarType::OP, aSig);
             if (isEmptyAction(aSig)) {
                 emptyActions.insert(aVar);
             } else {
                 actualActions.insert(aVar);
             }
         }
-        for (const auto& rSig : l.at(pos).getReductions()) {
+        for (const auto& rSig : leaf.getReductions()) {
             Log::d("PLO %i %s?\n", pos, TOSTR(rSig));
             if (_htn.getOpTable().getReduction(rSig).getSubtasks().size() == 0) {
                 // Empty reduction
-                emptyActions.insert(l.at(pos).getVariable(VarType::OP, rSig));
+                emptyActions.insert(leaf.getVariable(VarType::OP, rSig));
             }
         }
 
@@ -147,13 +147,13 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
         Log::v("Position %i: Plan length bounds [%i,%i]\n", pos, minPlanLength, maxPlanLength);
     }
 
-    Log::i("Tightened initial plan length bounds at layer %i: [0,%i] => [%i,%i]\n",
-            layerIdx, l.size()-1, minPlanLength, maxPlanLength);
+    Log::i("Tightened initial plan length bounds at depth %i: [0,%zu] => [%i,%i]\n",
+            depth, _leaf_positions.empty() ? 0U : _leaf_positions.size() - 1, minPlanLength, maxPlanLength);
     assert((int)planLengthVars.size() == maxPlanLength-minPlanLength+1 || Log::e("%i != %i-%i+1\n", planLengthVars.size(), maxPlanLength, minPlanLength));
     
     // Add primitiveness of all positions at the final layer
     // as unit literals (instead of assumptions)
-    _enc.addAssumptionsPrimPlan(layerIdx, /*permanent=*/mode == ConstraintAddition::PERMANENT);
+    _enc.addAssumptionsPrimPlan(/*permanent=*/mode == ConstraintAddition::PERMANENT);
     _stats.end(STAGE_PLANLENGTHCOUNTING);
 
     int curr = currentPlanLength;

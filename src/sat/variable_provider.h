@@ -3,15 +3,13 @@
 #define DOMPASCH_LILOTANE_VARIABLE_PROVIDER_H
 
 #include "data/htn_instance.h"
-#include "data/layer.h"
+#include "data/position.h"
 #include "util/params.h"
 
 class VariableProvider {
 
 private:
     HtnInstance& _htn;
-    std::vector<Layer*>& _layers;
-    
     NodeHashMap<USignature, int, USignatureHasher> _substitution_variables;
     USignature _sig_primitive;
     USignature _sig_substitution;
@@ -20,19 +18,15 @@ private:
     
 public:
 
-    VariableProvider(Parameters& params, HtnInstance& htn, std::vector<Layer*>& layers) : _htn(htn), _layers(layers) {
+    VariableProvider(Parameters& params, HtnInstance& htn) : _htn(htn) {
         _sig_primitive = USignature(_htn.nameId("__PRIMITIVE___"), std::vector<int>());
         _substitute_name_id = _htn.nameId("__SUBSTITUTE___");
         _sig_substitution = USignature(_substitute_name_id, std::vector<int>(2));
         VariableDomain::init(params);
     }
 
-    inline bool isEncoded(VarType type, int layer, int pos, const USignature& sig) {
-        return _layers.at(layer)->at(pos).hasVariable(type, sig);
-    }
-
-    inline int getVariable(VarType type, int layer, int pos, const USignature& sig) {
-        return getVariable(type, _layers[layer]->at(pos), sig);
+    inline bool isEncoded(VarType type, const Position& pos, const USignature& sig) {
+        return pos.hasVariable(type, sig);
     }
 
     inline int getVariable(VarType type, const Position& pos, const USignature& sig) {
@@ -73,11 +67,11 @@ public:
         return var;
     }
 
-    int encodeVarPrimitive(int layer, int pos) {
-        return encodeVariable(VarType::OP, _layers.at(layer)->at(pos), _sig_primitive);
+    int encodeVarPrimitive(Position& pos) {
+        return encodeVariable(VarType::OP, pos, _sig_primitive);
     }
-    int getVarPrimitiveOrZero(int layer, int pos) {
-        return _layers.at(layer)->at(pos).getVariableOrZero(VarType::OP, _sig_primitive);
+    int getVarPrimitiveOrZero(const Position& pos) {
+        return pos.getVariableOrZero(VarType::OP, _sig_primitive);
     }
 
     bool isQConstantEqualityEncoded(int qconst1, int qconst2) {

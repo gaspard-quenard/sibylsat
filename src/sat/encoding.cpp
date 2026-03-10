@@ -9,30 +9,53 @@
 #include "util/log.h"
 #include "util/timer.h"
 
-void Encoding::encode(size_t layerIdx, size_t pos) {
+namespace {
+Position* getSemanticParent(Position* rootPosition, Position& position) {
+    Position* parent = position.getParentPosition();
+    return parent == rootPosition ? nullptr : parent;
+}
+
+Position* getLeftLeaf(const std::vector<Position*>& leafPositions, const Position& position) {
+    size_t pos = position.getPositionIndex();
+    if (pos == 0 || pos > leafPositions.size()) {
+        return nullptr;
+    }
+    return leafPositions[pos - 1];
+}
+
+size_t getChildOffset(const Position& position) {
+    Position* parent = position.getParentPosition();
+    if (parent == nullptr) {
+        return 0;
+    }
+    const auto& children = parent->getChildrenPositions();
+    for (size_t idx = 0; idx < children.size(); idx++) {
+        if (children[idx] == &position) {
+            return idx;
+        }
+    }
+    return 0;
+}
+}
+
+void Encoding::encode(Position& newPos) {
     _termination_callback();
 
     _stats.beginPosition();
 
-    _layer_idx = layerIdx;
-    _pos = pos;
+    _depth = newPos.getLayerIndex();
+    _pos = newPos.getPositionIndex();
 
     // Calculate relevant environment of the position
     Position NULL_POS;
     NULL_POS.setPos(-1, -1);
-    Layer& newLayer = *_layers.at(layerIdx);
-    Position& newPos = newLayer[pos];
-    bool hasLeft = pos > 0;
-    Position& left = (hasLeft ? newLayer[pos-1] : NULL_POS);
-    bool hasAbove = layerIdx > 0;
-    _offset = 0, _old_pos = 0;
-    if (hasAbove) {
-        const Layer& oldLayer = *_layers.at(layerIdx-1);
-        while (_old_pos+1 < oldLayer.size() && oldLayer.getSuccessorPos(_old_pos+1) <= pos) 
-            _old_pos++;
-        _offset = pos - oldLayer.getSuccessorPos(_old_pos);
-    }
-    Position& above = (hasAbove ? (*_layers.at(layerIdx-1))[_old_pos] : NULL_POS);
+    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
+    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
+    Position* abovePtr = getSemanticParent(_root_position, newPos);
+    _above_position = abovePtr;
+    _offset = abovePtr != nullptr ? getChildOffset(newPos) : 0;
+    _old_pos = abovePtr != nullptr ? abovePtr->getPositionIndex() : 0;
+    Position& above = (abovePtr != nullptr ? *abovePtr : NULL_POS);
     
     // 1st pass over all operations (actions and reductions): 
     // encode as variables, define primitiveness
@@ -124,7 +147,7 @@ void Encoding::encodeOperationVariables(Position& newPos) {
         return;
     }
 
-    int varPrim = _vars.encodeVarPrimitive(newPos.getLayerIndex(), newPos.getPositionIndex());
+    int varPrim = _vars.encodeVarPrimitive(newPos);
 
     _stats.begin(STAGE_REDUCTIONCONSTRAINTS);
     if (_primitive_ops.empty()) {
@@ -239,7 +262,7 @@ void Encoding::encodeFactVariables(Position& newPos, Position& left, Position& a
                     // Variable is already encoded. If the variable is new, constrain it.
                     if (_new_fact_vars.count(var)) _sat.addClause((i == 0 ? 1 : -1) * var);
                 }
-                Log::d("(%i,%i) DEFFACT %s\n", _layer_idx, _pos, TOSTR(factSig));
+                Log::d("(%i,%i) DEFFACT %s\n", _depth, _pos, TOSTR(factSig));
             }
         }
         negated = true;
@@ -259,17 +282,13 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, bool onlyForN
 
     int layerIdx = newPos.getLayerIndex();
     int pos = newPos.getPositionIndex();
-    int prevVarPrim = _vars.getVarPrimitiveOrZero(layerIdx, pos-1);
+    int prevVarPrim = _vars.getVarPrimitiveOrZero(left);
 
     // Check if frame axioms can be skipped because
     // the above position had a superset of operations
     // Position& above = layerIdx > 0 ? _layers[layerIdx-1]->at(_old_pos) : NULL_POS;
-    Position& above = newPos.getOriginalLayerIndex() > 0 ? _layers[newPos.getOriginalLayerIndex() - 1]->at(newPos.getAbovePos()) : NULL_POS;
-    // Position& leftOfAbove = layerIdx > 0 && _old_pos > 0 ? _layers[layerIdx-1]->at(_old_pos-1) : NULL_POS;
-    Position& leftOfAbove = newPos.getOriginalLayerIndex() > 0 && newPos.getAbovePos() > 0 ? _layers[newPos.getOriginalLayerIndex() - 1]->at(newPos.getAbovePos() - 1) : NULL_POS;
-    bool skipRedundantFrameAxioms = _params.isNonzero("srfa") && _offset == 0
-        && !left.hasNonprimitiveOps() && !leftOfAbove.hasNonprimitiveOps() 
-        && left.getActions().size()+left.getReductions().size() <= leftOfAbove.getActions().size()+leftOfAbove.getReductions().size();
+    Position& above = newPos.getParentPosition() != nullptr ? *newPos.getParentPosition() : NULL_POS;
+    bool skipRedundantFrameAxioms = false;
 
     // Retrieve supports from left position
     SupportsId* supp[2] = {&newPos.getNegFactSupportsId(), &newPos.getPosFactSupportsId()};
@@ -455,7 +474,7 @@ void Encoding::encodeOperationConstraints(Position& newPos) {
 
         // Preconditions
         for (const Signature& pre : _htn.getOpTable().getAction(aSig).getPreconditions()) {
-            if (!_vars.isEncoded(VarType::FACT, layerIdx, pos, pre._usig)) continue;
+            if (!_vars.isEncoded(VarType::FACT, newPos, pre._usig)) continue;
             _sat.addClause(-aVar, (pre._negated?-1:1)*_vars.getVariable(VarType::FACT, newPos, pre._usig));
         }
     }
@@ -469,7 +488,7 @@ void Encoding::encodeOperationConstraints(Position& newPos) {
 
         // Preconditions
         for (const Signature& pre : _htn.getOpTable().getReduction(rSig).getPreconditions()) {
-            if (!_vars.isEncoded(VarType::FACT, layerIdx, pos, pre._usig)) continue;
+            if (!_vars.isEncoded(VarType::FACT, newPos, pre._usig)) continue;
             _sat.addClause(-rVar, (pre._negated?-1:1)*_vars.getVariable(VarType::FACT, newPos, pre._usig));
         }
     }
@@ -545,10 +564,13 @@ void Encoding::encodeSubstitutionVars(const USignature& opSig, int opVar, int ar
 
 void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFacts) {
     static Position NULL_POS;
+    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
+    Position& left = leftPtr != nullptr ? *leftPtr : NULL_POS;
+    Position* abovePtr = (_offset == 0) ? _above_position : nullptr;
+    Position& above = abovePtr != nullptr ? *abovePtr : NULL_POS;
 
     USigSet qfactsEffsFromLeft;
     if (encodeOnlyEffectQFacts) {
-        Position& left = _layers[_layer_idx]->at(_pos-1);
         for (const auto& aSig : left.getActions()) {
             if (_htn.isActionRepetition(aSig._name_id)) continue;
             const SigSet& effects = _htn.getOpTable().getAction(aSig).getEffects();
@@ -582,13 +604,12 @@ void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFact
                 continue;
 
             bool filterAbove = false;
-            Position& above = _offset == 0 && _layer_idx > 0 ? _layers[_layer_idx-1]->at(_old_pos) : NULL_POS;
             // Carefull here, if we use sibylsat, the above position when we launch this function from 
             // the encodeOnlyEffsAndFrameAxioms function, will be itself. So obviously, it will have the 
             // QFactDecodings for every Q facts of the current position (since it is the same position).
             if (!encodeOnlyEffectQFacts || !_use_sibylsat_expansion) {
                 if (!_new_fact_vars.count(qfactVar)) {
-                    if (_offset == 0 && _layer_idx > 0 && above.getVariableOrZero(VarType::FACT, qfactSig) == qfactVar
+                    if (abovePtr != nullptr && above.getVariableOrZero(VarType::FACT, qfactSig) == qfactVar
                                     && above.hasQFactDecodings(qfactSig, negated)) {
                         filterAbove = true;
 
@@ -601,8 +622,7 @@ void Encoding::encodeQFactSemantics(Position& newPos, bool encodeOnlyEffectQFact
                         */
 
                     }
-                    if (!filterAbove && _pos > 0) {
-                        Position& left = _layers[_layer_idx]->at(_pos-1);
+                    if (!filterAbove && leftPtr != nullptr) {
                         if (left.getVariableOrZero(VarType::FACT, qfactSig) == qfactVar)
                             continue;
                     }
@@ -650,7 +670,7 @@ void Encoding::encodeActionEffects(Position& newPos, Position& left) {
         const SigSet& effects = _htn.getOpTable().getAction(aSig).getEffects();
 
         for (const Signature& eff : effects) {
-            if (!_vars.isEncoded(VarType::FACT, _layer_idx, _pos, eff._usig)) continue;
+            if (!_vars.isEncoded(VarType::FACT, newPos, eff._usig)) continue;
 
             std::set<std::set<int>> unifiersDnf;
             bool unifiedUnconditionally = false;
@@ -658,7 +678,7 @@ void Encoding::encodeActionEffects(Position& newPos, Position& left) {
                 for (const auto& posEff : effects) {
                     if (posEff._negated) continue;
                     if (posEff._usig._name_id != eff._usig._name_id) continue;
-                    if (!_vars.isEncoded(VarType::FACT, _layer_idx, _pos, posEff._usig)) continue;
+                    if (!_vars.isEncoded(VarType::FACT, newPos, posEff._usig)) continue;
 
                     bool fits = true;
                     std::set<int> s;
@@ -882,23 +902,22 @@ int Encoding::encodeQConstEquality(int q1, int q2) {
     return _vars.getQConstantEqualityVar(q1, q2);
 }
 
-void Encoding::addAssumptionsPrimPlan(int layerIdx, bool permanent, int assumptions_until) {
-    Layer& l = *_layers.at(layerIdx);
+void Encoding::addAssumptionsPrimPlan(bool permanent, int assumptions_until) {
     if (_implicit_primitiveness) {
         _stats.begin(STAGE_ACTIONCONSTRAINTS);
-        for (size_t pos = 0; pos < l.size(); pos++) {
+        for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
             if (pos == assumptions_until) break;
-            _sat.appendClause(-_vars.encodeVarPrimitive(layerIdx, pos));
+            _sat.appendClause(-_vars.encodeVarPrimitive(*_leaf_positions[pos]));
             for (int var : _primitive_ops) _sat.appendClause(var);
             _sat.endClause();
         }
         _stats.end(STAGE_ACTIONCONSTRAINTS);
     }
     _stats.begin(STAGE_ASSUMPTIONS);
-    for (size_t pos = 0; pos < l.size(); pos++) {
+    for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
         if (pos == assumptions_until) break;
         
-        int v = _vars.getVarPrimitiveOrZero(layerIdx, pos);
+        int v = _vars.getVarPrimitiveOrZero(*_leaf_positions[pos]);
         if (v != 0) {
             if (permanent) _sat.addClause(v);
             else _sat.assume(v);
@@ -934,7 +953,6 @@ void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& po
 
             mutex.clear();
             mutex.reserve(_htn._sas_plus->getPredsInGroup(group_mutex).size());
-            int num_mutex = 0;
 
             bool groupIsFullyDefined = true;
 
@@ -952,11 +970,11 @@ void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& po
                 }
 
                 // Log::i("Encode mutex for %s and %s\n", TOSTR(fact), TOSTR(mutexFact));
-                
-                mutex[num_mutex] = otherFactVar;
-                num_mutex++;
+
+                mutex.push_back(otherFactVar);
             }
 
+            int num_mutex = mutex.size();
             if (num_mutex <= 1) continue;
 
             // Encode this mutex group 
@@ -997,27 +1015,20 @@ void Encoding::encodeMutexPredicates(Position& pos, Position& above, USigSet& po
     _stats.end(STAGE_MUTEX);
 }
 
-void Encoding::encodeOnlyEffsAndFrameAxioms(size_t layerIdx, size_t pos) {
+void Encoding::encodeOnlyEffsAndFrameAxioms(Position& newPos) {
 
-    _layer_idx = layerIdx;
-    _pos = pos;
+    _depth = newPos.getLayerIndex();
+    _pos = newPos.getPositionIndex();
 
     // Calculate relevant environment of the position
     Position NULL_POS;
     NULL_POS.setPos(-1, -1);
-    Layer& newLayer = *_layers.at(layerIdx);
-    Position& newPos = newLayer[pos];
-    bool hasLeft = pos > 0;
-    Position& left = (hasLeft ? newLayer[pos-1] : NULL_POS);
-    bool hasAbove = layerIdx > 0;
-        _offset = 0, _old_pos = 0;
-    if (hasAbove) {
-        const Layer& oldLayer = *_layers.at(layerIdx-1);
-        while (_old_pos+1 < oldLayer.size() && oldLayer.getSuccessorPos(_old_pos+1) <= pos) 
-            _old_pos++;
-        _offset = pos - oldLayer.getSuccessorPos(_old_pos);
-    }
-    Position& above = (hasAbove ? (*_layers.at(layerIdx-1))[_old_pos] : NULL_POS);
+    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
+    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
+    _above_position = &newPos;
+    _offset = 0;
+    _old_pos = newPos.getPositionIndex();
+    Position& above = newPos;
  
     encodeFactVariables(newPos, left, above);
 
@@ -1034,69 +1045,46 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
 
     for (const auto& rSig : pos.getReductions()) {
         if (!_htn.isRecursiveMethod(rSig._name_id)) continue;
-
-        // Log::i("Recursive method %s at %d,%d\n", TOSTR(rSig), newPos.getLayerIndex(), newPos.getPositionIndex());
-
-        // If this recursive method does not contains Q-constants, skip it
         if (!_htn.hasQConstants(rSig)) continue;
 
+        using PositionedMethod = std::pair<Position*, USignature>;
+        auto contains = [](const std::vector<PositionedMethod>& methods, const PositionedMethod& candidate) {
+            for (const auto& method : methods) {
+                if (method.first == candidate.first && method.second == candidate.second) {
+                    return true;
+                }
+            }
+            return false;
+        };
 
-        // First, find all the possible parents with the same name id
+        std::queue<PositionedMethod> methodsToCheck;
+        methodsToCheck.emplace(&pos, rSig);
 
-        // Create a queue which will contains all the methods to check
-        std::queue<PositionedUSig> methodsToCheck;
-
-        // Add the current method to the queue
-        methodsToCheck.push(PositionedUSig(pos.getLayerIndex(), pos.getPositionIndex(), rSig));
-
-        // Get all the parent which are the same method
-        PositionUSigSet parents;
-
+        std::vector<PositionedMethod> parents;
         USigSet visited;
         visited.insert(rSig);
 
-        // Iterate the queue until it is empty
         while (!methodsToCheck.empty()) {
-
-            PositionedUSig methodToCheck = methodsToCheck.front();
+            auto [methodPos, methodSig] = methodsToCheck.front();
             methodsToCheck.pop();
 
-            // Get the position idx
-            Position& methodPos = _layers.at(methodToCheck.layer)->at(methodToCheck.pos);
+            Position* parentPos = getSemanticParent(_root_position, *methodPos);
+            if (parentPos == nullptr) continue;
+            if (!methodPos->getPredecessors().count(methodSig)) continue;
 
-            // If the layer is 0, continue
-            if (methodToCheck.layer == 0) continue;
-
-            // SHOULD NOT HAPPENENED... BUT I HAVE A BUG HERE...
-            // Need to investigate...
-            if (!methodPos.getPredecessors().count(methodToCheck.usig)) continue;
-
-            // Iterate over all predecessors
-            for (const auto& pred : methodPos.getPredecessors().at(methodToCheck.usig)) {
-
-                // Log::i("Pred: %s\n", TOSTR(pred));
-
-                // Get the last layer and position of the predecessor
-                int parentPos = methodPos.getAbovePos();
-                int parentLayer = methodPos.getOriginalLayerIndex() - 1;
-
-                if (!_layers.at(parentLayer)->at(parentPos).getReductions().count(pred)) {
-                    // Strange bugs, should not happen, but it does sometime (example Hiking problem 1)
-                    // Need to invistigate more
+            for (const auto& pred : methodPos->getPredecessors().at(methodSig)) {
+                if (!parentPos->getReductions().count(pred)) {
                     continue;
                 }
 
-                PositionedUSig posPred = PositionedUSig(parentLayer, parentPos, pred);
-
-                // If the predecessor is the same method as the current one, add it to parents
-                if (pred._name_id == rSig._name_id) {
-                    parents.insert(posPred);
+                PositionedMethod parentMethod(parentPos, pred);
+                if (pred._name_id == rSig._name_id && !contains(parents, parentMethod)) {
+                    parents.push_back(parentMethod);
                 }
 
-                // Add the predecessor to the queue
-                if (!visited.count(posPred.usig)) {
-                    methodsToCheck.push(posPred);
-                    visited.insert(posPred.usig);
+                if (!visited.count(parentMethod.second)) {
+                    methodsToCheck.push(parentMethod);
+                    visited.insert(parentMethod.second);
                 }
             }
         }
@@ -1106,12 +1094,14 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
 
         // Ok, now we have to encode the constrains that the new method must be different from all its parents
         for (const auto& parent: parents) {
+            Position& parentPos = *parent.first;
+            const USignature& parentSig = parent.second;
 
             // First, check if by default this method is different from its parent 
             // Occurs if both have a ground parameter that are not the same
             bool invarientDifferent = false;
             for (int i = 0; i < rSig._args.size(); i++) {
-                if (!_htn.isQConstant(rSig._args[i]) && !_htn.isQConstant(parent.usig._args[i]) && rSig._args[i] != parent.usig._args[i]) {
+                if (!_htn.isQConstant(rSig._args[i]) && !_htn.isQConstant(parentSig._args[i]) && rSig._args[i] != parentSig._args[i]) {
                     invarientDifferent = true;
                     break;
                 }
@@ -1122,7 +1112,7 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
             bool strictlyEqual = true;
             // Check if all the parameters are identical
             for (int i = 0; i < rSig._args.size(); i++) {
-                if (rSig._args[i] != parent.usig._args[i]) {
+                if (rSig._args[i] != parentSig._args[i]) {
                     strictlyEqual = false;
                     break;
                 }
@@ -1130,8 +1120,7 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
 
             if (strictlyEqual) {
                 // Add the clause that if the parent is true then this method must be false
-                Position& parentPos = _layers.at(parent.layer)->at(parent.pos);
-                int varParent = _vars.getVariable(VarType::OP, parentPos, parent.usig);
+                int varParent = _vars.getVariable(VarType::OP, parentPos, parentSig);
                 _sat.addClause(-varParent, -varNewMethod);
                 break;
             }
@@ -1140,8 +1129,7 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
             std::vector<int> clause;
 
             // Add the clause parent and child true => not equal parameters between the two
-            Position& parentPos = _layers.at(parent.layer)->at(parent.pos);
-            int varParent = _vars.getVariable(VarType::OP, parentPos, parent.usig);
+            int varParent = _vars.getVariable(VarType::OP, parentPos, parentSig);
             clause.push_back(-varParent);
             clause.push_back(-varNewMethod);
 
@@ -1153,23 +1141,23 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
                 // Both paramters are not Q-constants: no need to do anything, they are equals by default (or we would have broken on the invariantDifferent)
                 // One is a Q-constant and the other is not: needs to get the substitution of the Q-constant and add it to the clause
 
-                if (_htn.isQConstant(rSig._args[i]) && _htn.isQConstant(parent.usig._args[i])) {
+                if (_htn.isQConstant(rSig._args[i]) && _htn.isQConstant(parentSig._args[i])) {
 
                     // If both use the same Q-constant, skip it
-                    if (rSig._args[i] == parent.usig._args[i]) continue;
+                    if (rSig._args[i] == parentSig._args[i]) continue;
 
                     // Both paramters are Q-constants: needs to create an equalityQConstants
-                    int eq = encodeQConstEquality(rSig._args[i], parent.usig._args[i]);
+                    int eq = encodeQConstEquality(rSig._args[i], parentSig._args[i]);
                     clause.push_back(-eq);
                 }
-                else if (_htn.isQConstant(rSig._args[i]) || _htn.isQConstant(parent.usig._args[i])) {
+                else if (_htn.isQConstant(rSig._args[i]) || _htn.isQConstant(parentSig._args[i])) {
 
                     // Get the substitution vars of the Q-constant to the ground param
                     int varSubt;
                     if (_htn.isQConstant(rSig._args[i])) {
-                        varSubt = _vars.varSubstitution(rSig._args[i], parent.usig._args[i]);
+                        varSubt = _vars.varSubstitution(rSig._args[i], parentSig._args[i]);
                     } else {
-                        varSubt = _vars.varSubstitution(parent.usig._args[i], rSig._args[i]);
+                        varSubt = _vars.varSubstitution(parentSig._args[i], rSig._args[i]);
                     }
                     clause.push_back(-varSubt);
                 }
@@ -1206,22 +1194,20 @@ void Encoding::encodeNewRelevantsFacts(Position& initPos) {
 }
 
 
-void Encoding::propagateRelevantsFacts(size_t layerIdx, size_t pos) {
+void Encoding::propagateRelevantsFacts(Position& newPos) {
 
     if (_new_relevants_facts_to_encode.empty()) {
         return;
     }
 
-    _layer_idx = layerIdx;
-    _pos = pos;
+    _depth = newPos.getLayerIndex();
+    _pos = newPos.getPositionIndex();
 
     // Calculate relevant environment of the position
     Position NULL_POS;
     NULL_POS.setPos(-1, -1);
-    Layer& newLayer = *_layers.at(layerIdx);
-    Position& newPos = newLayer[pos];
-    bool hasLeft = pos > 0;
-    Position& left = (hasLeft ? newLayer[pos-1] : NULL_POS);
+    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
+    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
     encodeFrameAxioms(newPos, left, /*onlyForNewRelevantsFacts=*/true);
 }
 
@@ -1264,10 +1250,10 @@ float Encoding::getTimeSinceSatCallStart() {
     return Timer::elapsedSeconds() - _sat_call_start_time;
 }
 
-void Encoding::printFailedVars(Layer& layer) {
+void Encoding::printFailedVars() {
     Log::d("FAILED ");
-    for (size_t pos = 0; pos < layer.size(); pos++) {
-        int v = _vars.getVarPrimitiveOrZero(layer.index(), pos);
+    for (Position* leaf : _leaf_positions) {
+        int v = _vars.getVarPrimitiveOrZero(*leaf);
         if (v == 0) continue;
         if (_sat.didAssumptionFail(v)) Log::d("%i ", v);
     }
@@ -1282,13 +1268,13 @@ void Encoding::printSatisfyingAssignment() {
     Log::d("\n");
 }
 
-const USignature Encoding::getOpHoldingInLayerPos(int layer, int position) {
+const USignature Encoding::getOpHoldingAt(const Position& position) {
 
     int numOps = 0;
 
     USignature op = Sig::NONE_SIG;
     //State newState = state;
-    for (const auto& [sig, aVar] : _layers[layer]->at(position).getVariableTable(VarType::OP)) {
+    for (const auto& [sig, aVar] : position.getVariableTable(VarType::OP)) {
         if (!_sat.holds(aVar)) continue;
 
         // Ignore PRIM op
@@ -1304,22 +1290,19 @@ const USignature Encoding::getOpHoldingInLayerPos(int layer, int position) {
     return op;
 }
 
-void Encoding::printStatementsAtPosition(int layer, int pos) {
-    Position& newPos = _layers[layer]->at(pos);
+void Encoding::printStatementsAtPosition(const Position& newPos) {
     Position NULL_POS;
     NULL_POS.setPos(-1, -1);
-    bool hasLeft = pos > 0;
-    Position& left = (hasLeft ? _layers[newPos.getOriginalLayerIndex()]->at(newPos.getOriginalPositionIndex() - 1) : NULL_POS);
-    Log::i("STATE AT (%i,%i) (original: %i,%i)\n", layer, pos, newPos.getOriginalLayerIndex(), newPos.getOriginalPositionIndex());
-    Layer& l = *_layers[layer];
-    Position& p = l[pos];
-    for (const auto& [sig, aVar] : p.getVariableTable(VarType::FACT)) {
+    Position* leftPtr = getLeftLeaf(_leaf_positions, newPos);
+    Position& left = (leftPtr != nullptr ? *leftPtr : NULL_POS);
+    Log::i("STATE AT (%i,%i) (original: %i,%i)\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex(), (int) newPos.getOriginalLayerIndex(), (int) newPos.getOriginalPositionIndex());
+    for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::FACT)) {
         if (!_htn.isFullyGround(sig) || _htn.hasQConstants(sig)) continue; // skip non-ground facts)
         if (!_sat.holds(aVar)) continue; // skip false facts
         // Log::i("  FACT %s => %s\n", TOSTR(sig), _sat.holds(aVar) ? "TRUE" : "FALSE");
         Log::i("  FACT %s (%d) => TRUE\n", TOSTR(sig), aVar);
         // Print the value on the left if it is not the same
-        if (hasLeft && left.hasVariable(VarType::FACT, sig)) {
+        if (leftPtr != nullptr && left.hasVariable(VarType::FACT, sig)) {
             int leftVar = left.getVariableOrZero(VarType::FACT, sig);
             Log::i("    LEFT FACT %s (%d) => %s\n", TOSTR(sig), leftVar, _sat.holds(leftVar) ? "TRUE" : "FALSE");
         }
@@ -1329,9 +1312,9 @@ void Encoding::printStatementsAtPosition(int layer, int pos) {
     // }
 }
 
-const USignature Encoding::getDecodingOpHoldingInLayerPos(int layer, int pos) {
+const USignature Encoding::getDecodingOpHoldingAt(const Position& position) {
 
-    const USignature origSig = getOpHoldingInLayerPos(layer, pos);
+    const USignature origSig = getOpHoldingAt(position);
     USignature sig = origSig;
     while (true) {
         bool containsQConstants = false;
@@ -1355,7 +1338,7 @@ const USignature Encoding::getDecodingOpHoldingInLayerPos(int layer, int pos) {
             }
 
             if (numSubstitutions == 0) {
-                Log::v("(%i,%i) No substitutions for arg %s of %s\n", layer, pos, TOSTR(arg), TOSTR(origSig));
+                Log::v("(%i,%i) No substitutions for arg %s of %s\n", (int) position.getLayerIndex(), (int) position.getPositionIndex(), TOSTR(arg), TOSTR(origSig));
                 return Sig::NONE_SIG;
             }
             assert(numSubstitutions == 1 || Log::e("%i substitutions for arg %s of %s\n", numSubstitutions, TOSTR(arg), TOSTR(origSig)));
@@ -1370,46 +1353,16 @@ const USignature Encoding::getDecodingOpHoldingInLayerPos(int layer, int pos) {
 }
 
 NodeHashSet<int> Encoding::getSnapshotsOpsAndPredsTrue(int untilPos) {
-
-    Layer& layer = *_layers[_layer_idx];
     NodeHashSet<int> snapshotsVarsTrue;
 
-    // First, get for each layer, the limit 
-    std::vector<int> limits;
-    limits.push_back(untilPos);
-    const Position& lastPos = layer[untilPos];
-
-    for (size_t pos = 0; pos < untilPos; pos++) {
-        Position& newPos = layer[pos];
-        for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::FACT)) {
-            if (!_sat.holds(aVar)); // snapshotsVarsTrue.insert(-aVar);
-            else snapshotsVarsTrue.insert(aVar);
-        }
-        for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::OP)) {
-            if (!_sat.holds(aVar)); // snapshotsVarsTrue.insert(-aVar);
-            else snapshotsVarsTrue.insert(aVar);
-        }
-
-        size_t aboveLayer = newPos.getOriginalLayerIndex() - 1;
-        size_t abovePos = newPos.getAbovePos();
-
-        while (_layers[aboveLayer]->at(abovePos).getOriginalLayerIndex() != 0) {
-
-            Position& above = _layers[aboveLayer]->at(abovePos);
-            
-            for (const auto& [sig, aVar] : above.getVariableTable(VarType::FACT)) {
-                if (!_sat.holds(aVar)); //snapshotsVarsTrue.insert(-aVar);
-                else snapshotsVarsTrue.insert(aVar);
+    for (int pos = 0; pos < untilPos && pos < (int) _leaf_positions.size(); pos++) {
+        for (Position* current = _leaf_positions[pos]; current != nullptr && current != _root_position; current = current->getParentPosition()) {
+            for (const auto& [sig, aVar] : current->getVariableTable(VarType::FACT)) {
+                if (_sat.holds(aVar)) snapshotsVarsTrue.insert(aVar);
             }
-            for (const auto& [sig, aVar] : above.getVariableTable(VarType::OP)) {
-                if (!_sat.holds(aVar)); // snapshotsVarsTrue.insert(-aVar);
-                else snapshotsVarsTrue.insert(aVar);
+            for (const auto& [sig, aVar] : current->getVariableTable(VarType::OP)) {
+                if (_sat.holds(aVar)) snapshotsVarsTrue.insert(aVar);
             }
-
-            size_t newAboveLayer = above.getOriginalLayerIndex() - 1;
-            size_t newAbovePos = above.getAbovePos();
-            aboveLayer = newAboveLayer;
-            abovePos = newAbovePos;
         }
     }
     return std::move(snapshotsVarsTrue);

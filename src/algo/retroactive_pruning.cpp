@@ -1,108 +1,112 @@
 
 #include "retroactive_pruning.h"
 
-void RetroactivePruning::prune(const USignature& op, int layerIdx, int pos) {
+#include <unordered_map>
+#include <unordered_set>
 
-    NodeHashSet<PositionedUSig, PositionedUSigHasher> opsToRemove;
-    NodeHashSet<PositionedUSig, PositionedUSigHasher> openOps;
-    openOps.emplace(layerIdx, pos, op);
-    NodeHashMap<PositionedUSig, USigSet, PositionedUSigHasher> removedExpansionsOfParents;
+namespace {
+struct PositionedOp {
+    Position* position;
+    USignature usig;
+
+    bool operator==(const PositionedOp& other) const {
+        return position == other.position && usig == other.usig;
+    }
+};
+
+struct PositionedOpHasher {
+    std::size_t operator()(const PositionedOp& value) const {
+        return std::hash<Position*>()(value.position) ^ (USignatureHasher()(value.usig) << 1);
+    }
+};
+}
+
+void RetroactivePruning::prune(const USignature& op, Position& position) {
+
+    std::unordered_set<PositionedOp, PositionedOpHasher> opsToRemove;
+    std::unordered_set<PositionedOp, PositionedOpHasher> openOps;
+    openOps.insert({&position, op});
+    std::unordered_map<PositionedOp, USigSet, PositionedOpHasher> removedExpansionsOfParents;
 
     // Traverse the hierarchy upwards, removing expansions/predecessors
     // and marking all "root" operations whose induces subtrees should be pruned 
 
     while (!openOps.empty()) {
-        PositionedUSig psig = *openOps.begin();
-        openOps.erase(psig);
-        Log::d("PRUNE_UP %s\n", TOSTR(psig));
+        PositionedOp current = *openOps.begin();
+        openOps.erase(current);
+        Log::d("PRUNE_UP %s@(%zu,%zu)\n", TOSTR(current.usig), current.position->getLayerIndex(), current.position->getPositionIndex());
 
-        if (psig.layer == 0) {
+        Position* currentPosition = current.position;
+        assert(currentPosition->hasAction(current.usig) || currentPosition->hasReduction(current.usig));
+
+        Position* parentPosition = currentPosition->getParentPosition();
+        if (parentPosition == nullptr) {
             // Top of the hierarchy hit
-            opsToRemove.insert(psig);
+            opsToRemove.insert(current);
             continue;
         }
 
-        Position* position = &_layers[psig.layer]->at(psig.pos);
-        assert(position->hasAction(psig.usig) || position->hasReduction(psig.usig));
-        // int oldPos = 0;
-        // Layer& oldLayer = *_layers.at(psig.layer-1);
-        // while (oldPos+1 < (int)oldLayer.size() && oldLayer.getSuccessorPos(oldPos+1) <= psig.pos) 
-        //     oldPos++;
-        int oldPos = position->getAbovePos();
-        int aboveLayerIdx = position->getOriginalLayerIndex() - 1;
-        Layer& oldLayer = *_layers.at(aboveLayerIdx);
-
         bool pruneSomeParent = false;
-        assert(position->getPredecessors().count(psig.usig) || Log::e("%s has no predecessors!\n", TOSTR(psig)));
-        for (const auto& parent : position->getPredecessors().at(psig.usig)) {
-            PositionedUSig parentPSig(aboveLayerIdx, oldPos, parent);
-            assert(oldLayer.at(oldPos).hasAction(parent) || oldLayer.at(oldPos).hasReduction(parent) || Log::e("%s\n", TOSTR(parentPSig)));
-            const auto& siblings = position->getExpansions().at(parent);
+        assert(currentPosition->getPredecessors().count(current.usig) || Log::e("%s has no predecessors!\n", TOSTR(current.usig)));
+        for (const auto& parent : currentPosition->getPredecessors().at(current.usig)) {
+            PositionedOp parentOp{parentPosition, parent};
+            assert(parentPosition->hasAction(parent) || parentPosition->hasReduction(parent) || Log::e("%s@(%zu,%zu)\n", TOSTR(parent), parentPosition->getLayerIndex(), parentPosition->getPositionIndex()));
+            const auto& siblings = currentPosition->getExpansions().at(parent);
 
             // Mark op for removal from expansion of the parent
-            assert(siblings.count(psig.usig));
-            removedExpansionsOfParents[parentPSig].insert(psig.usig);
+            assert(siblings.count(current.usig));
+            removedExpansionsOfParents[parentOp].insert(current.usig);
 
-            if (removedExpansionsOfParents[parentPSig].size() == siblings.size()) {
+            if (removedExpansionsOfParents[parentOp].size() == siblings.size()) {
                 // Siblings become empty -> prune parent as well
-                openOps.insert(std::move(parentPSig));
+                openOps.insert(parentOp);
                 pruneSomeParent = true;
             }
         }
 
         // No parent pruned? -> This op is a root of a subtree to be pruned
-        if (!pruneSomeParent) opsToRemove.insert(psig);
+        if (!pruneSomeParent) opsToRemove.insert(current);
     }
 
     // Traverse the hierarchy downwards, pruning all children who became impossible
 
     while (!opsToRemove.empty()) {
-        PositionedUSig psig = *opsToRemove.begin();
-        opsToRemove.erase(psig);
-        Position* position = &_layers[psig.layer]->at(psig.pos);
-        Log::d("PRUNE_DOWN %s\n", TOSTR(psig));
-        assert(position->hasAction(psig.usig) || position->hasReduction(psig.usig));
+        PositionedOp current = *opsToRemove.begin();
+        opsToRemove.erase(current);
+        Position* currentPosition = current.position;
+        Log::d("PRUNE_DOWN %s@(%zu,%zu)\n", TOSTR(current.usig), currentPosition->getLayerIndex(), currentPosition->getPositionIndex());
+        assert(currentPosition->hasAction(current.usig) || currentPosition->hasReduction(current.usig));
 
-        // Get the last layer idx of this position (since for sibylsat expansion, one position can be repeated in multiple layers)
-        int lastLayerIdx = position->getLayerIndex();
-        int lastPositionIdx = position->getPositionIndex();
-        psig.layer = lastLayerIdx;
-        psig.pos = lastPositionIdx;
-
-        // Go down one layer and mark all children for removal which have only one predecessor left
-        if (psig.layer+1 < _layers.size()) {
-            int belowPosIdx = _layers.at(psig.layer)->getSuccessorPos(psig.pos);
-            int until = belowPosIdx;
-            while ((until < _layers[psig.layer + 1]->size()) && (_layers[psig.layer + 1]->at(until).getAbovePos() == psig.pos)) {
-                until++;
-            }
-            while (belowPosIdx < until) {
-
-                Position& below = _layers.at(psig.layer+1)->at(belowPosIdx);
-                if (below.getExpansions().count(psig.usig)) for (auto& child : below.getExpansions().at(psig.usig)) {
-                    assert(below.getPredecessors().at(child).count(psig.usig));
-                    if (psig.layer+1 == (size_t)layerIdx && belowPosIdx == pos && child == op) {
-                        // Arrived back at original op to prune
-                        opsToRemove.emplace(layerIdx, pos, op);
-                    } else if (below.getPredecessors().at(child).size() == 1) {
-                        // Child has this op as its only predecessor -> prune
-                        opsToRemove.emplace(psig.layer+1, belowPosIdx, child);
-                    } else {
-                        Log::d("PRUNE %i pred left for %s@(%i,%i): %s\n", below.getPredecessors().at(child).size()-1, TOSTR(child), psig.layer+1, belowPosIdx);
-                        below.getPredecessors().at(child).erase(psig.usig);
-                    }
-                } else Log::d("PRUNE No expansions for %s @ (%i,%i)\n", TOSTR(psig), psig.layer+1, belowPosIdx);
-
-                belowPosIdx++;
+        // Visit all tree children and mark those that became impossible.
+        for (Position* childPos : currentPosition->getChildrenPositions()) {
+            Position& below = *childPos;
+            if (below.getExpansions().count(current.usig)) for (auto& child : below.getExpansions().at(current.usig)) {
+                assert(below.getPredecessors().at(child).count(current.usig));
+                if (&below == &position && child == op) {
+                    // Arrived back at original op to prune
+                    opsToRemove.insert({&position, op});
+                } else if (below.getPredecessors().at(child).size() == 1) {
+                    // Child has this op as its only predecessor -> prune
+                    opsToRemove.insert({&below, child});
+                } else {
+                    Log::d("PRUNE %i pred left for %s@(%i,%i)\n",
+                        below.getPredecessors().at(child).size()-1,
+                        TOSTR(child),
+                        (int) below.getLayerIndex(),
+                        (int) below.getPositionIndex());
+                    below.getPredecessors().at(child).erase(current.usig);
+                }
+            } else {
+                Log::d("PRUNE No expansions for %s @ (%i,%i)\n", TOSTR(current.usig), (int) below.getLayerIndex(), (int) below.getPositionIndex());
             }
         }
 
         // Remove the operation's occurrence itself,
         // together with its expansions and predecessors
-        int opVar = position->getVariableOrZero(VarType::OP, psig.usig);
+        int opVar = currentPosition->getVariableOrZero(VarType::OP, current.usig);
         if (opVar != 0) _enc.addUnitConstraint(-opVar);
-        position->removeActionOccurrence(psig.usig);
-        position->removeReductionOccurrence(psig.usig);
+        currentPosition->removeActionOccurrence(current.usig);
+        currentPosition->removeReductionOccurrence(current.usig);
         _num_retroactively_pruned_ops++;
     }
 

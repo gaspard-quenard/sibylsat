@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 #include "sat/encoding.h"
-#include "data/layer.h"         
+#include "data/position.h"
 #include "util/domain_settings_manager.h" 
 #include "util/log.h"
 
@@ -69,7 +69,7 @@ public:
     void displayAdvancementBar() const;
 
 
-    void updateReachableStateAfterTasksAccomplished(Encoding &enc, const std::vector<Layer*> &layers, int layerIdx, int solvePositions);
+    void updateReachableStateAfterTasksAccomplished(Encoding &enc, const std::vector<Position*> &leafPositions, int solvePositions);
 
     /**
      * If there are previously saved snapshots of SAT variables (from solved tasks),
@@ -100,11 +100,11 @@ public:
      * This method saves a snapshot of the SAT variables and adjusts the number of tasks to solve next.
      *
      * @param enc The encoding object (to extract the snapshot).
-     * @param layers The vector of layers.
-     * @param layerIdx The current layer index.
+     * @param leafPositions The current ordered leaf positions.
+     * @param depth The current search depth.
      * @return True if all initial tasks have been solved; false otherwise.
      */
-    bool updateAfterSolved(Encoding &enc, const std::vector<Layer*> &layers, int layerIdx);
+    bool updateAfterSolved(Encoding &enc, const std::vector<Position*> &leafPositions);
 
 
     const USigSet& getReachableStatePosAfterTasksAccomplished() const {

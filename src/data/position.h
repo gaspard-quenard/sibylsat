@@ -32,6 +32,9 @@ private:
     size_t _layer_idx;
     size_t _pos;
 
+    Position* _parent_position = nullptr;
+    std::vector<Position*> _children_positions;
+
     // Some useful attributes for sibylsat
     size_t _original_pos = -1;
     size_t _original_layer_idx = -1;
@@ -94,6 +97,10 @@ public:
 
     Position();
     void setPos(size_t layerIdx, size_t pos);
+    void setParentPosition(Position* parent);
+    Position* getParentPosition() const { return _parent_position; }
+    const std::vector<Position*>& getChildrenPositions() const { return _children_positions; }
+    bool hasParentPosition() const { return _parent_position != nullptr; }
 
     void addQFact(const USignature& qfact);
     void addTrueFact(const USignature& fact);
@@ -163,6 +170,7 @@ public:
     }
 
     USigSet& getActions();
+    const USigSet& getActions() const;
     const USigSet& getReductions() const;
     NodeHashMap<USignature, USigSet, USignatureHasher>& getExpansions();
     NodeHashMap<USignature, USigSet, USignatureHasher>& getPredecessors();

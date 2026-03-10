@@ -5,7 +5,7 @@
 #include "util/names.h"
 #include "util/params.h"
 #include "util/hashmap.h"
-#include "data/layer.h"
+#include "data/position.h"
 #include "data/htn_instance.h"
 #include "algo/instantiator.h"
 #include "algo/arg_iterator.h"
@@ -31,6 +31,9 @@ private:
     Parameters& _params;
     HtnInstance& _htn;
 
+    Position* _root_position = nullptr;
+    std::vector<Position*> _leaf_positions;
+
     FactAnalysis _analysis;
     Instantiator _instantiator;
     Encoding _enc;
@@ -42,9 +45,7 @@ private:
 
 
 
-    std::vector<Layer*> _layers;
-
-    size_t _layer_idx;
+    size_t _depth;
     size_t _pos;
     size_t _old_pos;
 
@@ -86,9 +87,9 @@ public:
             _optimal(_params.isNonzero("optimal")),
             _separate_tasks(_params.isNonzero("separateTasks") && _htn.getInitReduction().getSubtasks().size() > 1 && _use_sibylsat_expansion && !_optimal),
             _instantiator(params, htn, _analysis), 
-            _enc(_params, _htn, _analysis, _layers, [this](){checkTermination();}), 
+            _enc(_params, _htn, _analysis, _root_position, _leaf_positions, [this](){checkTermination();}), 
             _minres(_htn), 
-            _pruning(_layers, _enc),
+            _pruning(_enc),
             _domination_resolver(_htn),
             _plan_writer(_htn, _params),
             _init_plan_time_limit(_params.getFloatParam("T")), _nonprimitive_support(_params.isNonzero("nps")), 
@@ -124,40 +125,39 @@ public:
 
 private:
 
-    void createFirstLayer();
-    void createNextLayer();
-    void createNextLayerUsingSibylSat(const FlatHashSet<int>& positionsToDevelop);
+    void createInitialLeaves();
+    void expandAllLeaves();
+    void expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop);
+    void refreshLeafMetadata();
     
-    void createNextPosition();
-    void createNextPositionFromAbove();
-    void createNextPositionFromLeft(Position& left);
-    void createNextPositionFromLeftSimplified(Position& left);
+    void createNextPosition(Position& newPos, Position* parent, size_t parentPos, Position* left);
+    void createNextPositionFromAbove(Position& newPos, Position& above, size_t offset);
+    void createNextPositionFromLeft(Position& newPos, Position& left);
+    void createNextPositionFromLeftSimplified(Position& newPos);
 
-    void incrementPosition();
+    void incrementPosition(const Position& pos);
 
-    void addPreconditionConstraints();
-    void addPreconditionsAndConstraints(const USignature& op, const SigSet& preconditions, bool isActionRepetition);
-    std::optional<SubstitutionConstraint> addPreconditionBitVec(const USignature& op, const Signature& fact, bool addQFact = true);
+    void addPreconditionConstraints(Position& pos);
+    void addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isActionRepetition);
+    std::optional<SubstitutionConstraint> addPreconditionBitVec(Position& pos, const USignature& op, const Signature& fact, bool addQFact = true);
     
     enum EffectMode { INDIRECT, DIRECT, DIRECT_NO_QFACT };
-    bool addEffect(const USignature& op, const Signature& fact, EffectMode mode);
+    bool addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode);
+    void addGroundEffectBitVec(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode);
+    bool addPseudoGroundEffect(Position& pos, Position& left, const USignature& op, const Signature& fact, EffectMode mode);
 
-    bool addGroundEffect(const USignature& opSig, const int predId, bool negated, EffectMode mode);
-    void addGroundEffectBitVec(const USignature& opSig, BitVec effects, bool negated, EffectMode mode);
-    bool addPseudoGroundEffect(const USignature& op, const Signature& fact, EffectMode mode);
+    std::optional<Reduction> createValidReduction(Position& pos, const USignature& rSig, const USignature& task);
 
-    std::optional<Reduction> createValidReduction(const USignature& rSig, const USignature& task);
-
-    void propagateInitialState();
-    void propagateActions(size_t offset);
-    void propagateReductions(size_t offset);
-    std::vector<USignature> instantiateAllActionsOfTask(const USignature& task);
-    std::vector<USignature> instantiateAllReductionsOfTask(const USignature& task);
-    void initializeNextEffectsBitVec();
+    void propagateInitialState(Position& newPos, const Position& above);
+    void propagateActions(Position& newPos, Position& above, size_t offset);
+    void propagateReductions(Position& newPos, Position& above, size_t offset);
+    std::vector<USignature> instantiateAllActionsOfTask(Position& pos, const USignature& task);
+    std::vector<USignature> instantiateAllReductionsOfTask(Position& pos, const USignature& task);
+    void initializeNextEffectsBitVec(Position& pos);
     void initializeFactBitVec(Position& newPos, const int predId);
-    void addQConstantTypeConstraints(const USignature& op);
+    void addQConstantTypeConstraints(Position& pos, const USignature& op);
 
-    void setSoftLitsForOpsLastLayer();
+    void setSoftLitsForCurrentLeaves();
 
     int getTerminateSatCall();
     void clearDonePositions(int offset);

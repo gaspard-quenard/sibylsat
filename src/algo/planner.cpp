@@ -16,7 +16,7 @@ int Planner::findPlan() {
     int iteration = 0;
     Log::i("Iteration %i.\n", iteration);
 
-    createFirstLayer();
+    createInitialLeaves();
 
     // Bounds on depth to solve / explore
     int firstSatCallIteration = _params.getIntParam("d");
@@ -27,7 +27,7 @@ int Planner::findPlan() {
     bool solvedVirtualPlan = false;
     _enc.setTerminateCallback(this, terminateSatCall);
     if (iteration >= firstSatCallIteration) {
-        _enc.addAssumptionsPrimPlan(_layer_idx);
+        _enc.addAssumptionsPrimPlan();
         int result = _enc.solve();
         if (result == 0) {
             Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
@@ -41,27 +41,27 @@ int Planner::findPlan() {
         _sibylsat_positions_to_develop.insert(0);
     }
     
-    // Next layers
+    // Next depths
     while (!solved && (maxIterations == 0 || iteration < maxIterations)) {
 
         if (iteration >= firstSatCallIteration) {
 
-            _enc.printFailedVars(*_layers.back());
+            _enc.printFailedVars();
 
             if (_params.isNonzero("cs")) { // check solvability
-                Log::i("Not solved at layer %i with assumptions\n", _layer_idx);
+                Log::i("Not solved at depth %i with assumptions\n", _depth);
 
                 // Attempt to solve formula again, now without assumptions
                 // (is usually simple; if it fails, we know the entire problem is unsolvable)
                 int result = _enc.solve();
                 if (result == 20) {
-                    Log::w("Unsolvable at layer %i even without assumptions!\n", _layer_idx);
+                    Log::w("Unsolvable at depth %i even without assumptions!\n", _depth);
                     break;
                 } else {
                     Log::i("Not proven unsolvable - expanding by another layer\n");
                 }
             } else {
-                Log::i("Unsolvable at layer %i -- expanding.\n", _layer_idx);
+                Log::i("Unsolvable at depth %i -- expanding.\n", _depth);
             }
         }
 
@@ -74,20 +74,20 @@ int Planner::findPlan() {
         
         if (_use_sibylsat_expansion) {
             // Only develop the positions where the associate reduction is true in the last virtual plan
-            createNextLayerUsingSibylSat(_sibylsat_positions_to_develop);
+            expandSelectedLeaves(_sibylsat_positions_to_develop);
         } else {
             // Lilotane: Breadth first expansion
-            createNextLayer();
+            expandAllLeaves();
         }
 
         if (_optimal) {
             // Clear current soft literals in the formula...
             _enc.clearSoftLits();
             //... and add the new ones
-            Log::i("Add weight for each operation of the last layer\n");
-            setSoftLitsForOpsLastLayer();
+            Log::i("Add weight for each operation of the current leaves\n");
+            setSoftLitsForCurrentLeaves();
 
-            // Now, find the optimal abstract plan in this new layer
+            // Now, find the optimal abstract plan in this new set of leaves
             int objective_value_best_plan = 0;
             int result = _enc.solve();
             if (result == 0) {
@@ -117,7 +117,7 @@ int Planner::findPlan() {
                     break;
                 } else {
                     Log::i("The plan is not primitive. Number of positions to develop: %zu/%zu\n", 
-                            _sibylsat_positions_to_develop.size(), _layers[_layer_idx]->size());
+                            _sibylsat_positions_to_develop.size(), _leaf_positions.size());
                 }
             } else {
                 Log::e("No solution possible !\n");
@@ -127,7 +127,7 @@ int Planner::findPlan() {
             Log::i("Objective value of the best abstract plan: %d\n", objective_value_best_plan);
             // Now, add the assumption to only look for a primitive plan, and check if the primitive plan
             // has an objective value equal or less than the best plan
-            _enc.addAssumptionsPrimPlan(_layer_idx);
+            _enc.addAssumptionsPrimPlan();
             result = _enc.solve();
             if (result == 0) {
                 Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
@@ -154,8 +154,8 @@ int Planner::findPlan() {
                 }
 
                 // In case, we try to solve the init tasks separately, we only need the assumptions of primtive plan for the K first tasks
-                int assumptions_until = _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_layers[_layer_idx]->size()) : -1;
-                _enc.addAssumptionsPrimPlan(/*layerIdx=*/_layer_idx, /*permanent=*/false, /*assumptions_until=*/assumptions_until);
+                int assumptions_until = _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
+                _enc.addAssumptionsPrimPlan(/*permanent=*/false, /*assumptions_until=*/assumptions_until);
                 int result = _enc.solve();
                 if (result == 0) {
                     Log::w("Solver was interrupted. Discarding time limit for next solving attempts.\n");
@@ -164,7 +164,7 @@ int Planner::findPlan() {
                 solved = result == 10;
             } 
             if (_separate_tasks && solved) {
-                if (_separate_tasks_scheduler->updateAfterSolved(_enc, _layers, _layer_idx)) {
+                if (_separate_tasks_scheduler->updateAfterSolved(_enc, _leaf_positions)) {
                     Log::i("Solved the problem for all tasks\n");
                     break;
                 } else {
@@ -173,7 +173,7 @@ int Planner::findPlan() {
             }
 
             if (_use_sibylsat_expansion && !solved) {
-                Log::i("Failed to find a solution at layer %i. Trying to find a virtual plan...\n", _layer_idx);
+                Log::i("Failed to find a solution at depth %i. Trying to find a virtual plan...\n", _depth);
 
                 if (_separate_tasks) {
                     _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
@@ -187,7 +187,7 @@ int Planner::findPlan() {
                 solvedVirtualPlan = result == 10;
 
                 if (!solvedVirtualPlan && _separate_tasks) {
-                    solvedVirtualPlan = _separate_tasks_scheduler->handleVirtualPlanFailure(_enc, _layers[_layer_idx]->size());
+                    solvedVirtualPlan = _separate_tasks_scheduler->handleVirtualPlanFailure(_enc, _leaf_positions.size());
                 }
 
                 if (!solvedVirtualPlan) {
@@ -200,15 +200,15 @@ int Planner::findPlan() {
                 // Extract the virtual plan and use it to determinate which positions need to be developed
                 // Iterate the last layer and get the op holding at the position. If it is a reduction, we need to develop it
                 _sibylsat_positions_to_develop.clear();
-                int pos_to_develop_limit = _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_layers[_layer_idx]->size()) : -1;
-                for (size_t pos = 0; pos < _layers[_layer_idx]->size(); pos++) {
+                int pos_to_develop_limit = _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
+                for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
                     if (_separate_tasks && pos >= pos_to_develop_limit) {
                         break;
                     }
-                    const USignature& opSig = _enc.getOpHoldingInLayerPos(_layer_idx, pos);
+                    const USignature& opSig = _enc.getOpHoldingAt(*_leaf_positions[pos]);
                     // Log::i("Position %zu: %s\n", pos, TOSTR(opSig));
                     if (_htn.isReduction(opSig)) {
-                        Log::d("  Reduction %s is true in layer %i, position %i\n", TOSTR(opSig), _layer_idx, pos);
+                        Log::d("  Reduction %s is true at depth %i, position %i\n", TOSTR(opSig), _depth, pos);
                         _sibylsat_positions_to_develop.insert(pos);
                     }
                 }
@@ -218,12 +218,12 @@ int Planner::findPlan() {
     }
 
     if (!solved) {
-        if (iteration >= firstSatCallIteration) _enc.printFailedVars(*_layers.back());
+        if (iteration >= firstSatCallIteration) _enc.printFailedVars();
         Log::w("No success. Exiting.\n");
         return 1;
     }
 
-    Log::i("Found a solution at layer %i.\n", _layers.size()-1);
+    Log::i("Found a solution at depth %i.\n", (int) _depth);
     _time_at_first_plan = Timer::elapsedSeconds();
 
     improvePlan(iteration);
@@ -238,10 +238,10 @@ int Planner::findPlan() {
 void Planner::improvePlan(int& iteration) {
 
     // Compute extra layers after initial solution as desired
-    PlanOptimizer optimizer(_htn, _layers, _enc);
+    PlanOptimizer optimizer(_htn, _leaf_positions, _enc);
     int maxIterations = _params.getIntParam("D");
     int extraLayers = _params.getIntParam("el");
-    int upperBound = _layers.back()->size()-1;
+    int upperBound = _leaf_positions.size()-1;
     if (extraLayers != 0) {
 
         // Extract initial plan (for anytime purposes)
@@ -259,10 +259,10 @@ void Planner::improvePlan(int& iteration) {
                 for (size_t x = 0; x < el && (maxIterations == 0 || iteration < maxIterations); x++) {
                     iteration++;      
                     Log::i("Iteration %i. (extra)\n", iteration);
-                    createNextLayer();
+                    expandAllLeaves();
                 }
                 // Solve again (to get another plan)
-                _enc.addAssumptionsPrimPlan(_layer_idx);
+                _enc.addAssumptionsPrimPlan();
                 int result = _enc.solve();
                 if (result != 10) break;
                 // Extract plan at layer, update bound
@@ -274,7 +274,7 @@ void Planner::improvePlan(int& iteration) {
                     _plan = thisLayerPlan;
                     _has_plan = true;
                 }
-                Log::i("Initial plan at layer %i has length %i\n", iteration, newLength);
+                Log::i("Initial plan at depth %i has length %i\n", iteration, newLength);
                 // Optimize
                 optimizer.optimizePlan(upperBound, _plan, PlanOptimizer::ConstraintAddition::TRANSIENT);
                 // Double number of extra layers in next iteration
@@ -286,11 +286,11 @@ void Planner::improvePlan(int& iteration) {
             for (int x = 0; x < extraLayers; x++) {
                 iteration++;      
                 Log::i("Iteration %i. (extra)\n", iteration);
-                createNextLayer();
+                expandAllLeaves();
             }
 
             // Solve again (to get another plan)
-            _enc.addAssumptionsPrimPlan(_layer_idx);
+            _enc.addAssumptionsPrimPlan();
             _enc.solve();
         }
     }
@@ -307,7 +307,7 @@ void Planner::improvePlan(int& iteration) {
                 _plan = finalLayerPlan;
                 _has_plan = true;
             }
-            Log::i("Initial plan at final layer has length %i\n", newLength);
+            Log::i("Initial plan at final leaves has length %i\n", newLength);
             // Optimize
             optimizer.optimizePlan(upperBound, _plan, PlanOptimizer::ConstraintAddition::PERMANENT);
 
@@ -319,197 +319,174 @@ void Planner::improvePlan(int& iteration) {
     }
 }
 
-void Planner::incrementPosition() {
-    _num_instantiated_actions += _layers[_layer_idx]->at(_pos).getActions().size();
-    _num_instantiated_reductions += _layers[_layer_idx]->at(_pos).getReductions().size();
+void Planner::incrementPosition(const Position& pos) {
+    _num_instantiated_actions += pos.getActions().size();
+    _num_instantiated_reductions += pos.getReductions().size();
     _pos++; _num_instantiated_positions++;
 }
 
-void Planner::createFirstLayer() {
+void Planner::refreshLeafMetadata() {
+    for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
+        _leaf_positions[pos]->setPos(_depth, pos);
+    }
+}
 
-    // Initial layer of size 2 (top level reduction + goal action)
-    int initSize = 2;
-    Log::i("Creating initial layer of size %i\n", initSize);
-    _layer_idx = 0;
+void Planner::createInitialLeaves() {
+
+    const int initSize = 2;
+    Log::i("Creating initial leaves of size %i\n", initSize);
+    _depth = 0;
     _pos = 0;
-    _layers.push_back(new Layer(0, initSize));
-    Layer& initLayer = (*_layers[0]);
-    initLayer[_pos].setPos(_layer_idx, _pos);
-    // Useful informations for sibylsat expansion
-    initLayer[_pos].setOriginalLayerIdx(_layer_idx);
-    initLayer[_pos].setOriginalPos(_pos);
-    
-    
-    
-    /***** LAYER 0, POSITION 0 ******/
 
-    // Instantiate all possible init. reductions
+    _root_position = new Position();
+    _root_position->setPos(-1, 0);
+
+    Position* rootReductionPosition = new Position();
+    rootReductionPosition->setParentPosition(_root_position);
+    Position* goalPosition = new Position();
+    goalPosition->setParentPosition(_root_position);
+
+    _leaf_positions = {rootReductionPosition, goalPosition};
+    refreshLeafMetadata();
+
+    rootReductionPosition->setOriginalLayerIdx(_depth);
+    rootReductionPosition->setOriginalPos(_pos);
+
+    /***** DEPTH 0, POSITION 0 ******/
+
     for (USignature& rSig : _instantiator.getApplicableInstantiations(_htn.getInitReduction())) {
-        auto rOpt = createValidReduction(rSig, USignature());
+        auto rOpt = createValidReduction(*rootReductionPosition, rSig, USignature());
         if (rOpt) {
             auto& r = rOpt.value();
             USignature sig = r.getSignature();
-            initLayer[_pos].addReduction(sig);
-            initLayer[_pos].addAxiomaticOp(sig);
-            initLayer[_pos].addExpansionSize(r.getSubtasks().size());
+            rootReductionPosition->addReduction(sig);
+            rootReductionPosition->addAxiomaticOp(sig);
+            rootReductionPosition->addExpansionSize(r.getSubtasks().size());
         }
     }
-    addPreconditionConstraints();
-    initializeNextEffectsBitVec();
-    
-    incrementPosition();
+    addPreconditionConstraints(*rootReductionPosition);
+    initializeNextEffectsBitVec(*rootReductionPosition);
 
-    /***** LAYER 0, POSITION 1 ******/
+    incrementPosition(*rootReductionPosition);
 
-    createNextPosition(); // position 1
+    /***** DEPTH 0, POSITION 1 ******/
 
-    // Create virtual goal action
+    createNextPosition(*goalPosition, /*parent=*/nullptr, /*parentPos=*/0, rootReductionPosition);
+
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
-    initLayer[_pos].addAction(goalSig);
-    initLayer[_pos].addAxiomaticOp(goalSig);
-    addPreconditionConstraints();
-    // Useful informations for sibylsat expansion
-    initLayer[_pos].setPos(_layer_idx, _pos);
-    initLayer[_pos].setOriginalLayerIdx(_layer_idx);
-    initLayer[_pos].setOriginalPos(_pos);
-    
-    
-    /***** LAYER 0 END ******/
+    goalPosition->addAction(goalSig);
+    goalPosition->addAxiomaticOp(goalSig);
+    addPreconditionConstraints(*goalPosition);
+    goalPosition->setPos(_depth, _pos);
+    goalPosition->setOriginalLayerIdx(_depth);
+    goalPosition->setOriginalPos(_pos);
 
-    initLayer[0].clearAfterInstantiation();
-    initLayer[1].clearAfterInstantiation();
+    rootReductionPosition->clearAfterInstantiation();
+    goalPosition->clearAfterInstantiation();
 
-    _pos = 0;
-    _enc.encode(_layer_idx, _pos++);
-    _enc.encode(_layer_idx, _pos++);
-    initLayer.consolidate();
+    _enc.encode(*rootReductionPosition);
+    _enc.encode(*goalPosition);
 }
 
-void Planner::createNextLayer() {
+void Planner::expandAllLeaves() {
 
-    _layers.push_back(new Layer(_layers.size(), _layers.back()->getNextLayerSize()));
-    Layer& newLayer = *_layers.back();
-    Log::i("New layer size: %i\n", newLayer.size());
-    Layer& oldLayer = (*_layers[_layer_idx]);
-    _layer_idx++;
+    std::vector<Position*> currentLeaves = _leaf_positions;
+    size_t nextLeafCount = 0;
+    for (Position* leaf : currentLeaves) {
+        nextLeafCount += leaf->getMaxExpansionSize();
+    }
+
+    _depth++;
     _pos = 0;
+    _leaf_positions.clear();
+    _leaf_positions.reserve(nextLeafCount);
+    Log::i("New leaf count: %zu\n", nextLeafCount);
 
-    // Instantiate new layer
     Log::i("Instantiating ...\n");
     _stats.beginTiming(TimingStage::EXPANSION);
-    for (_old_pos = 0; _old_pos < oldLayer.size(); _old_pos++) {
-        size_t newPos = oldLayer.getSuccessorPos(_old_pos);
-        size_t maxOffset = oldLayer[_old_pos].getMaxExpansionSize();
+    for (_old_pos = 0; _old_pos < currentLeaves.size(); _old_pos++) {
+        Position& above = *currentLeaves[_old_pos];
+        size_t maxOffset = above.getMaxExpansionSize();
 
-        // Instantiate each new position induced by the old position
         for (size_t offset = 0; offset < maxOffset; offset++) {
-            //Log::d("%i,%i,%i,%i\n", _old_pos, newPos, offset, newLayer.size());
-            assert(_pos == newPos + offset);
-            Log::v("- Position (%i,%i)\n", _layer_idx, _pos);
+            Position* current = new Position();
+            current->setParentPosition(&above);
+            _leaf_positions.push_back(current);
+            current->setPos(_depth, _pos);
+            Position* left = _pos > 0 ? _leaf_positions[_pos-1] : nullptr;
+            createNextPosition(*current, &above, _old_pos, left);
+            Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
+                    current->getReductions().size(),
+                    current->getActions().size(),
+                    current->getQFacts().size(),
+                    current->getPosFactSupportsId().size() + current->getNegFactSupportsId().size());
+            if (_pos > 0) {
+                _leaf_positions[_pos-1]->clearAfterInstantiation();
+            }
 
-            assert(newPos+offset < newLayer.size());
-
-            createNextPosition();
-            Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n", 
-                    (*_layers[_layer_idx])[_pos].getReductions().size(),
-                    (*_layers[_layer_idx])[_pos].getActions().size(),
-                    (*_layers[_layer_idx])[_pos].getQFacts().size(),
-                    (*_layers[_layer_idx])[_pos].getPosFactSupportsId().size() + (*_layers[_layer_idx])[_pos].getNegFactSupportsId().size()
-            );
-            if (_pos > 0) _layers[_layer_idx]->at(_pos-1).clearAfterInstantiation();
-
-            incrementPosition();
+            incrementPosition(*current);
             checkTermination();
         }
     }
-    if (_pos > 0) _layers[_layer_idx]->at(_pos-1).clearAfterInstantiation();
+    if (_pos > 0) {
+        _leaf_positions[_pos-1]->clearAfterInstantiation();
+    }
     _stats.endTiming(TimingStage::EXPANSION);
-    Log::i("Collected %i relevant facts at this layer\n", _analysis.getRelevantFactsBitVec().count());
+    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
 
-    // Encode new layer
     Log::i("Encoding ...\n");
     _stats.beginTiming(TimingStage::ENCODING);
-    for (_old_pos = 0; _old_pos < oldLayer.size(); _old_pos++) {
-        size_t newPos = oldLayer.getSuccessorPos(_old_pos);
-        size_t maxOffset = oldLayer[_old_pos].getMaxExpansionSize();
-        for (size_t offset = 0; offset < maxOffset; offset++) {
-            _pos = newPos + offset;
-            Log::v("- Position (%i,%i)\n", _layer_idx, _pos);
-            _enc.encode(_layer_idx, _pos);
-            clearDonePositions(offset);
-        }
+    for (Position* leaf : _leaf_positions) {
+        Log::v("- Position (%i,%i)\n", _depth, leaf->getPositionIndex());
+        _enc.encode(*leaf);
     }
-
     _stats.endTiming(TimingStage::ENCODING);
-
-    newLayer.consolidate();
 }
 
+void Planner::expandSelectedLeaves(const FlatHashSet<int>& positionsToDevelop) {
 
-void Planner::createNextLayerUsingSibylSat(const FlatHashSet<int>& positionsToDevelop) {
-
-    Layer& oldLayer = (*_layers[_layer_idx]);
+    std::vector<Position*> currentLeaves = _leaf_positions;
+    std::vector<size_t> nextLeafStarts(currentLeaves.size(), 0);
 
     _stats.beginTiming(TimingStage::EXPANSION);
-    // Find the size of the next layer with the known position to develop
-    int size_new_layer = _layers.back()->size();
 
+    size_t nextLeafCount = currentLeaves.size();
     for (int pos: positionsToDevelop) {
-        Position& oldPos = oldLayer[pos];
-        size_new_layer += oldPos.getMaxExpansionSize() - 1;
+        Position& oldPos = *currentLeaves[pos];
+        nextLeafCount += oldPos.getMaxExpansionSize() - 1;
     }
 
-    // We need to set where the next position will be for each position of the old layer
-    oldLayer.clearSuccessorPositions();
-
-    // Create the new layer
-    _layers.push_back(new Layer(_layers.size(), size_new_layer));
-    Log::i("New layer size: %i\n", size_new_layer);
-
-     // Get the new layer
-    Layer& newLayer = *_layers.back();
-
-    _layer_idx++;
+    _depth++;
     _pos = 0;
+    _leaf_positions.clear();
+    _leaf_positions.reserve(nextLeafCount);
+    Log::i("New leaf count: %zu\n", nextLeafCount);
 
-
-    // Instantiate new layer
-    
     int num_pos_developed = 0;
     bool all_pos_developed = false;
     bool left_pos_is_developed = false;
 
-    int num_position_already_done = _separate_tasks ? _separate_tasks_scheduler->getPositionsDone(_layers[_layer_idx - 1]->size()) : 0;
+    int num_position_already_done = _separate_tasks ? _separate_tasks_scheduler->getPositionsDone(currentLeaves.size()) : 0;
     if (num_position_already_done > 0) {
-        // No need to see the _old_pos until the num_position_already_done
-        // But we also need to update the fact analysis
         Log::i("Propagating initial state facts for positions already done (%i)\n", num_position_already_done);
-        propagateInitialState();
-        // const USigSet& reachable_state_pos_after_tasks_accomplished = _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplished();
-        // const USigSet& reachable_state_neg_after_tasks_accomplished = _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplished();
-        // for (const USignature& sig : reachable_state_pos_after_tasks_accomplished) {
-            // _analysis.addReachableFact(sig, /*negated=*/false);
-        // }
-        // for (const USignature& sig : reachable_state_neg_after_tasks_accomplished) {
-            // _analysis.addReachableFact(sig, /*negated=*/true);
-        // }
+        Position tmpInitialPosition;
+        tmpInitialPosition.setPos(_depth, 0);
+        propagateInitialState(tmpInitialPosition, *currentLeaves[0]);
         const BitVec& reachable_state_pos_after_tasks_accomplished = _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec();
         const BitVec& reachable_state_neg_after_tasks_accomplished = _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec();
         _analysis.setReachableFactsBitVec(
-            reachable_state_pos_after_tasks_accomplished, 
+            reachable_state_pos_after_tasks_accomplished,
             reachable_state_neg_after_tasks_accomplished
         );
         if (_separate_tasks_scheduler->addTasksAsClauses()) {
             _enc.setNewInitPos(num_position_already_done);
 
-            for (int _old_pos = 0; _old_pos < num_position_already_done; _old_pos++) {
-                // We have already done this position, so we can skip encoding it
-                // Log::i("Skip encoding position %d of layer %d\n", _old_pos, _layer_idx);
-                oldLayer.pushSuccessorPosition(_pos);
-                Position* pointerPos = _layers[_layer_idx - 1]->getPointerPos(_old_pos);
-                newLayer.updatePos(_pos, pointerPos);
-                newLayer[_pos].setPos(_layer_idx, _pos);
+            for (_old_pos = 0; _old_pos < num_position_already_done; _old_pos++) {
+                nextLeafStarts[_old_pos] = _pos;
+                Position* carriedLeaf = currentLeaves[_old_pos];
+                carriedLeaf->setPos(_depth, _pos);
+                _leaf_positions.push_back(carriedLeaf);
                 _pos++;
             }
         }
@@ -520,73 +497,61 @@ void Planner::createNextLayerUsingSibylSat(const FlatHashSet<int>& positionsToDe
 
     Log::i("Instantiating ...\n");
 
-    for (_old_pos = init_pos_expanding; _old_pos < oldLayer.size(); _old_pos++)  {
+    for (_old_pos = init_pos_expanding; _old_pos < currentLeaves.size(); _old_pos++)  {
 
-        oldLayer.pushSuccessorPosition(_pos);
+        nextLeafStarts[_old_pos] = _pos;
 
         if (!positionsToDevelop.count(_old_pos)) {
 
-            // Report the position to the new layer
-            Position* pointerPos = _layers[_layer_idx - 1]->getPointerPos(_old_pos);
-            newLayer.updatePos(_pos, pointerPos);
-
-            // Update layer and position 
-            newLayer[_pos].setPos(_layer_idx, _pos);
-
+            Position* newPosPtr = currentLeaves[_old_pos];
+            newPosPtr->setPos(_depth, _pos);
+            _leaf_positions.push_back(newPosPtr);
+            Position& newPos = *newPosPtr;
 
             if (_pos == 0) {
-                propagateInitialState();
-            } else if (_separate_tasks_scheduler 
-                && _layer_idx > 0
-                && _pos == _separate_tasks_scheduler->getPositionsDone(_layers[_layer_idx - 1]->size()) 
+                propagateInitialState(newPos, *currentLeaves[0]);
+            } else if (_separate_tasks_scheduler
+                && _depth > 0
+                && _pos == _separate_tasks_scheduler->getPositionsDone(currentLeaves.size())
                 && _separate_tasks_scheduler->addTasksAsClauses()) {
-                    Position& newPos = newLayer[_pos];
-                    // Only need to indicate the true facts and false facts of the 'new' initial state
-                    // Log::i("Propagating initial state facts for position %i\n", _pos);
-                    for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
-                        const USignature& sig = _htn.getGroundPositiveFact(i);
-                        if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
-                            // Log::i("Adding true fact %s at position %i\n", TOSTR(sig), _pos);
-                            newPos.addTrueFact(sig);
-                        } else {
-                            // Log::i("Adding false fact %s at position %i\n", TOSTR(sig), _pos);
-                            newPos.addFalseFact(sig);
-                        }
+                for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
+                    const USignature& sig = _htn.getGroundPositiveFact(i);
+                    if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
+                        newPos.addTrueFact(sig);
+                    } else {
+                        newPos.addFalseFact(sig);
                     }
-            } 
-            else {
-                // Add the effects of the left position
-                Position& leftPos = newLayer[_pos - 1];
+                }
+            } else {
+                Position& leftPos = *_leaf_positions[_pos - 1];
 
                 if (left_pos_is_developed) {
-                    // Left posititon has updated its frame axioms, we need to update the effects
-                    Position& newPos = newLayer[_pos];
                     newPos.clearFactSupportsId();
-                    createNextPositionFromLeft(leftPos);
+                    createNextPositionFromLeft(newPos, leftPos);
                 } else if (!all_pos_developed) {
-                    createNextPositionFromLeftSimplified(leftPos);
-                }     
+                    createNextPositionFromLeftSimplified(newPos);
+                }
             }
 
             left_pos_is_developed = false;
             _pos++;
         } else {
-            // Find the expansion size of this position
             size_t expansion_size = 1;
-            
-            for (const auto& method : oldLayer[_old_pos].getReductions()) {
+            for (const auto& method : currentLeaves[_old_pos]->getReductions()) {
                 const Reduction& subR = _htn.getOpTable().getReduction(method);
                 expansion_size = std::max(expansion_size, subR.getSubtasks().size());
             }
 
-            // Set the max expansion size of the position
-            oldLayer[_old_pos].setExpansionSize(expansion_size);
+            currentLeaves[_old_pos]->setExpansionSize(expansion_size);
 
-            for (int offset = 0; offset < expansion_size; offset++) {
-
-                createNextPosition();
-
-                incrementPosition();
+            for (size_t offset = 0; offset < expansion_size; offset++) {
+                Position* current = new Position();
+                current->setParentPosition(currentLeaves[_old_pos]);
+                _leaf_positions.push_back(current);
+                current->setPos(_depth, _pos);
+                Position* left = _pos > 0 ? _leaf_positions[_pos-1] : nullptr;
+                createNextPosition(*current, currentLeaves[_old_pos], _old_pos, left);
+                incrementPosition(*current);
             }
 
             num_pos_developed++;
@@ -599,83 +564,67 @@ void Planner::createNextLayerUsingSibylSat(const FlatHashSet<int>& positionsToDe
 
     _stats.endTiming(TimingStage::EXPANSION);
 
-    Log::i("Collected %i relevant facts at this layer\n", _analysis.getRelevantFactsBitVec().count());
-    Log::i("New layer size: %i (%d)\n", newLayer.size(), _pos);
-    // Pop all additional position created compared to the original prediction (because maybe we have pruned the reductions with the biggest expansion size)
-    while (newLayer.size() > _pos) {
-        Log::v("Pop position %d of layer %d\n", newLayer.size()-1, _layer_idx);
-        newLayer.popPosition();
-    }
+    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
+    Log::i("New leaf count: %zu (%d)\n", _leaf_positions.size(), _pos);
 
-    // Encode new layer
     int init_pos_encoding = _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? num_position_already_done : 0;
     Log::i("Encoding ...\n");
     _stats.beginTiming(TimingStage::ENCODING);
     bool encodeOnlyEffsAndFA = false;
-    for (_old_pos = init_pos_encoding; _old_pos < oldLayer.size(); _old_pos++) {
-
-        // Log::v("Layer: %d, pos: %d/%d\n", _layer_idx, _old_pos, oldLayer.size());
+    for (_old_pos = init_pos_encoding; _old_pos < currentLeaves.size(); _old_pos++) {
 
         if (_old_pos == init_pos_encoding && !positionsToDevelop.count(_old_pos)) {
-            // Encode the new relevant facts
-            _enc.encodeNewRelevantsFacts(newLayer[init_pos_encoding]);
+            _enc.encodeNewRelevantsFacts(*_leaf_positions[nextLeafStarts[init_pos_encoding]]);
         }
 
         if (positionsToDevelop.count(_old_pos)) {
-            size_t newPos = oldLayer.getSuccessorPos(_old_pos);
-            size_t maxOffset = oldLayer[_old_pos].getMaxExpansionSize();
+            size_t newPos = nextLeafStarts[_old_pos];
+            size_t maxOffset = currentLeaves[_old_pos]->getMaxExpansionSize();
             for (size_t offset = 0; offset < maxOffset; offset++) {
-                _pos = newPos + offset;
-                _enc.encode(_layer_idx, _pos);
+                _enc.encode(*_leaf_positions[newPos + offset]);
             }
             encodeOnlyEffsAndFA = true;
 
         } else if (encodeOnlyEffsAndFA) {
-            // We still to have to encode the frame axioms for the current position (as it was not done in the previouses position encoded). Then we will have totally encoded the current position
-            size_t newPos = oldLayer.getSuccessorPos(_old_pos);
-            // Log::i("- Position (%i,%i) (Only for Frame axioms)\n", _layer_idx, newPos);
-            _enc.encodeOnlyEffsAndFrameAxioms(_layer_idx, newPos);
+            _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[nextLeafStarts[_old_pos]]);
             encodeOnlyEffsAndFA = false;
-        } 
-        else if (_old_pos != init_pos_encoding) {
-            // propagate all the new relevant facts at this position
-            size_t _pos = oldLayer.getSuccessorPos(_old_pos);
-            // Log::i(" - Position (%i,%i): Propagate new relevant facts\n", _layer_idx, _pos);
-            size_t newPos = oldLayer.getSuccessorPos(_old_pos);
-            _enc.propagateRelevantsFacts(_layer_idx, newPos);
         }
-    } 
+        else if (_old_pos != init_pos_encoding) {
+            _enc.propagateRelevantsFacts(*_leaf_positions[nextLeafStarts[_old_pos]]);
+        }
+    }
     _stats.endTiming(TimingStage::ENCODING);
 
-    // _stats.beginTiming(TimingStage::CLEANING_MEMORY);
-    // Free some memory from the above layer: old pos which have been decomposed into new positions
     for (int pos : positionsToDevelop) {
-        Log::v("Freeing position %d of layer %d\n", pos, _layer_idx - 1);
-        oldLayer[pos].clearFullPos();    
+        Log::v("Freeing position %d of depth %d\n", pos, _depth - 1);
+        currentLeaves[pos]->clearFullPos();
     }
-    for (int _new_pos = 0; _new_pos < newLayer.size(); _new_pos++) {
-        newLayer[_new_pos].clearDecodings();
+    for (Position* leaf : _leaf_positions) {
+        leaf->clearDecodings();
     }
-    // _stats.endTiming(TimingStage::CLEANING_MEMORY);
-    
 }
 
-void Planner::createNextPosition() {
-
-    Position& newPos = (*_layers[_layer_idx])[_pos];
+void Planner::createNextPosition(Position& newPos, Position* parent, size_t parentPos, Position* left) {
     // Useful informations for sibylsat expansion
-    newPos.setAbovePos(_old_pos);
-    newPos.setOriginalLayerIdx(_layer_idx);
+    newPos.setPos(_depth, _pos);
+    if (parent != nullptr) {
+        newPos.setAbovePos(parentPos);
+        newPos.setParentPosition(parent);
+    }
+    newPos.setOriginalLayerIdx(_depth);
     newPos.setOriginalPos(_pos);
     newPos.initFactChangesBitVec(_htn.getNumPositiveGroundFacts());
 
     // Set up all facts that may hold at this position.
     if (_pos == 0) {
-        propagateInitialState();
+        assert(parent != nullptr || _depth == 0);
+        if (_depth > 0) {
+            propagateInitialState(newPos, *parent);
+        }
     }  
     else if (_separate_tasks_scheduler 
-                && _layer_idx > 0
-                && _pos == _separate_tasks_scheduler->getPositionsDone(_layers[_layer_idx - 1]->size()) 
+                && _depth > 0
+                && _pos == _separate_tasks_scheduler->getPositionsDone(_leaf_positions.size())
                 && _separate_tasks_scheduler->addTasksAsClauses()) {
                     // Only need to indicate the true facts and false facts of the 'new' initial state
                     // Log::i("Propagating initial state facts for position %i\n", _pos);
@@ -690,19 +639,19 @@ void Planner::createNextPosition() {
                         }
                     }
             }
-    else {
-        Position& left = (*_layers[_layer_idx])[_pos-1];
-        createNextPositionFromLeft(left);
+    else if (left != nullptr) {
+        createNextPositionFromLeft(newPos, *left);
     }
 
     // Generate this new position's content based on the facts and the position above.
-    if (_layer_idx > 0) {
-        createNextPositionFromAbove();
+    if (parent != nullptr) {
+        size_t offset = parent->getChildrenPositions().empty() ? 0 : parent->getChildrenPositions().size() - 1;
+        createNextPositionFromAbove(newPos, *parent, offset);
     }
 
     // Eliminate operations which are dominated by another operation
     if (_params.isNonzero("edo")) 
-        _domination_resolver.eliminateDominatedOperations(_layers[_layer_idx]->at(_pos));
+        _domination_resolver.eliminateDominatedOperations(newPos);
 
 
     // In preparation for the upcoming position,
@@ -711,23 +660,20 @@ void Planner::createNextPosition() {
     // Already done in create next position from left for sibylsat expansion
     if (!_use_sibylsat_expansion) { 
         _stats.beginTiming(TimingStage::EXPANSION_INITIALIZED_NEXT_EFFECTS);
-        initializeNextEffectsBitVec();
+        initializeNextEffectsBitVec(newPos);
         _stats.endTiming(TimingStage::EXPANSION_INITIALIZED_NEXT_EFFECTS);
     }
 }
 
-void Planner::createNextPositionFromAbove() {
+void Planner::createNextPositionFromAbove(Position& newPos, Position& above, size_t offset) {
     // _stats.beginTiming(TimingStage::EXPANSION_ABOVE);
-    Position& newPos = (*_layers[_layer_idx])[_pos];
-    newPos.setPos(_layer_idx, _pos);
-    int offset = _pos - (*_layers[_layer_idx-1]).getSuccessorPos(_old_pos);
     //eliminateInvalidParentsAtCurrentState(offset);
-    propagateActions(offset);
-    propagateReductions(offset);
-    addPreconditionConstraints();
+    propagateActions(newPos, above, offset);
+    propagateReductions(newPos, above, offset);
+    addPreconditionConstraints(newPos);
 
     // if (offset == 0) {
-    //     Position& above = (*_layers[_layer_idx-1])[_old_pos];
+    //     Position& above = (*_frontiers[_depth-1])[_old_pos];
     //     for (const int mutexGroup : above.getGroupMutexEncoded()) {
     //         newPos.addGroupMutexEncoded(mutexGroup);
     //     }
@@ -735,14 +681,12 @@ void Planner::createNextPositionFromAbove() {
     // _stats.endTiming(TimingStage::EXPANSION_ABOVE);
 }
 
-void Planner::createNextPositionFromLeft(Position& left) {
+void Planner::createNextPositionFromLeft(Position& newPos, Position& left) {
     // _stats.beginTiming(TimingStage::EXPANSION_LEFT);
     // Log::i("Creating position (%i,%i) from left position (%i,%i)\n", 
-            // _layer_idx, _pos, left.getLayerIndex(), left.getPositionIndex());
-    Position& newPos = (*_layers[_layer_idx])[_pos];
-    newPos.setPos(_layer_idx, _pos);
-    assert(left.getLayerIndex() == _layer_idx);
-    assert(left.getPositionIndex() == _pos-1);
+            // _depth, _pos, left.getLayerIndex(), left.getPositionIndex());
+    assert(left.getLayerIndex() == newPos.getLayerIndex());
+    assert(left.getPositionIndex()+1 == newPos.getPositionIndex());
 
     // Propagate fact changes from operations from previous position
     USigSet actionsToRemove;
@@ -783,8 +727,8 @@ void Planner::createNextPositionFromLeft(Position& left) {
             const SigSet& pseudoEff = _analysis.getPossiblePseudoGroundFactChanges(aSig);
             // _stats.beginTiming(TimingStage::EXPANSION_LEFT_GROUND);
 
-            addGroundEffectBitVec(aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
-            addGroundEffectBitVec(aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
+            addGroundEffectBitVec(newPos, aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
+            addGroundEffectBitVec(newPos, aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
 
             
             // _stats.endTiming(TimingStage::EXPANSION_LEFT_GROUND);
@@ -792,6 +736,8 @@ void Planner::createNextPositionFromLeft(Position& left) {
             for (const Signature& pseudoPred : pseudoEff) {
                 // Log::i("Get pseudo ground fact changes for %s: %s\n", TOSTR(aSig), TOSTR(pseudoPred));
                 if (isAction && !addPseudoGroundEffect(
+                        newPos,
+                        left,
                         repeatedAction ? aSig.renamed(_htn.getActionNameFromRepetition(aSig._name_id)) : aSig, 
                         pseudoPred,
                         repeatedAction ? EffectMode::DIRECT_NO_QFACT : EffectMode::DIRECT)) {
@@ -801,7 +747,7 @@ void Planner::createNextPositionFromLeft(Position& left) {
                     actionsToRemove.insert(aSig);
                     break;
                 }
-                if (!isAction && !addPseudoGroundEffect(aSig, pseudoPred, EffectMode::INDIRECT)) {
+                if (!isAction && !addPseudoGroundEffect(newPos, left, aSig, pseudoPred, EffectMode::INDIRECT)) {
                     // Impossible indirect effect: ignore.
                 }
             }
@@ -812,11 +758,11 @@ void Planner::createNextPositionFromLeft(Position& left) {
     }
 
     for (const auto& aSig : actionsToRemove) {
-        _pruning.prune(aSig, _layer_idx, _pos-1);
+        _pruning.prune(aSig, left);
     }
 
     // To debug, print reachable facts
-    // Log::i("Reachable facts after creating position (%i,%i):\n", _layer_idx, _pos);
+    // Log::i("Reachable facts after creating position (%i,%i):\n", _depth, _pos);
     // Log::i("Classical:\n");
     // _analysis.printReachableFacts();
     // Log::i("BitVec:\n");
@@ -828,12 +774,8 @@ void Planner::createNextPositionFromLeft(Position& left) {
 
 
 // Just update the analysis
-void Planner::createNextPositionFromLeftSimplified(Position& left) {
+void Planner::createNextPositionFromLeftSimplified(Position& newPos) {
     // _stats.beginTiming(TimingStage::EXPANSION_LEFT_SIMPLFIED);
-    Position& newPos = (*_layers[_layer_idx])[_pos];
-    assert(left.getLayerIndex() == _layer_idx);
-    assert(left.getPositionIndex() == _pos-1);
-
     const BitVec& pos_facts_changed = newPos.getFactChangeBitVec(/*negated=*/false);
     const BitVec& neg_facts_changed = newPos.getFactChangeBitVec(/*negated=*/true);
     _analysis.addMultipleReachableFactsBitVec(pos_facts_changed, /*negated=*/false);
@@ -842,43 +784,39 @@ void Planner::createNextPositionFromLeftSimplified(Position& left) {
 }
 
 
-void Planner::addPreconditionConstraints() {
-    Position& newPos = _layers[_layer_idx]->at(_pos);
-
-    for (const auto& aSig : newPos.getActions()) {
+void Planner::addPreconditionConstraints(Position& pos) {
+    for (const auto& aSig : pos.getActions()) {
         const Action& a = _htn.getOpTable().getAction(aSig);
         // Add preconditions of action
         bool isRepetition = _htn.isActionRepetition(aSig._name_id);
-        addPreconditionsAndConstraints(aSig, a.getPreconditions(), isRepetition);
+        addPreconditionsAndConstraints(pos, aSig, a.getPreconditions(), isRepetition);
     }
-    for (const auto& rSig : newPos.getReductions()) {
+    for (const auto& rSig : pos.getReductions()) {
         // Add preconditions of reduction
-        addPreconditionsAndConstraints(rSig, _htn.getOpTable().getReduction(rSig).getPreconditions(), /*isRepetition=*/false);
+        addPreconditionsAndConstraints(pos, rSig, _htn.getOpTable().getReduction(rSig).getPreconditions(), /*isRepetition=*/false);
     }
 }
 
-void Planner::addPreconditionsAndConstraints(const USignature& op, const SigSet& preconditions, bool isRepetition) {
-    Position& newPos = _layers[_layer_idx]->at(_pos);
-    
+void Planner::addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isRepetition) {
     USignature constrOp = isRepetition ? USignature(_htn.getActionNameFromRepetition(op._name_id), op._args) : op;
 
     // Log::i("Starting preconditions for op %s\n", TOSTR(op));
     for (const Signature& fact : preconditions) {
         // Log::i("  Precondition %s\n", TOSTR(fact));
         // auto cOpt2 = addPrecondition(op, fact, !isRepetition);
-        auto cOpt = addPreconditionBitVec(op, fact, !isRepetition);
+        auto cOpt = addPreconditionBitVec(pos, op, fact, !isRepetition);
         // if (cOpt && cOpt2 && *cOpt != *cOpt2) {
         //     Log::e("Inconsistency in precondition constraints for %s\n", 
         //         TOSTR(op));
         // }
-        if (cOpt) newPos.addSubstitutionConstraint(constrOp, std::move(cOpt.value()));
+        if (cOpt) pos.addSubstitutionConstraint(constrOp, std::move(cOpt.value()));
     }
-    if (!isRepetition) addQConstantTypeConstraints(op);
+    if (!isRepetition) addQConstantTypeConstraints(pos, op);
 
-    if (!newPos.getSubstitutionConstraints().count(op)) return;
+    if (!pos.getSubstitutionConstraints().count(op)) return;
 
     // Merge substitution constraints as far as possible
-    auto& constraints = newPos.getSubstitutionConstraints().at(op);
+    auto& constraints = pos.getSubstitutionConstraints().at(op);
     //Log::d("MERGE? %i constraints\n", constraints.size());
     for (size_t i = 0; i < constraints.size(); i++) {
         for (size_t j = i+1; j < constraints.size(); j++) {
@@ -899,10 +837,9 @@ void Planner::addPreconditionsAndConstraints(const USignature& op, const SigSet&
     }
 }
 
-std::optional<SubstitutionConstraint> Planner::addPreconditionBitVec(const USignature& op, const Signature& fact, bool addQFact) {
+std::optional<SubstitutionConstraint> Planner::addPreconditionBitVec(Position& pos, const USignature& op, const Signature& fact, bool addQFact) {
 
     // Log::i("Adding precondition %s for op %s\n", TOSTR(fact), TOSTR(op));
-    Position& pos = (*_layers[_layer_idx])[_pos];
     const USignature& factAbs = fact.getUnsigned();
 
 
@@ -1084,10 +1021,8 @@ std::optional<SubstitutionConstraint> Planner::addPreconditionBitVec(const USign
 }
 
 
-void Planner::addGroundEffectBitVec(const USignature& opSig, BitVec effects, bool negated, EffectMode mode) 
+void Planner::addGroundEffectBitVec(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode) 
 {
-    Position& pos = (*_layers[_layer_idx])[_pos];
-
     if (effects.count() == 0) return; // No effect to add
 
     // Remove all invariant ground facts from the effects
@@ -1117,9 +1052,8 @@ void Planner::addGroundEffectBitVec(const USignature& opSig, BitVec effects, boo
 }
 
 
-bool Planner::addGroundEffect(const USignature& opSig, const int predId, bool negated, EffectMode mode) {
-    Position& pos = (*_layers[_layer_idx])[_pos];
-    assert(_pos > 0);
+bool Planner::addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode) {
+    assert(pos.getPositionIndex() > 0);
 
     // Log::i("Adding ground effect %s for op %s\n", TOSTR(_htn.getGroundPositiveFact(predId)), TOSTR(opSig));
 
@@ -1151,10 +1085,8 @@ bool Planner::addGroundEffect(const USignature& opSig, const int predId, bool ne
 }
 
 
-bool Planner::addPseudoGroundEffect(const USignature& opSig, const Signature& fact, EffectMode mode) {
-    Position& pos = (*_layers[_layer_idx])[_pos];
-    assert(_pos > 0);
-    Position& left = (*_layers[_layer_idx])[_pos-1];
+bool Planner::addPseudoGroundEffect(Position& pos, Position& left, const USignature& opSig, const Signature& fact, EffectMode mode) {
+    assert(pos.getPositionIndex() > 0);
     USignature factAbs = fact.getUnsigned();
     bool isQFact = _htn.hasQConstants(factAbs);
 
@@ -1164,7 +1096,7 @@ bool Planner::addPseudoGroundEffect(const USignature& opSig, const Signature& fa
         int a = 0;
         int predId = _htn.getGroundFactId(factAbs, fact._negated);
         if (predId == -1) return false; // Not a valid fact, cannot add it
-        return addGroundEffect(opSig, predId, fact._negated, mode);
+        return addGroundEffect(pos, opSig, predId, fact._negated, mode);
     }
 
     // Create the full set of valid decodings for this qfact
@@ -1274,12 +1206,9 @@ bool Planner::addPseudoGroundEffect(const USignature& opSig, const Signature& fa
 
 
 
-void Planner::propagateInitialState() {
-    assert(_layer_idx > 0);
-    assert(_pos == 0);
-
-    Position& newPos = (*_layers[_layer_idx])[0];
-    Position& above = (*_layers[_layer_idx-1])[0];
+void Planner::propagateInitialState(Position& newPos, const Position& above) {
+    assert(newPos.getLayerIndex() > 0);
+    assert(newPos.getPositionIndex() == 0);
 
     _analysis.resetReachability();
 
@@ -1299,10 +1228,7 @@ void Planner::propagateInitialState() {
 
 }
 
-void Planner::propagateActions(size_t offset) {
-    Position& newPos = (*_layers[_layer_idx])[_pos];
-    Position& above = (*_layers[_layer_idx-1])[_old_pos];
-
+void Planner::propagateActions(Position& newPos, Position& above, size_t offset) {
     // Check validity of actions at above position
     std::vector<USignature> actionsToPrune;
     size_t numActionsBefore = above.getActions().size();
@@ -1332,14 +1258,15 @@ void Planner::propagateActions(size_t offset) {
 
         // If not: forbid the action, i.e., its parent action
         if (!valid) {
-            Log::i("Retroactively prune action %s@(%i,%i): no children at offset %i\n", TOSTR(aSig), _layer_idx-1, _old_pos, offset);
+            Log::i("Retroactively prune action %s@(%i,%i): no children at offset %i\n",
+                TOSTR(aSig), above.getLayerIndex(), above.getPositionIndex(), offset);
             actionsToPrune.push_back(aSig);
         }
     }
 
     // Prune invalid actions at above position
     for (const auto& aSig : actionsToPrune) {
-        _pruning.prune(aSig, _layer_idx-1, _old_pos);
+        _pruning.prune(aSig, above);
     }
     assert(above.getActions().size() == numActionsBefore - actionsToPrune.size() 
         || Log::e("%i != %i-%i\n", above.getActions().size(), numActionsBefore, actionsToPrune.size()));
@@ -1368,10 +1295,7 @@ void Planner::propagateActions(size_t offset) {
     }
 }
 
-void Planner::propagateReductions(size_t offset) {
-    Position& newPos = (*_layers[_layer_idx])[_pos];
-    Position& above = (*_layers[_layer_idx-1])[_old_pos];
-
+void Planner::propagateReductions(Position& newPos, Position& above, size_t offset) {
     NodeHashMap<USignature, USigSet, USignatureHasher> subtaskToParents;
     NodeHashSet<USignature, USignatureHasher> reductionsWithChildren;
 
@@ -1397,13 +1321,13 @@ void Planner::propagateReductions(size_t offset) {
     for (const auto& [subtask, parents] : subtaskToParents) {
 
         // Log::i("For subtask %s@(%i,%i) at offset %i, found %zu parents\n", 
-                // TOSTR(subtask), _layer_idx-1, _old_pos, offset, parents.size());
+                // TOSTR(subtask), _depth-1, _old_pos, offset, parents.size());
 
         // Calculate all possible actions fitting the subtask.
-        auto allActions = instantiateAllActionsOfTask(subtask);
+        auto allActions = instantiateAllActionsOfTask(newPos, subtask);
 
         // Any reduction(s) fitting the subtask?
-        for (const USignature& subRSig : instantiateAllReductionsOfTask(subtask)) {
+        for (const USignature& subRSig : instantiateAllReductionsOfTask(newPos, subtask)) {
 
             if (_htn.isAction(subRSig)) {
                 // Actually an action, not a reduction: remember for later
@@ -1455,12 +1379,12 @@ void Planner::propagateReductions(size_t offset) {
     // Prune invalid reductions at above position
     for (const auto& rSig : reductionsWithNoChildren) {
         Log::i("Retroactively prune reduction %s@(%i,%i): no children at offset %i\n", 
-                    TOSTR(rSig), _layer_idx-1, _old_pos, offset);
-        _pruning.prune(rSig, _layer_idx-1, _old_pos);
+                    TOSTR(rSig), above.getLayerIndex(), above.getPositionIndex(), offset);
+        _pruning.prune(rSig, above);
     }
 }
 
-std::vector<USignature> Planner::instantiateAllActionsOfTask(const USignature& task) {
+std::vector<USignature> Planner::instantiateAllActionsOfTask(Position& pos, const USignature& task) {
     std::vector<USignature> result;
 
     if (!_htn.isAction(task)) return result;
@@ -1472,7 +1396,11 @@ std::vector<USignature> Planner::instantiateAllActionsOfTask(const USignature& t
         Action action = _htn.toAction(sig._name_id, sig._args);
 
         // Rename any remaining variables in each action as unique q-constants,
-        action = _htn.replaceVariablesWithQConstants(action, _analysis.getReducedArgumentDomains(action), _layer_idx, _pos);
+        action = _htn.replaceVariablesWithQConstants(
+            action,
+            _analysis.getReducedArgumentDomains(action),
+            pos.getLayerIndex(),
+            pos.getPositionIndex());
 
         // Remove any contradictory ground effects that were just created
         action.removeInconsistentEffects();
@@ -1512,7 +1440,7 @@ std::vector<USignature> Planner::instantiateAllActionsOfTask(const USignature& t
     return result;
 }
 
-std::vector<USignature> Planner::instantiateAllReductionsOfTask(const USignature& task) {
+std::vector<USignature> Planner::instantiateAllReductionsOfTask(Position& pos, const USignature& task) {
     std::vector<USignature> result;
 
     if (!_htn.hasReductions(task._name_id)) return result;
@@ -1528,7 +1456,7 @@ std::vector<USignature> Planner::instantiateAllReductionsOfTask(const USignature
             std::vector<Substitution> subs = Substitution::getAll(r.getTaskArguments(), task._args);
             for (const Substitution& s : subs) {
                 USignature primSig = a.getSignature().substitute(s);
-                for (const auto& sig : instantiateAllActionsOfTask(primSig)) {
+                for (const auto& sig : instantiateAllActionsOfTask(pos, primSig)) {
                     result.push_back(sig);
                 }
             }
@@ -1544,7 +1472,7 @@ std::vector<USignature> Planner::instantiateAllReductionsOfTask(const USignature
             if (!_htn.hasConsistentlyTypedArgs(origSig)) continue;
             
             for (USignature& red : _instantiator.getApplicableInstantiations(rSub)) {
-                auto rOpt = createValidReduction(red, task);
+                auto rOpt = createValidReduction(pos, red, task);
                 if (rOpt) result.push_back(rOpt.value().getSignature());
             }
         }
@@ -1552,13 +1480,13 @@ std::vector<USignature> Planner::instantiateAllReductionsOfTask(const USignature
     return result;
 }
 
-std::optional<Reduction> Planner::createValidReduction(const USignature& sig, const USignature& task) {
+std::optional<Reduction> Planner::createValidReduction(Position& pos, const USignature& sig, const USignature& task) {
     std::optional<Reduction> rOpt;
 
     // Rename any remaining variables in each action as new, unique q-constants 
     Reduction red = _htn.toReduction(sig._name_id, sig._args);
     auto domains = _analysis.getReducedArgumentDomains(red);
-    red = _htn.replaceVariablesWithQConstants(red, domains, _layer_idx, _pos);
+    red = _htn.replaceVariablesWithQConstants(red, domains, pos.getLayerIndex(), pos.getPositionIndex());
 
     // Check validity
     bool isValid = true;
@@ -1592,9 +1520,7 @@ std::optional<Reduction> Planner::createValidReduction(const USignature& sig, co
     return rOpt;
 }
 
-void Planner::initializeNextEffectsBitVec() {
-    Position& newPos = (*_layers[_layer_idx])[_pos];
-    
+void Planner::initializeNextEffectsBitVec(Position& newPos) {
     // For each possible operation effect:
     const USigSet* ops[2] = {&newPos.getActions(), &newPos.getReductions()};
     bool isAction = true;
@@ -1672,52 +1598,28 @@ void Planner::initializeFactBitVec(Position& newPos, const int predId) {
     }
 }
 
-void Planner::addQConstantTypeConstraints(const USignature& op) {
+void Planner::addQConstantTypeConstraints(Position& pos, const USignature& op) {
     // Add type constraints for q constants
     std::vector<TypeConstraint> cs = _htn.getQConstantTypeConstraints(op);
     // Add to this position's data structure
     for (const TypeConstraint& c : cs) {
-        (*_layers[_layer_idx])[_pos].addQConstantTypeConstraint(op, c);
+        pos.addQConstantTypeConstraint(op, c);
     }
 }
 
 void Planner::clearDonePositions(int offset) {
-
-    Position* positionToClearLeft = nullptr;
-    if (_pos == 0 && _layer_idx > 0) {
-        positionToClearLeft = &_layers.at(_layer_idx-1)->last();
-    } else if (_pos > 0) positionToClearLeft = &_layers.at(_layer_idx)->at(_pos-1);
-    if (positionToClearLeft != nullptr) {
-        Log::v("  Freeing some memory of (%i,%i) ...\n", positionToClearLeft->getLayerIndex(), positionToClearLeft->getPositionIndex());
-        positionToClearLeft->clearAtPastPosition();
-    }
-
-    if (_layer_idx == 0 || offset > 0) return;
-    
-    Position* positionToClearAbove = nullptr;
-    if (_old_pos == 0) {
-        // Clear rightmost position of "above above" layer
-        if (_layer_idx > 1) positionToClearAbove = &_layers.at(_layer_idx-2)->at(_layers.at(_layer_idx-2)->size()-1);
-    } else {
-        // Clear previous parent position of "above" layer
-        positionToClearAbove = &_layers.at(_layer_idx-1)->at(_old_pos-1);
-    }
-    if (positionToClearAbove != nullptr) {
-        Log::v("  Freeing most memory of (%i,%i) ...\n", positionToClearAbove->getLayerIndex(), positionToClearAbove->getPositionIndex());
-        positionToClearAbove->clearAtPastLayer();
-    }
+    (void) offset;
 }
 
-
-void Planner::setSoftLitsForOpsLastLayer() {
+void Planner::setSoftLitsForCurrentLeaves() {
 
     int name_id_prim = _htn.nameId("__PRIMITIVE___");
     int name_id_blank = 1;
 
     _last_number_of_soft_lits = 0;
 
-    for (int pos_idx = 0; pos_idx < _layers[_layer_idx]->size() - 1; pos_idx++) {
-        Position& pos = _layers[_layer_idx]->at(pos_idx);
+    for (size_t pos_idx = 0; pos_idx + 1 < _leaf_positions.size(); pos_idx++) {
+        Position& pos = *_leaf_positions[pos_idx];
 
         // Iterate over all action and reductions of the position and their respective SAT var
         for (const auto& [op, aVar] : pos.getVariableTable(VarType::OP)) {
@@ -1818,7 +1720,7 @@ int Planner::getTerminateSatCall() {
 }
 
 void Planner::printStatistics() {
-    Log::i("# number of layers: %zu\n", _layers.size());
+    Log::i("# number of depths: %zu\n", _depth + 1);
     Log::i("# instantiated positions: %i\n", _num_instantiated_positions);
     Log::i("# instantiated actions: %i\n", _num_instantiated_actions);
     Log::i("# instantiated reductions: %i\n", _num_instantiated_reductions);

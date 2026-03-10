@@ -59,7 +59,7 @@ int SeparateTasksScheduler::getAssumptionsUntil(int layer_size) const {
     return layer_size - _init_task_network_size - 1 + _current_task_index;
 }
 
-bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<Layer*> &layers, int layer_idx) {
+bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<Position*> &leafPositions) {
     _num_init_tasks_resolved = _current_task_index;
     if (_num_init_tasks_resolved == _init_task_network_size) {
         displayAdvancementBar();
@@ -67,15 +67,15 @@ bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<
         return true;
     } else {
         Log::i("Solved the problem for %d/%d tasks\n", _num_init_tasks_resolved, _init_task_network_size);
-        int layer_size = layers[layer_idx]->size();
-        int solve_positions = layer_size - _init_task_network_size - 1 + _current_task_index;
+        int numLeafPositions = leafPositions.size();
+        int solve_positions = numLeafPositions - _init_task_network_size - 1 + _current_task_index;
         _num_pos_done = solve_positions;
         // Save a snapshot of all SAT variables that are true until solve_positions.
         NodeHashSet<int> snapshot = enc.getSnapshotsOpsAndPredsTrue(solve_positions);
         _vars_tasks_accomplished.push_back(snapshot);
         _num_pos_done_at_each_step.push_back(_num_pos_done);
         _num_tasks_solved_at_each_step.push_back(_num_tasks_to_solve);
-        updateReachableStateAfterTasksAccomplished(enc, layers, layer_idx, solve_positions);
+        updateReachableStateAfterTasksAccomplished(enc, leafPositions, solve_positions);
         
         if (_tcp_exponential_resolving) {
             auto end = std::chrono::high_resolution_clock::now();
@@ -155,7 +155,7 @@ bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<
     }
 }
 
-void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding &enc, const std::vector<Layer *> &layers, int layerIdx, int solvePositions)
+void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding &enc, const std::vector<Position*> &leafPositions, int solvePositions)
 {
     _reachable_state_pos_after_tasks_accomplished = _init_state;
     _reachable_state_neg_after_tasks_accomplished.clear();
@@ -164,15 +164,15 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
     if (_add_tasks_as_clauses)
     {
         // We can directly compute the state after all accomplished tasks
-        Layer &layer = *layers[layerIdx];
         for (int i = 0; i < solvePositions; ++i)
         {
+            Position& leaf = *leafPositions[i];
 
             // To debug, print the current predicate at this position
-            // enc.printStatementsAtPosition(layerIdx, i);
+            // enc.printStatementsAtPosition(leaf);
 
             // Get the action true in this position
-            const USignature aSig = enc.getDecodingOpHoldingInLayerPos(layerIdx, i);
+            const USignature aSig = enc.getDecodingOpHoldingAt(leaf);
 
             // It is maybe a reduction without subtasks, in that case, we skip it
             if (_htn.isReduction(aSig))
@@ -180,7 +180,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                 continue;
             }
 
-            Log::d("Action %s is true in layer %d, position %d\n", TOSTR(aSig), layerIdx, i);
+            Log::d("Action %s is true at position %d\n", TOSTR(aSig), i);
             Action action = _htn.toAction(aSig._name_id, aSig._args);
             // First, remove from the current state all the negative effects of the action
 
@@ -192,10 +192,10 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
 
                 if (!_reachable_state_pos_after_tasks_accomplished.count(posPrecondition._usig))
                 {
-                    int varAction = layer[i].getVariableOrZero(VarType::OP, aSig);
-                    int varPosPrecondition = layer[i].getVariableOrZero(VarType::FACT, posPrecondition._usig);
+                    int varAction = leaf.getVariableOrZero(VarType::OP, aSig);
+                    int varPosPrecondition = leaf.getVariableOrZero(VarType::FACT, posPrecondition._usig);
                     Log::e("Action %s (var: %d) has a positive precondition %s (var: %d) that is not satisfied in the reachable state after tasks accomplished\n", TOSTR(action.getSignature()), varAction, TOSTR(posPrecondition._usig), varPosPrecondition);
-                    Log::e("Original layer position: (%d,%d)\n", layer[i].getOriginalLayerIndex(), layer[i].getOriginalPositionIndex());
+                    Log::e("Original layer position: (%d,%d)\n", (int) leaf.getOriginalLayerIndex(), (int) leaf.getOriginalPositionIndex());
                     Log::e("This means that the action is not applicable in the reachable state after tasks accomplished\n");
                     Log::e("This is a bug in the planner, please report it\n");
                     exit(1);
@@ -238,8 +238,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
 
         // Clean all the position done
         for (int i = 0; i < solvePositions - 1; ++i) {
-            Position &pos = layer[i];
-            pos.clearFactSupportsId();
+            leafPositions[i]->clearFactSupportsId();
         }
     }
     else
@@ -249,10 +248,9 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
         _reachable_state_neg_after_tasks_accomplished_bitvec = _init_state_neg_bitvec;
 
         // Otherwise, do the classical way
-        Layer &layer = *layers[layerIdx];
         for (int i = 0; i < solvePositions; ++i)
         {
-            Position &pos = layer[i];
+            Position &pos = *leafPositions[i];
 
             const BitVec& pos_facts_changed = pos.getFactChangeBitVec(/*negated=*/false);
             const BitVec& neg_facts_changed = pos.getFactChangeBitVec(/*negated=*/true);

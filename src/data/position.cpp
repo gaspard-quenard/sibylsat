@@ -1,6 +1,8 @@
 
 #include "position.h"
 
+#include <algorithm>
+
 #include "sat/variable_domain.h"
 #include "util/log.h"
 
@@ -9,6 +11,17 @@ IndirectFactSupportMapId Position::EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
 
 Position::Position() : _layer_idx(-1), _pos(-1) {}
 void Position::setPos(size_t layerIdx, size_t pos) {_layer_idx = layerIdx; _pos = pos;}
+void Position::setParentPosition(Position* parent) {
+    if (_parent_position == parent) return;
+    assert(_parent_position == nullptr || _parent_position == parent);
+    _parent_position = parent;
+    if (parent == nullptr) return;
+
+    auto& siblings = parent->_children_positions;
+    if (std::find(siblings.begin(), siblings.end(), this) == siblings.end()) {
+        siblings.push_back(this);
+    }
+}
 
 void Position::addQFact(const USignature& qfact) {
     _qfacts.insert(qfact);
@@ -195,6 +208,7 @@ const NodeHashMap<USignature, std::vector<TypeConstraint>, USignatureHasher>& Po
 }
 
 USigSet& Position::getActions() {return _actions;}
+const USigSet& Position::getActions() const {return _actions;}
 const USigSet& Position::getReductions() const {return _reductions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getExpansions() {return _expansions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getPredecessors() {return _predecessors;}
