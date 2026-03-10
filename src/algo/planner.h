@@ -2,50 +2,30 @@
 #ifndef DOMPASCH_TREE_REXX_PLANNER_H
 #define DOMPASCH_TREE_REXX_PLANNER_H
  
-#include "util/names.h"
 #include "util/params.h"
-#include "util/hashmap.h"
 #include "data/position.h"
 #include "data/htn_instance.h"
-#include "algo/instantiator.h"
-#include "algo/arg_iterator.h"
-#include "algo/precondition_inference.h"
-#include "algo/minres.h"
-#include "algo/fact_analysis.h"
-#include "algo/retroactive_pruning.h"
-#include "algo/domination_resolver.h"
 #include "algo/plan_writer.h"
+#include "algo/precondition_inference.h"
+#include "algo/separate_tasks_scheduler.h"
 #include "algo/tree_expander.h"
 #include "sat/encoding.h"
-#include "data/tdg.h"
-#include "algo/separate_tasks_scheduler.h"
 #include <optional>
 
 typedef std::pair<std::vector<PlanItem>, std::vector<PlanItem>> Plan;
 
 class Planner {
 
-public:
-    typedef std::function<bool(const USignature&, bool)> StateEvaluator;
-
 private:
     Parameters& _params;
     HtnInstance& _htn;
-
-    Position* _root_position = nullptr;
-    std::vector<Position*> _leaf_positions;
-
-    FactAnalysis _analysis;
-    Instantiator _instantiator;
+    TreeExpander _tree_expander;
+    Position*& _root_position;
+    std::vector<Position*>& _leaf_positions;
+    FactAnalysis& _analysis;
     Encoding _enc;
-    Statistics& _stats;
-    MinRES _minres;
-    RetroactivePruning _pruning;
-    DominationResolver _domination_resolver;
+    std::unique_ptr<RetroactivePruning> _pruning;
     PlanWriter _plan_writer;
-    size_t _depth = 0;
-
-    const int _verbosity;
 
     const bool _use_sibylsat_expansion;
     std::vector<Position*> _sibylsat_nodes_to_develop;
@@ -53,91 +33,73 @@ private:
     // For optimal planning
     const bool _optimal;
     std::optional<TDG> _tdg;
-    size_t _last_number_of_soft_lits = 0;
-    std::unordered_set<int> _soft_lits;
 
-    // For separate tasks
     const bool _separate_tasks;
     std::unique_ptr<SeparateTasksScheduler> _separate_tasks_scheduler;
     
-    bool _nonprimitive_support;
     float _optimization_factor;
 
-    Plan _plan;
-
-    // statistics
-    size_t _num_instantiated_positions = 0;
-    size_t _num_instantiated_actions = 0;
-    size_t _num_instantiated_reductions = 0;
-
-    TreeExpander _tree_expander;
-
 public:
-    Planner(Parameters& params, HtnInstance& htn) : _params(params), _htn(htn), _stats(Statistics::getInstance()),
-            _verbosity(params.getIntParam("v")),
-            _analysis(_htn, true, _htn.getParams().isNonzero("optimal")), 
-            _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
-            _optimal(_params.isNonzero("optimal")),
-            _separate_tasks(_params.isNonzero("separateTasks") && _htn.getInitReduction().getSubtasks().size() > 1 && _use_sibylsat_expansion && !_optimal),
-            _instantiator(params, htn, _analysis), 
-            _enc(_params, _htn, _analysis, _root_position, _leaf_positions), 
-            _minres(_htn), 
-            _pruning(_enc),
-            _domination_resolver(_htn),
-            _plan_writer(_htn, _params),
-            _nonprimitive_support(_params.isNonzero("nps")), 
-            _optimization_factor(_params.getFloatParam("of")),
-            _tree_expander(
-                    _params,
-                    _htn,
-                    _root_position,
-                    _leaf_positions,
-                    _analysis,
-                    _instantiator,
-                    _enc,
-                    _stats,
-                    _pruning,
-                    _domination_resolver,
-                    _tdg,
-                    _separate_tasks_scheduler,
-                    _depth,
-                    _use_sibylsat_expansion,
-                    _separate_tasks,
-                    _nonprimitive_support,
-                    _optimal,
-                    _num_instantiated_positions,
-                    _num_instantiated_actions,
-                    _num_instantiated_reductions) {
-
-        // Mine additional preconditions for reductions from their subtasks
+    Planner(Parameters& params, HtnInstance& htn)
+            : _params(params),
+              _htn(htn),
+              _tree_expander(_params, _htn),
+              _root_position(_tree_expander.getRootPositionRef()),
+              _leaf_positions(_tree_expander.getLeafPositions()),
+              _analysis(_tree_expander.getAnalysis()),
+              _enc(_params, _htn, _analysis, _root_position, _leaf_positions),
+              _pruning(std::make_unique<RetroactivePruning>(_enc)),
+              _plan_writer(_htn, _params),
+              _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
+              _optimal(_params.isNonzero("optimal")),
+              _separate_tasks(_params.isNonzero("separateTasks")
+                      && _htn.getInitReduction().getSubtasks().size() > 1
+                      && _use_sibylsat_expansion
+                      && !_optimal),
+              _optimization_factor(_params.getFloatParam("of")) {
         PreconditionInference::infer(_htn, _analysis, PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
-
         if (_htn.getParams().isNonzero("mutex") && _analysis.checkGroundingFacts()) {
             _htn._sas_plus->cleanMutexGroupsWithPandaPiGrounderPreprocessingFacts(_analysis.getGroundPosFacts());
         }
-
         if (_optimal) {
-            // Construct the TDG and infer the admissible values for each tasks and methods
             _tdg.emplace(_htn);
+            _tree_expander.attachTDG(*_tdg);
         }
-
+        _tree_expander.attachPruning(*_pruning);
         if (_separate_tasks) {
-            // Initialize the separate tasks scheduler
-            _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(/*htn=*/ htn);
+            _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn);
+            _tree_expander.attachSeparateTasksScheduler(*_separate_tasks_scheduler);
         }
     }
     int findPlan();
     void optimizeCurrentPlan();
 
-    const bool mustRestartPlanner() const { 
-        return (_separate_tasks && _separate_tasks_scheduler->mustRestartPlanner());
+    const bool mustRestartPlanner() const {
+        return _separate_tasks_scheduler != nullptr && _separate_tasks_scheduler->mustRestartPlanner();
     }
 
 private:
+    void initializeSearchTree() {
+        // Create the initial search tree with only the root and the goal node as leaves.
+        _tree_expander.createInitialLeaves();
+
+        // Encode the root method
+        _enc.encode(*_leaf_positions[0]);
+        // Encode the goal node
+        _enc.encode(*_leaf_positions[1]);
+    }
+
+    void printTreeStatistics() const { _tree_expander.printStatistics(); }
+
     /**
      * Expand the given leaves in the search tree.
      */
-    void expandLeaves(const std::vector<Position*>& leavesToExpand);
+    TreeExpander::ExpansionResult expandLeaves(const std::vector<Position*>& leavesToExpand);
+
+    /**
+     * Encode the new leaves into a SAT formula after an expansion step.
+     */
+    void encodeLeaves(const TreeExpander::ExpansionResult& expansion);
 
     /**
      * Launch two SAT calls:
@@ -171,9 +133,11 @@ private:
      */
     void collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>& abstractPlan, int leafLimit = -1);
 
+    /**
+     * In optimal mode, set a MaxSat cost for each operation of the current leaves of the search tree which correspond to 
+     * an admissible cost of those operations (which is found using the TDG heuristics).
+     */
     void setSoftLitsForCurrentLeaves();
-
-    void printStatistics();
 
 };
 

@@ -4,15 +4,16 @@
 
 #include "planner.h"
 #include "util/log.h"
+#include "util/names.h"
 #include "sat/plan_optimizer.h"
 
 int Planner::findPlan() {
-    
+
     int iteration = 0;
     Log::i("Iteration %i.\n", iteration);
 
     // Build the initial search tree before entering the search loop.
-    _tree_expander.createInitialLeaves();
+    initializeSearchTree();
 
     const int maxIterations = _params.getIntParam("D");
     bool solved = false;
@@ -21,11 +22,11 @@ int Planner::findPlan() {
         // Only develop the leaf which contains the _top_method
         _sibylsat_nodes_to_develop.push_back(_leaf_positions[0]);
     }
-    
+
     // Main loop of the search. We keep expanding the search tree until we find a solution, or reach the maximum iteration limit
     while (!solved) {
 
-        iteration++;      
+        iteration++;
         Log::i("Iteration %i.\n", iteration);
 
         if (maxIterations != 0 && iteration > maxIterations) {
@@ -41,7 +42,10 @@ int Planner::findPlan() {
                 _use_sibylsat_expansion ? _sibylsat_nodes_to_develop : _leaf_positions;
 
         // Grow the search tree by expanding the leaves selected for this iteration.
-        expandLeaves(leavesToExpand);
+        const TreeExpander::ExpansionResult expansion = expandLeaves(leavesToExpand);
+
+        // Encode the new frontier before querying the SAT solver on it.
+        encodeLeaves(expansion);
 
         // Then check if this search tree contains a solution (or a globally optimal solution if the optimal flag is on).
         solved = _optimal ? findGloballyOptimalSolutionInSearchTree() : findPrimitiveSolutionInSearchTree();
@@ -61,20 +65,73 @@ int Planner::findPlan() {
         return 1;
     }
 
-    Log::i("Found a solution at depth %i.\n", (int) _depth);
+    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
+    Log::i("Found a solution at depth %i.\n", (int) currentDepth);
     if (_optimization_factor != 0) {
         optimizeCurrentPlan();
     }
 
     // Extract the plan from the SAT solver and output it.
-    _plan = _enc.extractPlan();
-    _plan_writer.outputPlan(_plan);
-    printStatistics();    
+    Plan plan = _enc.extractPlan();
+    _plan_writer.outputPlan(plan);
+    printTreeStatistics();
     return 0;
 }
 
-void Planner::expandLeaves(const std::vector<Position*>& leavesToExpand) {
-    _tree_expander.expandLeaves(leavesToExpand);
+TreeExpander::ExpansionResult Planner::expandLeaves(const std::vector<Position*>& leavesToExpand) {
+    return _tree_expander.expandLeaves(leavesToExpand);
+}
+
+void Planner::encodeLeaves(const TreeExpander::ExpansionResult& expansion) {
+    Statistics& stats = Statistics::getInstance();
+    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
+
+    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
+    Log::i("Encoding ...\n");
+    _enc.setNewInitPos(expansion.newInitPos);
+
+    stats.beginTiming(TimingStage::ENCODING);
+    if (expansion.expandAll) {
+        for (Position* leaf : _leaf_positions) {
+            Log::v("- Position (%i,%i)\n", currentDepth, leaf->getPositionIndex());
+            _enc.encode(*leaf);
+        }
+    } else {
+        Log::i("New leaf count: %zu\n", _leaf_positions.size());
+        for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
+            switch (expansion.leafEncodingActions[leafIndex]) {
+            case TreeExpander::LeafEncodingAction::NONE:
+                break;
+            case TreeExpander::LeafEncodingAction::FULL:
+                _enc.encode(*_leaf_positions[leafIndex]);
+                break;
+            case TreeExpander::LeafEncodingAction::NEW_RELEVANTS:
+                _enc.encodeNewRelevantsFacts(*_leaf_positions[leafIndex]);
+                break;
+            case TreeExpander::LeafEncodingAction::EFFECTS_AND_FRAME:
+                _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[leafIndex]);
+                break;
+            case TreeExpander::LeafEncodingAction::PROPAGATE_RELEVANTS:
+                _enc.propagateRelevantsFacts(*_leaf_positions[leafIndex]);
+                break;
+            }
+        }
+    }
+    stats.endTiming(TimingStage::ENCODING);
+
+    for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
+        _leaf_positions[leafIndex]->setLeftPosition(leafIndex > 0 ? _leaf_positions[leafIndex - 1] : nullptr);
+    }
+
+    if (!expansion.expandAll) {
+        for (Position* node : expansion.expandedNodes) {
+            Log::v("Freeing position %zu of depth %zu\n", node->getPositionIndex(), node->getLayerIndex());
+            node->clearFullPos();
+        }
+        for (Position* leaf : _leaf_positions) {
+            leaf->clearDecodings();
+        }
+    }
 }
 
 bool Planner::findGloballyOptimalSolutionInSearchTree() {
@@ -142,7 +199,8 @@ bool Planner::findPrimitiveSolutionInSearchTree() {
 }
 
 bool Planner::findAbstractPlanInSearchTree() {
-    Log::i("Failed to find a solution at depth %i. Trying to find an abstract plan...\n", _depth);
+    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
+    Log::i("Failed to find a solution at depth %i. Trying to find an abstract plan...\n", currentDepth);
 
     if (_separate_tasks) {
         _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
@@ -167,6 +225,7 @@ bool Planner::findAbstractPlanInSearchTree() {
 }
 
 void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>& abstractPlan, int leafLimit) {
+    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
     _sibylsat_nodes_to_develop.clear();
     const size_t maxLeafIndex =
             leafLimit < 0 ? _leaf_positions.size() : std::min(_leaf_positions.size(), static_cast<size_t>(leafLimit));
@@ -176,7 +235,7 @@ void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>
             continue;
         }
         if (_htn.isReduction(item.reduction)) {
-            Log::d("  Reduction %s is true at depth %i, leaf %zu\n", TOSTR(item.reduction), _depth, leafIndex);
+            Log::d("  Reduction %s is true at depth %i, leaf %zu\n", TOSTR(item.reduction), currentDepth, leafIndex);
             _sibylsat_nodes_to_develop.push_back(_leaf_positions[leafIndex]);
         }
     }
@@ -191,11 +250,8 @@ void Planner::optimizeCurrentPlan() {
 }
 
 void Planner::setSoftLitsForCurrentLeaves() {
-
     int name_id_prim = _htn.nameId("__PRIMITIVE___");
     int name_id_blank = 1;
-
-    _last_number_of_soft_lits = 0;
 
     for (size_t pos_idx = 0; pos_idx + 1 < _leaf_positions.size(); pos_idx++) {
         Position& pos = *_leaf_positions[pos_idx];
@@ -231,21 +287,9 @@ void Planner::setSoftLitsForCurrentLeaves() {
             if (heuristicValue > 0) {
                 // printf("%d -%d 0\n", heuristicValue, aVar);
                 Log::d("Add soft lit for op %s (%d) with heuristic value %d\n", TOSTR(op), var, heuristicValue);
-                    _enc.addSoftLit(var, heuristicValue);
-                    _last_number_of_soft_lits++;
+                _enc.addSoftLit(var, heuristicValue);
             }
         }
     }
 }
 
-
-void Planner::printStatistics() {
-    Log::i("# number of depths: %zu\n", _depth + 1);
-    Log::i("# instantiated positions: %i\n", _num_instantiated_positions);
-    Log::i("# instantiated actions: %i\n", _num_instantiated_actions);
-    Log::i("# instantiated reductions: %i\n", _num_instantiated_reductions);
-    Log::i("# introduced pseudo-constants: %i\n", _htn.getNumberOfQConstants());
-    Log::i("# retroactive prunings: %i\n", _pruning.getNumRetroactivePunings());
-    Log::i("# retroactively pruned operations: %i\n", _pruning.getNumRetroactivelyPrunedOps());
-    Log::i("# dominated operations: %i\n", _domination_resolver.getNumDominatedOps());
-}

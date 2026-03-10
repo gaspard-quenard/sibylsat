@@ -2,38 +2,27 @@
 #include <assert.h>
 
 #include "tree_expander.h"
+#include "algo/separate_tasks_scheduler.h"
 #include "util/log.h"
 
-TreeExpander::TreeExpander(
-        Parameters& params,
-        HtnInstance& htn,
-        Position*& rootPosition,
-        std::vector<Position*>& leafPositions,
-        FactAnalysis& analysis,
-        Instantiator& instantiator,
-        Encoding& enc,
-        Statistics& stats,
-        RetroactivePruning& pruning,
-        DominationResolver& dominationResolver,
-        std::optional<TDG>& tdg,
-        std::unique_ptr<SeparateTasksScheduler>& separateTasksScheduler,
-        size_t& depth,
-        bool useSibylsatExpansion,
-        bool separateTasks,
-        bool nonprimitiveSupport,
-        bool optimal,
-        size_t& numInstantiatedPositions,
-        size_t& numInstantiatedActions,
-        size_t& numInstantiatedReductions)
-        : _params(params), _htn(htn), _root_position(rootPosition), _leaf_positions(leafPositions),
-          _analysis(analysis), _instantiator(instantiator), _enc(enc), _stats(stats), _pruning(pruning),
-          _domination_resolver(dominationResolver), _tdg(tdg),
-          _separate_tasks_scheduler(separateTasksScheduler), _depth(depth),
-          _use_sibylsat_expansion(useSibylsatExpansion), _separate_tasks(separateTasks),
-          _nonprimitive_support(nonprimitiveSupport), _optimal(optimal),
-          _num_instantiated_positions(numInstantiatedPositions),
-          _num_instantiated_actions(numInstantiatedActions),
-          _num_instantiated_reductions(numInstantiatedReductions) {}
+TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn)
+        : _params(params),
+          _htn(htn),
+          _stats(Statistics::getInstance()),
+          _analysis(_htn, true, _htn.getParams().isNonzero("optimal")),
+          _instantiator(params, htn, _analysis),
+          _domination_resolver(_htn),
+          _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
+          _nonprimitive_support(_params.isNonzero("nps")),
+          _optimal(_params.isNonzero("optimal")) {}
+
+size_t TreeExpander::getNumRetroactivePrunings() const {
+    return _pruning == nullptr ? 0 : _pruning->getNumRetroactivePunings();
+}
+
+size_t TreeExpander::getNumRetroactivelyPrunedOps() const {
+    return _pruning == nullptr ? 0 : _pruning->getNumRetroactivelyPrunedOps();
+}
 
 void TreeExpander::incrementPosition(const Position& pos) {
     _num_instantiated_actions += pos.getActions().size();
@@ -44,12 +33,6 @@ void TreeExpander::incrementPosition(const Position& pos) {
 void TreeExpander::refreshLeafMetadata() {
     for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
         _leaf_positions[pos]->setPos(_depth, pos);
-    }
-}
-
-void TreeExpander::refreshLeafLeftPositions() {
-    for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
-        _leaf_positions[pos]->setLeftPosition(pos > 0 ? _leaf_positions[pos - 1] : nullptr);
     }
 }
 
@@ -91,7 +74,7 @@ void TreeExpander::createInitialLeaves() {
 
     /***** DEPTH 0, POSITION 1 ******/
 
-    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition);
+    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition, /*positionsDone=*/0, /*addTasksAsClauses=*/false);
 
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
@@ -102,24 +85,31 @@ void TreeExpander::createInitialLeaves() {
 
     rootReductionPosition->clearAfterInstantiation();
     goalPosition->clearAfterInstantiation();
-
-    _enc.encode(*rootReductionPosition);
-    _enc.encode(*goalPosition);
 }
 
-void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
-    enum class LeafEncodingAction { NONE, FULL, NEW_RELEVANTS, EFFECTS_AND_FRAME, PROPAGATE_RELEVANTS };
+void TreeExpander::printStatistics() const {
+    Log::i("# number of depths: %zu\n", _depth + 1);
+    Log::i("# instantiated positions: %i\n", _num_instantiated_positions);
+    Log::i("# instantiated actions: %i\n", _num_instantiated_actions);
+    Log::i("# instantiated reductions: %i\n", _num_instantiated_reductions);
+    Log::i("# introduced pseudo-constants: %i\n", _htn.getNumberOfQConstants());
+    Log::i("# retroactive prunings: %i\n", getNumRetroactivePrunings());
+    Log::i("# retroactively pruned operations: %i\n", getNumRetroactivelyPrunedOps());
+    Log::i("# dominated operations: %i\n", _domination_resolver.getNumDominatedOps());
+}
 
+TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Position*>& nodesToDevelop) {
+    ExpansionResult result;
     std::vector<Position*> currentLeaves = _leaf_positions;
     FlatHashSet<Position*> nodesToDevelopSet;
     nodesToDevelopSet.reserve(nodesToDevelop.size());
     for (Position* node : nodesToDevelop) {
         nodesToDevelopSet.insert(node);
     }
-    const bool expandAll = nodesToDevelopSet.size() == currentLeaves.size();
+    result.expandAll = nodesToDevelopSet.size() == currentLeaves.size();
 
     size_t nextLeafCount = 0;
-    if (expandAll) {
+    if (result.expandAll) {
         for (Position* leaf : currentLeaves) {
             nextLeafCount += leaf->getMaxExpansionSize();
         }
@@ -130,9 +120,9 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
         }
     }
 
-    std::vector<LeafEncodingAction> encodingActions;
-    if (!expandAll) {
-        encodingActions.reserve(nextLeafCount);
+    if (!result.expandAll) {
+        result.leafEncodingActions.reserve(nextLeafCount);
+        result.expandedNodes.reserve(nodesToDevelopSet.size());
     }
 
     _depth++;
@@ -148,28 +138,38 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
     bool allLeavesDeveloped = false;
     bool leftLeafIsDeveloped = false;
 
-    int numPositionsAlreadyDone = !expandAll && _separate_tasks ? _separate_tasks_scheduler->getPositionsDone(currentLeaves.size()) : 0;
+    int numPositionsAlreadyDone = 0;
+    bool addTasksAsClauses = false;
+    const BitVec* reachableStatePos = nullptr;
+    const BitVec* reachableStateNeg = nullptr;
+    if (!result.expandAll && _separate_tasks_scheduler != nullptr) {
+        numPositionsAlreadyDone = _separate_tasks_scheduler->getPositionsDone(currentLeaves.size());
+        addTasksAsClauses = _separate_tasks_scheduler->addTasksAsClauses();
+        if (numPositionsAlreadyDone > 0) {
+            reachableStatePos = &_separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec();
+            reachableStateNeg = &_separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec();
+        }
+    }
+
     if (numPositionsAlreadyDone > 0) {
         Log::i("Propagating initial state facts for positions already done (%i)\n", numPositionsAlreadyDone);
         Position tmpInitialPosition;
         tmpInitialPosition.setPos(_depth, 0);
         propagateInitialState(tmpInitialPosition, *currentLeaves[0]);
-        const BitVec& reachable_state_pos_after_tasks_accomplished =
-            _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec();
-        const BitVec& reachable_state_neg_after_tasks_accomplished =
-            _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec();
+        assert(reachableStatePos != nullptr);
+        assert(reachableStateNeg != nullptr);
         _analysis.setReachableFactsBitVec(
-            reachable_state_pos_after_tasks_accomplished,
-            reachable_state_neg_after_tasks_accomplished
+            *reachableStatePos,
+            *reachableStateNeg
         );
-        if (_separate_tasks_scheduler->addTasksAsClauses()) {
-            _enc.setNewInitPos(numPositionsAlreadyDone);
+        if (addTasksAsClauses) {
+            result.newInitPos = numPositionsAlreadyDone;
 
             for (int leafIndex = 0; leafIndex < numPositionsAlreadyDone; leafIndex++) {
                 Position* carriedLeaf = currentLeaves[leafIndex];
                 carriedLeaf->setPos(_depth, nextLeafIndex);
                 _leaf_positions.push_back(carriedLeaf);
-                encodingActions.push_back(LeafEncodingAction::NONE);
+                result.leafEncodingActions.push_back(LeafEncodingAction::NONE);
                 nextLeafIndex++;
             }
         }
@@ -177,16 +177,16 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
     }
 
     size_t firstLeafToExpand =
-        !expandAll && _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? numPositionsAlreadyDone : 0;
+        !result.expandAll && addTasksAsClauses ? numPositionsAlreadyDone : 0;
     size_t firstLeafToEncode =
-        !expandAll && _separate_tasks && _separate_tasks_scheduler->addTasksAsClauses() ? numPositionsAlreadyDone : 0;
+        !result.expandAll && addTasksAsClauses ? numPositionsAlreadyDone : 0;
     bool needsEffectsAndFrame = false;
 
     Log::i("Instantiating ...\n");
 
     for (size_t leafIndex = firstLeafToExpand; leafIndex < currentLeaves.size(); leafIndex++)  {
         Position* currentLeaf = currentLeaves[leafIndex];
-        const bool developLeaf = expandAll || nodesToDevelopSet.count(currentLeaf);
+        const bool developLeaf = result.expandAll || nodesToDevelopSet.count(currentLeaf);
 
         if (!developLeaf) {
             Position& carriedLeaf = *currentLeaf;
@@ -195,10 +195,9 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
 
             if (nextLeafIndex == 0) {
                 propagateInitialState(carriedLeaf, *currentLeaves[0]);
-            } else if (_separate_tasks_scheduler
-                && _depth > 0
-                && nextLeafIndex == (size_t) _separate_tasks_scheduler->getPositionsDone(currentLeaves.size())
-                && _separate_tasks_scheduler->addTasksAsClauses()) {
+            } else if (_depth > 0
+                    && addTasksAsClauses
+                    && nextLeafIndex == static_cast<size_t>(numPositionsAlreadyDone)) {
                 for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
                     const USignature& sig = _htn.getGroundPositiveFact(i);
                     if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
@@ -219,7 +218,7 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
             }
 
             leftLeafIsDeveloped = false;
-            encodingActions.push_back(
+            result.leafEncodingActions.push_back(
                 leafIndex == firstLeafToEncode ? LeafEncodingAction::NEW_RELEVANTS
                 : needsEffectsAndFrame ? LeafEncodingAction::EFFECTS_AND_FRAME
                 : LeafEncodingAction::PROPAGATE_RELEVANTS);
@@ -229,13 +228,14 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
         }
 
         Position& above = *currentLeaf;
-        size_t expansionSize = expandAll ? above.getMaxExpansionSize() : 1;
-        if (!expandAll) {
+        size_t expansionSize = result.expandAll ? above.getMaxExpansionSize() : 1;
+        if (!result.expandAll) {
             for (const auto& method : above.getReductions()) {
                 const Reduction& subReduction = _htn.getOpTable().getReduction(method);
                 expansionSize = std::max(expansionSize, subReduction.getSubtasks().size());
             }
             above.setExpansionSize(expansionSize);
+            result.expandedNodes.push_back(currentLeaf);
         }
 
         for (size_t offset = 0; offset < expansionSize; offset++) {
@@ -245,9 +245,9 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
             current->setPos(_depth, nextLeafIndex);
             Position* left = nextLeafIndex > 0 ? _leaf_positions[nextLeafIndex - 1] : nullptr;
             current->setLeftPosition(left);
-            createNextPosition(*current, &above, left);
+            createNextPosition(*current, &above, left, numPositionsAlreadyDone, addTasksAsClauses);
 
-            if (expandAll) {
+            if (result.expandAll) {
                 Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
                         current->getReductions().size(),
                         current->getActions().size(),
@@ -257,14 +257,14 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
                     _leaf_positions[nextLeafIndex - 1]->clearAfterInstantiation();
                 }
             } else {
-                encodingActions.push_back(LeafEncodingAction::FULL);
+                result.leafEncodingActions.push_back(LeafEncodingAction::FULL);
             }
 
             incrementPosition(*current);
             nextLeafIndex++;
         }
 
-        if (!expandAll) {
+        if (!result.expandAll) {
             developedLeafCount++;
             leftLeafIsDeveloped = true;
             needsEffectsAndFrame = true;
@@ -274,55 +274,14 @@ void TreeExpander::expandLeaves(std::vector<Position*> nodesToDevelop) {
         }
     }
 
-    if (expandAll && nextLeafIndex > 0) {
+    if (result.expandAll && nextLeafIndex > 0) {
         _leaf_positions[nextLeafIndex - 1]->clearAfterInstantiation();
     }
     _stats.endTiming(TimingStage::EXPANSION);
-
-    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
-    Log::i("Encoding ...\n");
-    _stats.beginTiming(TimingStage::ENCODING);
-    if (expandAll) {
-        for (Position* leaf : _leaf_positions) {
-            Log::v("- Position (%i,%i)\n", _depth, leaf->getPositionIndex());
-            _enc.encode(*leaf);
-        }
-    } else {
-        Log::i("New leaf count: %zu (%zu)\n", _leaf_positions.size(), nextLeafIndex);
-        for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
-            switch (encodingActions[leafIndex]) {
-            case LeafEncodingAction::NONE:
-                break;
-            case LeafEncodingAction::FULL:
-                _enc.encode(*_leaf_positions[leafIndex]);
-                break;
-            case LeafEncodingAction::NEW_RELEVANTS:
-                _enc.encodeNewRelevantsFacts(*_leaf_positions[leafIndex]);
-                break;
-            case LeafEncodingAction::EFFECTS_AND_FRAME:
-                _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[leafIndex]);
-                break;
-            case LeafEncodingAction::PROPAGATE_RELEVANTS:
-                _enc.propagateRelevantsFacts(*_leaf_positions[leafIndex]);
-                break;
-            }
-        }
-    }
-    _stats.endTiming(TimingStage::ENCODING);
-    refreshLeafLeftPositions();
-
-    if (!expandAll) {
-        for (Position* node : nodesToDevelopSet) {
-            Log::v("Freeing position %zu of depth %zu\n", node->getPositionIndex(), node->getLayerIndex());
-            node->clearFullPos();
-        }
-        for (Position* leaf : _leaf_positions) {
-            leaf->clearDecodings();
-        }
-    }
+    return result;
 }
 
-void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left) {
+void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left, int positionsDone, bool addTasksAsClauses) {
     size_t pos = newPos.getPositionIndex();
 
     newPos.setPos(_depth, pos);
@@ -337,10 +296,9 @@ void TreeExpander::createNextPosition(Position& newPos, Position* parent, Positi
             propagateInitialState(newPos, *parent);
         }
     }  
-    else if (_separate_tasks_scheduler 
-                && _depth > 0
-                && pos == (size_t) _separate_tasks_scheduler->getPositionsDone(_leaf_positions.size())
-                && _separate_tasks_scheduler->addTasksAsClauses()) {
+    else if (_depth > 0
+                && addTasksAsClauses
+                && pos == static_cast<size_t>(positionsDone)) {
                     for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
                         const USignature& sig = _htn.getGroundPositiveFact(i);
                         if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
@@ -415,7 +373,8 @@ void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) 
     }
 
     for (const auto& aSig : actionsToRemove) {
-        _pruning.prune(aSig, left);
+        assert(_pruning != nullptr);
+        _pruning->prune(aSig, left);
     }
 }
 
@@ -769,7 +728,8 @@ void TreeExpander::propagateActions(Position& newPos, Position& above) {
     }
 
     for (const auto& aSig : actionsToPrune) {
-        _pruning.prune(aSig, above);
+        assert(_pruning != nullptr);
+        _pruning->prune(aSig, above);
     }
     assert(above.getActions().size() == numActionsBefore - actionsToPrune.size() 
         || Log::e("%i != %i-%i\n", above.getActions().size(), numActionsBefore, actionsToPrune.size()));
@@ -831,6 +791,7 @@ void TreeExpander::propagateReductions(Position& newPos, Position& above) {
             newPos.addExpansionSize(subR.getSubtasks().size());
 
             if (_optimal) {
+                assert(_tdg != nullptr);
                 int heuristicValue = _tdg->getBestHeuristicValue(subRSig);
                 Log::d("Set the heuristic value of %s to %d\n", TOSTR(subRSig), heuristicValue);
                 newPos.setHeuristicValue(subRSig, heuristicValue);
@@ -864,7 +825,8 @@ void TreeExpander::propagateReductions(Position& newPos, Position& above) {
     for (const auto& rSig : reductionsWithNoChildren) {
         Log::i("Retroactively prune reduction %s@(%i,%i): no children at offset %i\n", 
                     TOSTR(rSig), above.getLayerIndex(), above.getPositionIndex(), offset);
-        _pruning.prune(rSig, above);
+        assert(_pruning != nullptr);
+        _pruning->prune(rSig, above);
     }
 }
 

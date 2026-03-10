@@ -2,7 +2,6 @@
 #define DOMPASCH_TREE_REXX_TREE_EXPANDER_H
 
 #include <memory>
-#include <optional>
 #include <vector>
 
 #include "util/params.h"
@@ -12,68 +11,65 @@
 #include "algo/fact_analysis.h"
 #include "algo/retroactive_pruning.h"
 #include "algo/domination_resolver.h"
-#include "sat/encoding.h"
 #include "data/tdg.h"
-#include "algo/separate_tasks_scheduler.h"
+
+class SeparateTasksScheduler;
 
 class TreeExpander {
 private:
     Parameters& _params;
     HtnInstance& _htn;
-    Position*& _root_position;
-    std::vector<Position*>& _leaf_positions;
-
-    FactAnalysis& _analysis;
-    Instantiator& _instantiator;
-    Encoding& _enc;
     Statistics& _stats;
-    RetroactivePruning& _pruning;
-    DominationResolver& _domination_resolver;
-    std::optional<TDG>& _tdg;
-    std::unique_ptr<SeparateTasksScheduler>& _separate_tasks_scheduler;
-    size_t& _depth;
+    Position* _root_position = nullptr;
+    std::vector<Position*> _leaf_positions;
+    FactAnalysis _analysis;
+    Instantiator _instantiator;
+    RetroactivePruning* _pruning = nullptr;
+    DominationResolver _domination_resolver;
+    TDG* _tdg = nullptr;
+    SeparateTasksScheduler* _separate_tasks_scheduler = nullptr;
+    size_t _depth = 0;
 
     const bool _use_sibylsat_expansion;
-    const bool _separate_tasks;
     const bool _nonprimitive_support;
     const bool _optimal;
 
-    size_t& _num_instantiated_positions;
-    size_t& _num_instantiated_actions;
-    size_t& _num_instantiated_reductions;
+    size_t _num_instantiated_positions = 0;
+    size_t _num_instantiated_actions = 0;
+    size_t _num_instantiated_reductions = 0;
 
 public:
-    TreeExpander(
-            Parameters& params,
-            HtnInstance& htn,
-            Position*& rootPosition,
-            std::vector<Position*>& leafPositions,
-            FactAnalysis& analysis,
-            Instantiator& instantiator,
-            Encoding& enc,
-            Statistics& stats,
-            RetroactivePruning& pruning,
-            DominationResolver& dominationResolver,
-            std::optional<TDG>& tdg,
-            std::unique_ptr<SeparateTasksScheduler>& separateTasksScheduler,
-            size_t& depth,
-            bool useSibylsatExpansion,
-            bool separateTasks,
-            bool nonprimitiveSupport,
-            bool optimal,
-            size_t& numInstantiatedPositions,
-            size_t& numInstantiatedActions,
-            size_t& numInstantiatedReductions);
+    enum class LeafEncodingAction { NONE, FULL, NEW_RELEVANTS, EFFECTS_AND_FRAME, PROPAGATE_RELEVANTS };
+
+    struct ExpansionResult {
+        bool expandAll = false;
+        size_t newInitPos = 0;
+        std::vector<LeafEncodingAction> leafEncodingActions;
+        std::vector<Position*> expandedNodes;
+    };
+
+    TreeExpander(Parameters& params, HtnInstance& htn);
+
+    void attachPruning(RetroactivePruning& pruning) { _pruning = &pruning; }
+    void attachTDG(TDG& tdg) { _tdg = &tdg; }
+    void attachSeparateTasksScheduler(SeparateTasksScheduler& scheduler) { _separate_tasks_scheduler = &scheduler; }
 
     void createInitialLeaves();
-    void expandLeaves(std::vector<Position*> nodesToDevelop);
+    ExpansionResult expandLeaves(const std::vector<Position*>& nodesToDevelop);
+    void printStatistics() const;
+    Position*& getRootPositionRef() { return _root_position; }
+    std::vector<Position*>& getLeafPositions() { return _leaf_positions; }
+    const std::vector<Position*>& getLeafPositions() const { return _leaf_positions; }
+    FactAnalysis& getAnalysis() { return _analysis; }
+    const FactAnalysis& getAnalysis() const { return _analysis; }
+    size_t getNumRetroactivePrunings() const;
+    size_t getNumRetroactivelyPrunedOps() const;
 
 private:
     void incrementPosition(const Position& pos);
     void refreshLeafMetadata();
-    void refreshLeafLeftPositions();
 
-    void createNextPosition(Position& newPos, Position* parent, Position* left);
+    void createNextPosition(Position& newPos, Position* parent, Position* left, int positionsDone, bool addTasksAsClauses);
     void createNextPositionFromAbove(Position& newPos, Position& above);
     void createNextPositionFromLeft(Position& newPos, Position& left);
     void createNextPositionFromLeftSimplified(Position& newPos);
