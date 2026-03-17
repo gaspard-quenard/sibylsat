@@ -30,6 +30,7 @@ private:
     TDG* _tdg = nullptr;
     SeparateTasksScheduler* _separate_tasks_scheduler = nullptr;
     size_t _depth = 0;
+    size_t _expansion_start_index = 0;
 
     const bool _use_sibylsat_expansion;
     const bool _nonprimitive_support;
@@ -55,6 +56,10 @@ public:
     void attachTDG(TDG& tdg) { _tdg = &tdg; }
     void attachSeparateTasksScheduler(SeparateTasksScheduler& scheduler) { _separate_tasks_scheduler = &scheduler; }
 
+    // Set the index from which the next expandLeaves call should start expanding.
+    // Leaves before this index are carried over as-is (already solved by the scheduler).
+    void setExpansionBoundary(size_t boundary) { _expansion_start_index = boundary; }
+
     void createInitialLeaves();
     ExpansionResult expandLeaves(const std::vector<Position*>& nodesToDevelop);
     void printStatistics() const;
@@ -70,7 +75,8 @@ private:
     void incrementPosition(const Position& pos);
     void refreshLeafMetadata();
 
-    void createNextPosition(Position& newPos, Position* parent, Position* left, int positionsDone, bool addTasksAsClauses);
+    void createNextPosition(Position& newPos, Position* parent, Position* left);
+    void applyLegacyBoundarySetup(const std::vector<Position*>& currentLeaves);
     void createNextPositionFromAbove(Position& newPos, Position& above);
     void createNextPositionFromLeft(Position& newPos, Position& left);
     void createNextPositionFromLeftSimplified(Position& newPos);

@@ -195,6 +195,19 @@ bool Planner::findPrimitiveSolutionInSearchTree() {
         return true;
     }
 
+    if (_separate_tasks_scheduler->addTasksAsClauses()) {
+        // Shift the analysis "initial state" to the post-task boundary state so that
+        // resetReachability() naturally starts from there in the next expansion.
+        _analysis.updateInitialState(
+            _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec(),
+            _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec()
+        );
+        // Tell the expander where to start the next expansion (boundary position).
+        _tree_expander.setExpansionBoundary(
+            _separate_tasks_scheduler->getPositionsDone(_leaf_positions.size())
+        );
+    }
+
     return false;
 }
 

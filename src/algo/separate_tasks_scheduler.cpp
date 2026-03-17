@@ -76,7 +76,23 @@ bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<
         _num_pos_done_at_each_step.push_back(_num_pos_done);
         _num_tasks_solved_at_each_step.push_back(_num_tasks_to_solve);
         updateReachableStateAfterTasksAccomplished(enc, leafPositions, solve_positions);
-        
+
+        // Pre-set the boundary facts on the leaf at solve_positions so that
+        // propagateInitialState can copy them when processing the boundary position.
+        if (_add_tasks_as_clauses && solve_positions < numLeafPositions) {
+            Position* boundaryLeaf = leafPositions[solve_positions];
+            for (int i = 0; i < _htn.getNumPositiveGroundFacts(); ++i) {
+                const USignature& sig = _htn.getGroundPositiveFact(i);
+                if (_reachable_state_pos_after_tasks_accomplished_bitvec.test(i)) {
+                    boundaryLeaf->addTrueFact(sig);
+                    boundaryLeaf->addTrueFactId(i);
+                } else {
+                    boundaryLeaf->addFalseFact(sig);
+                    boundaryLeaf->addFalseFactId(i);
+                }
+            }
+        }
+
         if (_tcp_exponential_resolving) {
             auto end = std::chrono::high_resolution_clock::now();
             long long durationSolveTasks = std::chrono::duration_cast<std::chrono::milliseconds>(end - _init_time_spend_to_solve_tasks).count();

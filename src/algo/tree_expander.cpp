@@ -74,7 +74,7 @@ void TreeExpander::createInitialLeaves() {
 
     /***** DEPTH 0, POSITION 1 ******/
 
-    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition, /*positionsDone=*/0, /*addTasksAsClauses=*/false);
+    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition);
 
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
@@ -138,48 +138,31 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
     bool allLeavesDeveloped = false;
     bool leftLeafIsDeveloped = false;
 
-    int numPositionsAlreadyDone = 0;
-    bool addTasksAsClauses = false;
-    const BitVec* reachableStatePos = nullptr;
-    const BitVec* reachableStateNeg = nullptr;
-    if (!result.expandAll && _separate_tasks_scheduler != nullptr) {
-        numPositionsAlreadyDone = _separate_tasks_scheduler->getPositionsDone(currentLeaves.size());
-        addTasksAsClauses = _separate_tasks_scheduler->addTasksAsClauses();
-        if (numPositionsAlreadyDone > 0) {
-            reachableStatePos = &_separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec();
-            reachableStateNeg = &_separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec();
-        }
+    // For the legacy !addTasksAsClauses mode: set up the analysis state before expansion.
+    // (In addTasksAsClauses mode this is handled externally via setExpansionBoundary /
+    // _analysis.updateInitialState, so expandLeaves does not need to know about it.)
+    if (!result.expandAll && _separate_tasks_scheduler != nullptr
+            && !_separate_tasks_scheduler->addTasksAsClauses()) {
+        applyLegacyBoundarySetup(currentLeaves);
     }
 
+    // Leaves before _expansion_start_index were already solved in a previous SAT call and
+    // are carried into the new layer unchanged.
+    const size_t numPositionsAlreadyDone = !result.expandAll ? _expansion_start_index : 0;
     if (numPositionsAlreadyDone > 0) {
-        Log::i("Propagating initial state facts for positions already done (%i)\n", numPositionsAlreadyDone);
-        Position tmpInitialPosition;
-        tmpInitialPosition.setPos(_depth, 0);
-        propagateInitialState(tmpInitialPosition, *currentLeaves[0]);
-        assert(reachableStatePos != nullptr);
-        assert(reachableStateNeg != nullptr);
-        _analysis.setReachableFactsBitVec(
-            *reachableStatePos,
-            *reachableStateNeg
-        );
-        if (addTasksAsClauses) {
-            result.newInitPos = numPositionsAlreadyDone;
-
-            for (int leafIndex = 0; leafIndex < numPositionsAlreadyDone; leafIndex++) {
-                Position* carriedLeaf = currentLeaves[leafIndex];
-                carriedLeaf->setPos(_depth, nextLeafIndex);
-                _leaf_positions.push_back(carriedLeaf);
-                result.leafEncodingActions.push_back(LeafEncodingAction::NONE);
-                nextLeafIndex++;
-            }
+        Log::i("Carrying %zu already-solved leaf positions into the new layer\n", numPositionsAlreadyDone);
+        result.newInitPos = numPositionsAlreadyDone;
+        for (size_t leafIndex = 0; leafIndex < numPositionsAlreadyDone; leafIndex++) {
+            Position* carriedLeaf = currentLeaves[leafIndex];
+            carriedLeaf->setPos(_depth, nextLeafIndex);
+            _leaf_positions.push_back(carriedLeaf);
+            result.leafEncodingActions.push_back(LeafEncodingAction::NONE);
+            nextLeafIndex++;
         }
-        Log::i("Done !\n");
     }
 
-    size_t firstLeafToExpand =
-        !result.expandAll && addTasksAsClauses ? numPositionsAlreadyDone : 0;
-    size_t firstLeafToEncode =
-        !result.expandAll && addTasksAsClauses ? numPositionsAlreadyDone : 0;
+    const size_t firstLeafToExpand = numPositionsAlreadyDone;
+    const size_t firstLeafToEncode = numPositionsAlreadyDone;
     bool needsEffectsAndFrame = false;
 
     Log::i("Instantiating ...\n");
@@ -196,16 +179,12 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
             if (nextLeafIndex == 0) {
                 propagateInitialState(carriedLeaf, *currentLeaves[0]);
             } else if (_depth > 0
-                    && addTasksAsClauses
-                    && nextLeafIndex == static_cast<size_t>(numPositionsAlreadyDone)) {
-                for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
-                    const USignature& sig = _htn.getGroundPositiveFact(i);
-                    if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
-                        carriedLeaf.addTrueFact(sig);
-                    } else {
-                        carriedLeaf.addFalseFact(sig);
-                    }
-                }
+                    && _expansion_start_index > 0
+                    && nextLeafIndex == _expansion_start_index) {
+                // Boundary facts were pre-set by updateAfterSolved. Reset analysis to the
+                // new initial state (post-task boundary), matching what propagateInitialState
+                // would do if this leaf were being developed.
+                _analysis.resetReachability();
             } else {
                 Position& leftLeaf = *_leaf_positions[nextLeafIndex - 1];
 
@@ -245,7 +224,7 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
             current->setPos(_depth, nextLeafIndex);
             Position* left = nextLeafIndex > 0 ? _leaf_positions[nextLeafIndex - 1] : nullptr;
             current->setLeftPosition(left);
-            createNextPosition(*current, &above, left, numPositionsAlreadyDone, addTasksAsClauses);
+            createNextPosition(*current, &above, left);
 
             if (result.expandAll) {
                 Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
@@ -281,7 +260,7 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
     return result;
 }
 
-void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left, int positionsDone, bool addTasksAsClauses) {
+void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left) {
     size_t pos = newPos.getPositionIndex();
 
     newPos.setPos(_depth, pos);
@@ -290,24 +269,17 @@ void TreeExpander::createNextPosition(Position& newPos, Position* parent, Positi
     }
     newPos.initFactChangesBitVec(_htn.getNumPositiveGroundFacts());
 
-    if (pos == 0) {
+    // _expansion_start_index is 0 in the normal case. When a batch of tasks has been
+    // pre-solved, it points to the first position that still needs expansion — which
+    // plays the same role as position 0 (new initial state, propagateInitialState applies).
+    const size_t initPos = _expansion_start_index;
+
+    if (pos == initPos) {
         assert(parent != nullptr || _depth == 0);
         if (_depth > 0) {
             propagateInitialState(newPos, *parent);
         }
-    }  
-    else if (_depth > 0
-                && addTasksAsClauses
-                && pos == static_cast<size_t>(positionsDone)) {
-                    for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
-                        const USignature& sig = _htn.getGroundPositiveFact(i);
-                        if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
-                            newPos.addTrueFact(sig);
-                        } else {
-                            newPos.addFalseFact(sig);
-                        }
-                    }
-            }
+    }
     else if (left != nullptr) {
         createNextPositionFromLeft(newPos, *left);
     }
@@ -691,7 +663,6 @@ bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const US
 
 void TreeExpander::propagateInitialState(Position& newPos, const Position& above) {
     assert(newPos.getLayerIndex() > 0);
-    assert(newPos.getPositionIndex() == 0);
 
     _analysis.resetReachability();
 
@@ -708,6 +679,24 @@ void TreeExpander::propagateInitialState(Position& newPos, const Position& above
         _analysis.addInitializedFactBitVec(predId);
     }
 
+}
+
+// Legacy support for the !addTasksAsClauses separate-tasks mode.
+// In that mode the analysis state is not updated via updateInitialState/setExpansionBoundary,
+// so we still need the old reset-and-override approach before the expansion loop.
+void TreeExpander::applyLegacyBoundarySetup(const std::vector<Position*>& currentLeaves) {
+    assert(_separate_tasks_scheduler != nullptr);
+    const int numPosDone = _separate_tasks_scheduler->getPositionsDone(currentLeaves.size());
+    if (numPosDone <= 0) return;
+
+    Log::i("Legacy boundary setup: resetting analysis for %i already-done positions\n", numPosDone);
+    Position tmpPos;
+    tmpPos.setPos(_depth, 0);
+    propagateInitialState(tmpPos, *currentLeaves[0]);
+    _analysis.setReachableFactsBitVec(
+        _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec(),
+        _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec()
+    );
 }
 
 void TreeExpander::propagateActions(Position& newPos, Position& above) {

@@ -131,6 +131,13 @@ public:
         _initialized_facts_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
     }
 
+    // Update the "initial state" used by resetReachability(). Call this when the effective
+    // starting state of the search shifts (e.g. after a batch of tasks is accomplished).
+    void updateInitialState(const BitVec& pos, const BitVec& neg) {
+        _init_state_pos_bitvec = pos;
+        _init_state_neg_bitvec = neg;
+    }
+
     enum FactInstantiationMode {FULL, LIFTED};
     enum OperationType {ACTION, REDUCTION, UNKNOWN};
     const SigSet& getPossibleFactChanges(const USignature& sig, FactInstantiationMode mode = FULL, OperationType opType = UNKNOWN);
