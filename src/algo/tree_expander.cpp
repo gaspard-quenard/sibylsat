@@ -138,11 +138,8 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
     bool allLeavesDeveloped = false;
     bool leftLeafIsDeveloped = false;
 
-    // For the legacy !addTasksAsClauses mode: set up the analysis state before expansion.
-    // (In addTasksAsClauses mode this is handled externally via setExpansionBoundary /
-    // _analysis.updateInitialState, so expandLeaves does not need to know about it.)
-    if (!result.expandAll && _separate_tasks_scheduler != nullptr
-            && !_separate_tasks_scheduler->addTasksAsClauses()) {
+    // Set up the analysis state before expansion whenever there are already-done positions.
+    if (!result.expandAll && _separate_tasks_scheduler != nullptr) {
         applyLegacyBoundarySetup(currentLeaves);
     }
 
@@ -181,10 +178,14 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
             } else if (_depth > 0
                     && _expansion_start_index > 0
                     && nextLeafIndex == _expansion_start_index) {
-                // Boundary facts were pre-set by updateAfterSolved. Reset analysis to the
-                // new initial state (post-task boundary), matching what propagateInitialState
-                // would do if this leaf were being developed.
-                _analysis.resetReachability();
+                for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
+                    const USignature& sig = _htn.getGroundPositiveFact(i);
+                    if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
+                        carriedLeaf.addTrueFact(sig);
+                    } else {
+                        carriedLeaf.addFalseFact(sig);
+                    }
+                }
             } else {
                 Position& leftLeaf = *_leaf_positions[nextLeafIndex - 1];
 
@@ -681,15 +682,13 @@ void TreeExpander::propagateInitialState(Position& newPos, const Position& above
 
 }
 
-// Legacy support for the !addTasksAsClauses separate-tasks mode.
-// In that mode the analysis state is not updated via updateInitialState/setExpansionBoundary,
-// so we still need the old reset-and-override approach before the expansion loop.
+// Set up the analysis state before expansion for the separate-tasks mode.
 void TreeExpander::applyLegacyBoundarySetup(const std::vector<Position*>& currentLeaves) {
     assert(_separate_tasks_scheduler != nullptr);
     const int numPosDone = _separate_tasks_scheduler->getPositionsDone(currentLeaves.size());
     if (numPosDone <= 0) return;
 
-    Log::i("Legacy boundary setup: resetting analysis for %i already-done positions\n", numPosDone);
+    Log::i("Boundary setup: resetting analysis for %i already-done positions\n", numPosDone);
     Position tmpPos;
     tmpPos.setPos(_depth, 0);
     propagateInitialState(tmpPos, *currentLeaves[0]);
