@@ -16,6 +16,7 @@
 #include "util/signal_manager.h"
 #include "util/random.h"
 #include "util/statistics.h"
+#include "deorder/deorder.h"
 
 #ifndef LILOTANE_VERSION
 #define LILOTANE_VERSION "(dbg)"
@@ -74,8 +75,45 @@ void run(Parameters& params) {
 
     Statistics::getInstance().beginTiming(TimingStage::TOTAL);
 
+    if (params.getParam("deorder") != "") {
+        // Set the flags macroActions to false to avoid to use the macro actions
+        // in the deordering process. And the flag mutex to false 
+        // to avoid computing mutexes, which is not necessary for deordering and can be costly.
+        params.setParam("macroActions", "0");
+        params.setParam("mutex", "0");
+    }
+
     HtnInstance htn(params);
-    // Planner planner(params, htn);
+    
+
+    if (params.getParam("deorder") != "") {
+        std::string planFile = params.getParam("deorder");
+
+        DeorderAlgoType deorderAlgo;
+        if (params.isSet("deorderSolver")) {
+            std::string deorderType = params.getParam("deorderSolver");
+            if (deorderType == "SAT") {
+                Log::i("Deorder algo used: SAT\n");
+                deorderAlgo = DeorderAlgoType::SAT;
+            } else if (deorderType == "PRF") {
+                Log::i("Deorder algo used: PRF\n");
+                deorderAlgo = DeorderAlgoType::PRF;
+            } else {
+                Log::e("Unknown deorder solver %s\n", deorderType.c_str());
+                exit(1);
+            }
+        } else {
+            Log::e("Param \"deorderSolver\" should be set.\n");
+            exit(1);
+        }
+
+        Deorder deorder(/*plan_file=*/planFile, /*htn=*/htn, /*deorderAlgo=*/deorderAlgo, /*deorderMode=*/DeorderMode::DEORDERING);
+
+
+        Statistics::getInstance().endTiming(TimingStage::TOTAL);
+        Statistics::getInstance().printStats();
+        return;
+    }
 
     std::unique_ptr<Planner> planner = std::make_unique<Planner>(params, htn);
     int result = planner->findPlan();

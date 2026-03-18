@@ -86,6 +86,10 @@ void Parameters::setDefaults() {
     setParam("optimal", "0"); // Find an optimal solution instead of just a solution 
     setParam("reusePreviousCores", "0"); // If using MaxSAT, try to reuse previous cores for the next maxsat call
 
+    // For deordering
+    setParam("deorder", ""); // Set the path for the plan to deorder
+    setParam("deorderSolver", "PRF"); // Algo used to deorder the plan
+
     
 }
 
@@ -149,6 +153,10 @@ void Parameters::printUsage() {
 
     // Separate tasks
     Log::i(" -separateTasks=<0|1> Solve the initial tasks incrementally instead of all at once\n");
+
+    // Deordering
+    Log::i(" -deorder=<path>  Deorder the plan indicated by the path\n");
+    Log::i(" -deorderSolver=PRF|SAT  Deordering algo used when deordering a plan file. Options are PRF (default) or SAT\n");
     Log::i("\n");
     printParams();
     Log::setForcePrint(false);

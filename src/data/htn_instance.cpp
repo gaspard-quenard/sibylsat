@@ -25,6 +25,8 @@ HtnInstance::HtnInstance(Parameters& params) :
 
     Log::i("Parser finished.\n");
 
+    orderMethodsSubtasksInParsedProblem();
+
     for (method& method : methods) {
 
         /*
@@ -1192,6 +1194,41 @@ void HtnInstance::loadMutexes() {
 }
 
 
+void HtnInstance::orderMethodsSubtasksInParsedProblem() {
+    for (auto& method : methods) {
+        if (method.ps.size() <= 1) {
+            continue;
+        }
+
+        // For each subtasks, indicate all the subtasks that are ordered after it
+        std::unordered_map<std::string, std::vector<std::string>> sutbasksOrdering;
+        std::vector<std::string> subtasksIds;
+        for (plan_step& ps : method.ps) subtasksIds.push_back(ps.id);
+        for (auto& ordering: method.ordering) {
+            if (sutbasksOrdering.find(ordering.first) == sutbasksOrdering.end()) {
+                sutbasksOrdering[ordering.first] = std::vector<std::string>();
+            }
+            sutbasksOrdering[ordering.first].push_back(ordering.second);
+        }
+        
+        // From this, we can infer the chronological order of the subtasks using a topological sort
+        std::vector<std::string> orderedTasksId = topologicalSort(sutbasksOrdering, subtasksIds);
+
+        // Reorder the method.ps according to the chronological order of the subtasks
+        std::vector<plan_step> ordered_ps;
+        for (auto& taskId : orderedTasksId) {
+            for (auto& ps : method.ps) {
+                if (ps.id == taskId) {
+                    ordered_ps.push_back(ps);
+                    break;
+                }
+            }
+        }
+        method.ps = ordered_ps;
+    }
+}
+
+
 
 
 std::vector<std::string> HtnInstance::topologicalSort(const std::unordered_map<std::string, std::vector<std::string>>& graph, std::vector<std::string>& nodes) {
@@ -1252,32 +1289,6 @@ void HtnInstance::handleMacroActions() {
         if (method.ps.size() <= 1) {
             continue;
         }
-
-        // For each subtasks, indicate all the subtasks that are ordered after it
-        std::unordered_map<std::string, std::vector<std::string>> sutbasksOrdering;
-        std::vector<std::string> subtasksIds;
-        for (plan_step& ps : method.ps) subtasksIds.push_back(ps.id);
-        for (auto& ordering: method.ordering) {
-            if (sutbasksOrdering.find(ordering.first) == sutbasksOrdering.end()) {
-                sutbasksOrdering[ordering.first] = std::vector<std::string>();
-            }
-            sutbasksOrdering[ordering.first].push_back(ordering.second);
-        }
-        
-        // From this, we can infer the chronological order of the subtasks using a topological sort
-        std::vector<std::string> orderedTasksId = topologicalSort(sutbasksOrdering, subtasksIds);
-
-        // Reorder the method.ps according to the chronological order of the subtasks
-        std::vector<plan_step> ordered_ps;
-        for (auto& taskId : orderedTasksId) {
-            for (auto& ps : method.ps) {
-                if (ps.id == taskId) {
-                    ordered_ps.push_back(ps);
-                    break;
-                }
-            }
-        }
-        method.ps = ordered_ps;
 
         bool consecutive_primitive_tasks = false;
         int start_primitive_task = -1;

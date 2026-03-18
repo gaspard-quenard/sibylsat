@@ -33,6 +33,31 @@ struct ParsedProblem {
 // "main method"
 int run_pandaPIparser(int argc, char** argv, ParsedProblem& pp);
 
+inline void clear_parser_data_structures() {
+    has_typeof_predicate = false;
+    method_preconditions_are_immediately_before = false; 
+    sort_definitions.clear();
+    predicate_definitions.clear();
+    parsed_primitive.clear();
+    parsed_abstract.clear();
+    parsed_methods.clear();
+    parsed_functions.clear();
+    metric_target = dummy_function_type;
+
+    sorts.clear();
+    methods.clear();
+    primitive_tasks.clear();
+    abstract_tasks.clear();
+
+    task_name_map.clear();
+
+    init.clear();
+    goal.clear();
+
+    // Reset task ID counter
+    task_id_counter = 0;
+}
+
 // preprocessor macro to write into the given ParsedProblem struct before exiting
 #define COPY_INTO_PARSED_PROBLEM(pp) \
 pp.has_typeof_predicate = has_typeof_predicate;\

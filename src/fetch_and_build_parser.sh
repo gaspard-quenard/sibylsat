@@ -36,6 +36,11 @@ cp ../libpanda.hpp src/
 sed -i 's/__method_precondition_/<method_prec>/g' src/domain.hpp
 sed -i 's/__immediate_method_precondition_/<method_prec>/g' src/domain.hpp
 
+# Apply modifications to pandaPIparser for deordering
+echo "Applying modifications to pandaPIparser for deordering ..."
+git apply ../pandaPIparser_deordering.patch
+
+
 # Build library (internally does a patch of pandaPIparser's main.cpp)
 make -j library
 cp build/libpandaPIparser.a ../../lib/

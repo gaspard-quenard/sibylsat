@@ -1,0 +1,46 @@
+diff --git a/src/verify.cpp b/src/verify.cpp
+index 858b723..11ef366 100644
+--- a/src/verify.cpp
++++ b/src/verify.cpp
+@@ -1286,7 +1286,10 @@ bool check_executability_of_primitive_plan(parsed_plan & plan, map<int,parsed_ta
+ 
+ 
+ 
+-bool verify_plan(istream & plan, bool useOrderInformation, bool lenientMode, int debugMode){
++bool verify_plan(istream & plan, bool useOrderInformation, bool lenientMode, int debugMode, map<int,vector<pair<map<string,int>,map<string,string>>>> *__possibleMethodInstantiations,
++	map<int, map<string, string>> *__chosen_method_matchings,
++	vector<pair<int, int>> *__chosen_non_unique_matchings,
++	set<vector<pair<int, int>>> *__forbidden_matchings){
+ 
+ 	// for long plans execution needs a *large* stack
+ 	// set the size of the stack to 256 MB
+@@ -1696,6 +1699,13 @@ bool verify_plan(istream & plan, bool useOrderInformation, bool lenientMode, int
+ 	cout << endl;
+ 
+ 	overallResult &= orderingIsConsistent && linearisation.first.second;
++
++	// If the parameters are different from nullptr, fill them
++	if (__possibleMethodInstantiations) *__possibleMethodInstantiations = possibleMethodInstantiations;
++	if (__chosen_method_matchings) *__chosen_method_matchings = chosen_method_matchings;
++	if (__chosen_non_unique_matchings) *__chosen_non_unique_matchings = chosen_non_unique_matchings;
++	if (__forbidden_matchings) *__forbidden_matchings = forbidden_matchings;
++
+ 	return overallResult;
+ }
+ 
+diff --git a/src/verify.hpp b/src/verify.hpp
+index 74ee902..ce287ca 100644
+--- a/src/verify.hpp
++++ b/src/verify.hpp
+@@ -3,6 +3,9 @@
+ 
+ #include "parsetree.hpp"
+ 
+-bool verify_plan(istream & plan, bool use_order_information, bool lenient_mode, int verbose_output);
++bool verify_plan(istream &plan, bool use_order_information, bool lenient_mode, int verbose_output, map<int, vector<pair<map<string, int>, map<string, string>>>> *possibleMethodInstantiations = nullptr,
++                 map<int, map<string, string>> *chosen_method_matchings = nullptr,
++                 vector<pair<int, int>> *chosen_non_unique_matchings = nullptr,
++                 set<vector<pair<int, int>>> *forbidden_matchings = nullptr);
+ 
+ #endif
+ 

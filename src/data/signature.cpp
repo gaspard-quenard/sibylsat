@@ -62,7 +62,7 @@ const USignature& Signature::getUnsigned() const {
 
 Signature Signature::Signature::opposite() const {
     Signature out(*this);
-    if (_negated) out.negate();
+    out.negate();
     return out;
 }
 

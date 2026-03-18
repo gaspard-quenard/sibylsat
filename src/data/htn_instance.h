@@ -127,6 +127,10 @@ public:
 
     ParsedProblem* parse(std::string domainFile, std::string problemFile);
 
+    inline ParsedProblem& getParsedProblem() {
+        return _p;
+    }
+
 
     // Get the params 
     Parameters& getParams() const {
@@ -370,6 +374,12 @@ public:
     NodeHashMap<int, FlatHashSet<int>>& getConstantsBySort() {return _constants_by_sort;}
     std::string getPredicateInCorrectCase(std::string pred) const;
 
+    void addAction(const Action& a) {
+        _operators[a.getNameId()] = a;
+    }
+
+
+
 
 
     void setGroundPosAndNegFacts(const std::vector<USignature>& posFacts, const std::vector<USignature>& negFacts) {
@@ -466,6 +476,7 @@ private:
     void initQConstantSorts(int id, const FlatHashSet<int>& domain);
 
     void loadMutexes();
+    void orderMethodsSubtasksInParsedProblem();
     std::vector<std::string> topologicalSort(const std::unordered_map<std::string, std::vector<std::string>>& graph, std::vector<std::string>& nodes);
     void handleMacroActions();
     
