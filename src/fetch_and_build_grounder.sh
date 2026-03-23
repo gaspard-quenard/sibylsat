@@ -2,24 +2,27 @@
 
 set -e
 
-if [ -f ../lib/pandaPiGrounder ]; then
+if [ -f ../lib/pandaPIgrounder ]; then
     echo "pandaPIgrounder already compiled - skipping build"
     exit
 fi
 
 # Fetch a clean state of pandaPIparser
-if [ ! -d pandaPiGrounder ]; then
+if [ ! -d pandaPIgrounder ]; then
     echo "Fetching pandaPIgrounder ..."
     git clone https://github.com/panda-planner-dev/pandaPIgrounder.git
-    cd pandaPIgrounder
-else
-    cd pandaPIgrounder
-    git clean -f
 fi
 
-# Checkout correct commit (can be updated but must be manually checked to build cleanly)
+cd pandaPIgrounder
+
+# Take the submodule in a clean state
+git submodule update --init --recursive
+
+# Force exact clean state
 git config advice.detachedHead false
 git checkout 4ff15b2828d893a7976a92cd60cc63a61f1baffc
+git reset --hard --recurse-submodules 4ff15b2828d893a7976a92cd60cc63a61f1baffc
+git clean -ffdx
 
 
 # Patch pandaPiGrounder to add 4 options:
@@ -31,9 +34,6 @@ echo "Applying modifications..."
 git apply ../pandaPiGrounding_modifications.patch
 
 
-# Build modified standalone executable for debugging purposes
-git submodule init
-git submodule update
 cd cpddl
 git apply ../0002-makefile.patch
 make boruvka opts bliss lpsolve

@@ -7,20 +7,19 @@ if [ -f ../lib/libpandaPIparser.a ]; then
     exit
 fi
 
-# Fetch a clean state of pandaPIparser
+# Fetch repository if needed
 if [ ! -d pandaPIparser ]; then
     echo "Fetching pandaPIparser ..."
     git clone https://github.com/panda-planner-dev/pandaPIparser.git
-    cd pandaPIparser
-else
-    cd pandaPIparser
-    git clean -f
 fi
 
-# Checkout correct commit (can be updated but must be manually checked to build cleanly)
+cd pandaPIparser
+
+# Force exact clean state
 git config advice.detachedHead false
-# git checkout 95bbe291c5bdb9fb517c1ad55f5136d45450c644
 git checkout 334393290c13089a1a7e0ced070cc272f76fedf2
+git reset --hard 334393290c13089a1a7e0ced070cc272f76fedf2
+git clean -fdx
 
 # Build original standalone executable for debugging purposes
 make -j
