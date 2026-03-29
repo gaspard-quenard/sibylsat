@@ -1644,6 +1644,28 @@ int HtnInstance::numActionsInMacro(int nameId) const {
     return _macro_name_to_primitives.at(_name_back_table.at(nameId)).size();
 }
 
+int HtnInstance::getPrimitiveActionCost(int actionId) const {
+    if (isActionRepetition(actionId)) {
+        actionId = getActionNameFromRepetition(actionId);
+    }
+
+    if (isMacroTask(actionId)) {
+        return numActionsInMacro(actionId);
+    }
+
+    // If surrogate action, get the cost of the primitive action it represents
+    auto it = _primitivization_to_parent_and_child.find(actionId);
+    if (it != _primitivization_to_parent_and_child.end()) {
+        const int childId = it->second.second;
+        if (isMacroTask(childId)) {
+            return numActionsInMacro(childId);
+        }
+    }
+
+    // Else, it is a primitive action, so return 1
+    return 1;
+}
+
 std::vector<USignature> HtnInstance::getActionsFromMacro(const USignature& macroAction) const {
     std::vector<USignature> actions;
     if (!isMacroTask(macroAction._name_id)) return actions;

@@ -143,6 +143,7 @@ public:
     bool isMacroTask(int nameId) const;
     int numActionsInMacro(int nameId) const;
     std::vector<USignature> getActionsFromMacro(const USignature& macroAction) const;
+    int getPrimitiveActionCost(int actionId) const;
 
     USigSet getInitState();
     const Reduction& getInitReduction();

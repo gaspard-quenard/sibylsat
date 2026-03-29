@@ -1734,13 +1734,7 @@ void Planner::setSoftLitsForOpsLastLayer() {
 
             // If it is an action, set the weight to 1 since for now, we cannot indicate specific weight for actions in HDDL
             if (_htn.isAction(op)) {
-                // If it is a macro action, then its heuristic value is the number of actions in the macro action
-                if (_htn.isMacroTask(op._name_id)) {
-                    heuristicValue = _htn.numActionsInMacro(op._name_id);
-                } else {
-                    // Otherwise, it is 1
-                    heuristicValue = 1;
-                }
+                heuristicValue = _htn.getPrimitiveActionCost(op._name_id);
             } else {
                 // Get the heuristic value of the best grounding of this lifted operator
                 heuristicValue = pos.getHeuristicValue(op);
