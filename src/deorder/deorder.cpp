@@ -200,6 +200,13 @@ Deorder::Deorder(const std::string &planFile,
 
     NodeHashSet<OrderConstraint, OrderConstraintHasher, OrderConstraintEqual> final_ordering = deorderAlgo->getSolutionOrdering(/*remove_method_prec_actions=*/true);
 
+
+    // Write the number of ordering constrains before and after deordering
+    int initial_number_of_ordering_constrains = _original_plan_length * (_original_plan_length - 1) / 2;
+    Log::i("Initial number of ordering constrains: %d\n", initial_number_of_ordering_constrains);
+    
+    Log::i("Final Number of ordering constrains : %d\n", final_ordering.size());
+
     // Print the length of the critical path*
     int init_size_critical_path = _original_plan_length;
     int new_size_critical_path = getCriticalPath(final_ordering);

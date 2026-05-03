@@ -91,11 +91,6 @@ bool DeorderAlgoSat::solve() {
             _solution_ordering.insert({constraint.before, constraint.after});
         }
     }
-
-    int initial_number_of_ordering_constrains = _plan_map.size() * (_plan_map.size() - 1) / 2;
-    Log::i("Initial number of ordering constrains: %d\n", initial_number_of_ordering_constrains);
-    
-    Log::i("Final Number of ordering constrains : %d\n", _solution_ordering.size());
     return true;
 }
 

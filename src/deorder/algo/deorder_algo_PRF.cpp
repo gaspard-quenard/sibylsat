@@ -12,8 +12,8 @@ bool DeorderAlgoPRF::solve() {
         Log::d("Checking ordering constraints for %s(%d)\n", TOSTR(_plan_map[_prim_plan_ids[i]]), _prim_plan_ids[i]);
         for (int j = i + 1; j < _prim_plan_ids.size(); j++) {
             
-            if (already_visited.count(_prim_plan_ids[i])) {
-                Log::d("Already visited %s(%d)\n", TOSTR(_plan_map[_prim_plan_ids[i]]), _prim_plan_ids[i]);
+            if (already_visited.count(_prim_plan_ids[j])) {
+                Log::d("Already visited %s(%d)\n", TOSTR(_plan_map[_prim_plan_ids[j]]), _prim_plan_ids[j]);
                 continue;
             }
 
@@ -53,13 +53,31 @@ bool DeorderAlgoPRF::solve() {
         } 
     }
 
-    // removeMethodPreconditionsInOrdering();
+    std::vector<std::vector<bool>> transitive_closure(_prim_plan_ids.size(), std::vector<bool>(_prim_plan_ids.size(), false));
+    for (int i = 0; i < _prim_plan_ids.size(); i++) {
+        for (int j = i + 1; j < _prim_plan_ids.size(); j++) {
+            transitive_closure[i][j] = _solution_ordering.count({_prim_plan_ids[i], _prim_plan_ids[j]}) > 0;
+        }
+    }
 
-    int initial_number_of_ordering_constrains = _plan_map.size() * (_plan_map.size() - 1) / 2;
-    Log::i("Initial number of ordering constrains: %d\n", initial_number_of_ordering_constrains);
+    for (int k = 0; k < _prim_plan_ids.size(); k++) {
+        for (int i = 0; i < _prim_plan_ids.size(); i++) {
+            if (!transitive_closure[i][k]) continue;
+            for (int j = 0; j < _prim_plan_ids.size(); j++) {
+                if (transitive_closure[k][j]) {
+                    transitive_closure[i][j] = true;
+                }
+            }
+        }
+    }
 
-    // Print the number of ordering constrains after the PRF algorithm
-    Log::i("Final Number of ordering constrains : %d\n", _solution_ordering.size());
+    for (int i = 0; i < _prim_plan_ids.size(); i++) {
+        for (int j = i + 1; j < _prim_plan_ids.size(); j++) {
+            if (transitive_closure[i][j]) {
+                _solution_ordering.insert({_prim_plan_ids[i], _prim_plan_ids[j]});
+            }
+        }
+    }
 
     return true;
 }
