@@ -30,8 +30,8 @@ void TreeExpander::incrementPosition(const Position& pos) {
 }
 
 bool TreeExpander::isPotentiallyApplicable(const HtnOp& op) {
-    return _analysis.hasValidPreconditionsBitVec(op.getPreconditions()) &&
-           _analysis.hasValidPreconditionsBitVec(op.getExtraPreconditions()) &&
+    return _analysis.hasValidPreconditions(op.getPreconditions()) &&
+           _analysis.hasValidPreconditions(op.getExtraPreconditions()) &&
            _htn.hasSomeInstantiation(op.getSignature());
 }
 
@@ -71,7 +71,7 @@ void TreeExpander::createInitialLeaves() {
         }
     }
     addPreconditionConstraints(*rootReductionPosition);
-    initializeNextEffectsBitVec(*rootReductionPosition);
+    initializeNextEffects(*rootReductionPosition);
 
     incrementPosition(*rootReductionPosition);
 
@@ -180,7 +180,7 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
                     && nextLeafIndex == _expansion_start_index) {
                 for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
                     const USignature& sig = _htn.getGroundPositiveFact(i);
-                    if (_analysis.isReachableBitVec(i, /*negated=*/false)) {
+                    if (_analysis.isReachable(i, /*negated=*/false)) {
                         carriedLeaf.addTrueFact(sig);
                     } else {
                         carriedLeaf.addFalseFact(sig);
@@ -261,7 +261,7 @@ void TreeExpander::createNextPosition(Position& newPos, Position* parent, Positi
     if (parent != nullptr) {
         newPos.setParentPosition(parent);
     }
-    newPos.initFactChangesBitVec(_htn.getNumPositiveGroundFacts());
+    newPos.initFactChanges(_htn.getNumPositiveGroundFacts());
 
     // _expansion_start_index is 0 in the normal case. When a batch of tasks has been
     // pre-solved, it points to the first position that still needs expansion — which
@@ -288,7 +288,7 @@ void TreeExpander::createNextPosition(Position& newPos, Position* parent, Positi
 
     if (!_use_sibylsat_expansion) { 
         _stats.beginTiming(TimingStage::EXPANSION_INITIALIZED_NEXT_EFFECTS);
-        initializeNextEffectsBitVec(newPos);
+        initializeNextEffects(newPos);
         _stats.endTiming(TimingStage::EXPANSION_INITIALIZED_NEXT_EFFECTS);
     }
 }
@@ -315,8 +315,8 @@ void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) 
             BitVec groundEffNeg = _analysis.getPossibleGroundFactChanges(aSig, /*negated=*/true);
             const SigSet& pseudoEff = _analysis.getPossiblePseudoGroundFactChanges(aSig);
 
-            addGroundEffectBitVec(newPos, aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
-            addGroundEffectBitVec(newPos, aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
+            addGroundEffect(newPos, aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
+            addGroundEffect(newPos, aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
 
             for (const Signature& pseudoPred : pseudoEff) {
                 if (isAction && !addPseudoGroundEffect(
@@ -345,10 +345,10 @@ void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) 
 }
 
 void TreeExpander::createNextPositionFromLeftSimplified(Position& newPos) {
-    const BitVec& pos_facts_changed = newPos.getFactChangeBitVec(/*negated=*/false);
-    const BitVec& neg_facts_changed = newPos.getFactChangeBitVec(/*negated=*/true);
-    _analysis.addMultipleReachableFactsBitVec(pos_facts_changed, /*negated=*/false);
-    _analysis.addMultipleReachableFactsBitVec(neg_facts_changed, /*negated=*/true);
+    const BitVec& pos_facts_changed = newPos.getFactChange(/*negated=*/false);
+    const BitVec& neg_facts_changed = newPos.getFactChange(/*negated=*/true);
+    _analysis.addMultipleReachableFacts(pos_facts_changed, /*negated=*/false);
+    _analysis.addMultipleReachableFacts(neg_facts_changed, /*negated=*/true);
 }
 
 void TreeExpander::addPreconditionConstraints(Position& pos) {
@@ -366,7 +366,7 @@ void TreeExpander::addPreconditionsAndConstraints(Position& pos, const USignatur
     USignature constrOp = isRepetition ? USignature(_htn.getActionNameFromRepetition(op._name_id), op._args) : op;
 
     for (const Signature& fact : preconditions) {
-        auto cOpt = addPreconditionBitVec(pos, op, fact, !isRepetition);
+        auto cOpt = addPrecondition(pos, op, fact, !isRepetition);
         if (cOpt) pos.addSubstitutionConstraint(constrOp, std::move(cOpt.value()));
     }
     if (!isRepetition) addQConstantTypeConstraints(pos, op);
@@ -390,7 +390,7 @@ void TreeExpander::addPreconditionsAndConstraints(Position& pos, const USignatur
     }
 }
 
-std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Position& pos, const USignature& op, const Signature& fact, bool addQFact) {
+std::optional<SubstitutionConstraint> TreeExpander::addPrecondition(Position& pos, const USignature& op, const Signature& fact, bool addQFact) {
 
     const USignature& factAbs = fact.getUnsigned();
 
@@ -401,8 +401,8 @@ std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Positi
             assert(equality_is_correct || Log::e("Precondition %s not reachable!\n", TOSTR(fact)));
             if (equality_is_correct && !fact._negated) {
                 int predId = _htn.getGroundFactId(factAbs, fact._negated);
-                initializeFactBitVec(pos, predId);
-                _analysis.addRelevantFactBitVec(predId);
+                initializeFact(pos, predId);
+                _analysis.addRelevantFact(predId);
             }
             return std::optional<SubstitutionConstraint>();
          }
@@ -412,11 +412,11 @@ std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Positi
             Log::e("Precondition %s not reachable!\n", TOSTR(fact));
             return std::optional<SubstitutionConstraint>();
         }
-        assert(_analysis.isReachableBitVec(predId, fact._negated) || Log::e("Precondition %s not reachable!\n", TOSTR(fact)));
+        assert(_analysis.isReachable(predId, fact._negated) || Log::e("Precondition %s not reachable!\n", TOSTR(fact)));
 
-        if (_analysis.isReachableBitVec(predId, !fact._negated)) {
-            initializeFactBitVec(pos, predId);
-            _analysis.addRelevantFactBitVec(predId);
+        if (_analysis.isReachable(predId, !fact._negated)) {
+            initializeFact(pos, predId);
+            _analysis.addRelevantFact(predId);
         }
         return std::optional<SubstitutionConstraint>();
     }
@@ -476,7 +476,7 @@ std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Positi
         for (const USignature& decFactAbs : _htn.decodeObjects(factAbs, eligibleArgs, sampleSize)) {
             int predId = _htn.getGroundFactId(decFactAbs, fact._negated);
 
-            if (predId >=0 && _analysis.isReachableBitVec(predId, fact._negated)) valids++;
+            if (predId >=0 && _analysis.isReachable(predId, fact._negated)) valids++;
         }
         polarity = valids < sampleSize/2 ? SubstitutionConstraint::ANY_VALID : SubstitutionConstraint::NO_INVALID;
         c.fixPolarity(polarity);
@@ -485,7 +485,7 @@ std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Positi
     for (const USignature& decFactAbs : _htn.decodeObjects(factAbs, eligibleArgs)) {
         int predId = _htn.getGroundFactId(decFactAbs, fact._negated);
 
-        if (predId >= 0 && _analysis.isReachableBitVec(predId, fact._negated)) {
+        if (predId >= 0 && _analysis.isReachable(predId, fact._negated)) {
             if (polarity != SubstitutionConstraint::NO_INVALID) {
                 c.addValid(SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices));
             }
@@ -496,7 +496,7 @@ std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Positi
             continue;
         }
 
-        if (_analysis.isInvariantBitVec(predId, fact._negated)) {
+        if (_analysis.isInvariant(predId, fact._negated)) {
             continue;
         }
 
@@ -508,9 +508,9 @@ std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Positi
         if (addQFact) pos.addQFact(factAbs);
         for (const int& predId : relevantsPredIds) {
             const USignature& decFactAbs = _htn.getGroundPositiveFact(predId);
-            initializeFactBitVec(pos, predId);
+            initializeFact(pos, predId);
             if (addQFact) pos.addQFactDecoding(factAbs, decFactAbs, fact._negated);
-            _analysis.addRelevantFactBitVec(predId);
+            _analysis.addRelevantFact(predId);
         }
     }
     if (!doSample) c.fixPolarity();
@@ -518,17 +518,17 @@ std::optional<SubstitutionConstraint> TreeExpander::addPreconditionBitVec(Positi
 }
 
 
-void TreeExpander::addGroundEffectBitVec(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode) 
+void TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode)
 {
     if (effects.count() == 0) return;
 
-    _analysis.removeInvariantGroundFactsBitVec(effects, negated);
+    _analysis.removeInvariantGroundFacts(effects, negated);
     if (mode != INDIRECT) {
-        _analysis.addMultipleRelevantFactsBitVec(effects);
+        _analysis.addMultipleRelevantFacts(effects);
     }
 
-    pos.addMultipleFactChangesBitVec(effects, negated);
-    _analysis.addMultipleReachableFactsBitVec(effects, negated);
+    pos.addMultipleFactChanges(effects, negated);
+    _analysis.addMultipleReachableFacts(effects, negated);
 
     for (int predId: effects) {
         if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
@@ -543,10 +543,10 @@ void TreeExpander::addGroundEffectBitVec(Position& pos, const USignature& opSig,
 bool TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode) {
     assert(pos.getPositionIndex() > 0);
 
-    if (_analysis.isInvariantBitVec(predId, negated)) return true;
+    if (_analysis.isInvariant(predId, negated)) return true;
 
     if (mode != INDIRECT) {
-        _analysis.addRelevantFactBitVec(predId);
+        _analysis.addRelevantFact(predId);
     }
 
     if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
@@ -554,9 +554,9 @@ bool TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, int p
     } else {
         pos.touchFactSupportId(predId, negated);
     }
-    pos.addFactChangeBitVec(predId, negated);
+    pos.addFactChange(predId, negated);
     
-    _analysis.addReachableFactBitVec(predId, negated);
+    _analysis.addReachableFact(predId, negated);
     return true;
 }
 
@@ -625,7 +625,7 @@ bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const US
         }
 
         anyGood = true;
-        if (_analysis.isInvariantBitVec(predId, fact._negated)) {
+        if (_analysis.isInvariant(predId, fact._negated)) {
 
             if (isPositiveEffOfAction && existNegativeEffWhichCanConflitWithPosEff && staticallyResolvable) {
                 Log::d("Eff: %c %s of %s hold trivially but must be added for correct encoding\n", fact._negated ? '-' : '+', TOSTR(decFactAbs), TOSTR(opSig));
@@ -634,16 +634,16 @@ bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const US
             }
         }
 
-        _analysis.addReachableFactBitVec(predId, /*negated=*/fact._negated);
+        _analysis.addReachableFact(predId, /*negated=*/fact._negated);
         if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
             pos.addIndirectFactSupportId(predId, fact._negated, opSig, path);
         } else {
             pos.touchFactSupportId(predId, fact._negated);
         }
-        pos.addFactChangeBitVec(predId, fact._negated);
+        pos.addFactChange(predId, fact._negated);
         if (mode != INDIRECT) {
             if (mode == DIRECT) pos.addQFactDecoding(factAbs, decFactAbs, fact._negated);
-            _analysis.addRelevantFactBitVec(predId);
+            _analysis.addRelevantFact(predId);
         }
         staticallyResolvable = false;
     }
@@ -664,13 +664,13 @@ void TreeExpander::propagateInitialState(Position& newPos, const Position& above
         const USignature& predFact = _htn.getGroundPositiveFact(predId);
         newPos.addTrueFact(predFact);
         newPos.addTrueFactId(predId);
-        _analysis.addInitializedFactBitVec(predId);
+        _analysis.addInitializedFact(predId);
     }
     for (const int predId : above.getFalseFactsIds()) {
         const USignature& predFact = _htn.getGroundPositiveFact(predId);
         newPos.addFalseFact(predFact);
         newPos.addFalseFactId(predId);
-        _analysis.addInitializedFactBitVec(predId);
+        _analysis.addInitializedFact(predId);
     }
 
 }
@@ -685,9 +685,9 @@ void TreeExpander::applyLegacyBoundarySetup(const std::vector<Position*>& curren
     Position tmpPos;
     tmpPos.setPos(_depth, 0);
     propagateInitialState(tmpPos, *currentLeaves[0]);
-    _analysis.setReachableFactsBitVec(
-        _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec(),
-        _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec()
+    _analysis.setReachableFacts(
+        _separate_tasks_scheduler->getReachableStatePosFactsAfterTasksAccomplished(),
+        _separate_tasks_scheduler->getReachableStateNegFactsAfterTasksAccomplished()
     );
 }
 
@@ -698,8 +698,8 @@ void TreeExpander::propagateActions(Position& newPos, Position& above) {
     for (const auto& aSig : above.getActions()) {
         const Action& a = _htn.getOpTable().getAction(aSig);
 
-        bool valid = _analysis.hasValidPreconditionsBitVec(a.getPreconditions())
-                && _analysis.hasValidPreconditionsBitVec(a.getExtraPreconditions());
+        bool valid = _analysis.hasValidPreconditions(a.getPreconditions())
+                && _analysis.hasValidPreconditions(a.getExtraPreconditions());
 
         if (!valid) {
             Log::i("Retroactively prune action %s@(%i,%i): no children at offset %i\n",
@@ -830,10 +830,10 @@ std::vector<USignature> TreeExpander::instantiateAllActionsOfTask(Position& pos,
 
     if (!_htn.isFullyGround(action.getSignature())) return result;
     if (!_htn.hasConsistentlyTypedArgs(originalSig)) return result;
-    if (!_analysis.hasValidPreconditionsBitVec(action.getPreconditions())) {
+    if (!_analysis.hasValidPreconditions(action.getPreconditions())) {
         return result;
     }
-    if (!_analysis.hasValidPreconditionsBitVec(action.getExtraPreconditions())) {
+    if (!_analysis.hasValidPreconditions(action.getExtraPreconditions())) {
         return result;
     }
 
@@ -890,10 +890,10 @@ std::optional<Reduction> TreeExpander::createValidReduction(Position& pos, const
     if (task._name_id >= 0 && red.getTaskSignature() != task) isValid = false;
     else if (!_htn.isFullyGround(red.getSignature())) isValid = false;
     else if (!_htn.hasConsistentlyTypedArgs(red.getSignature())) isValid = false;
-    else if (!_analysis.hasValidPreconditionsBitVec(red.getPreconditions())) {
+    else if (!_analysis.hasValidPreconditions(red.getPreconditions())) {
         isValid = false;
     }
-    else if (!_analysis.hasValidPreconditionsBitVec(red.getExtraPreconditions())) {
+    else if (!_analysis.hasValidPreconditions(red.getExtraPreconditions())) {
         isValid = false;
     }
 
@@ -904,7 +904,7 @@ std::optional<Reduction> TreeExpander::createValidReduction(Position& pos, const
     return rOpt;
 }
 
-void TreeExpander::initializeNextEffectsBitVec(Position& newPos) {
+void TreeExpander::initializeNextEffects(Position& newPos) {
     const USigSet* ops[2] = {&newPos.getActions(), &newPos.getReductions()};
     bool isAction = true;
     for (const auto& set : ops) {
@@ -913,23 +913,23 @@ void TreeExpander::initializeNextEffectsBitVec(Position& newPos) {
             const BitVec& groundEffNeg = _analysis.getPossibleGroundFactChanges(aSig, /*negated=*/true);
             const SigSet& pseudoEff = _analysis.getPossiblePseudoGroundFactChanges(aSig);
             for (size_t predId : groundEffPos) {
-                initializeFactBitVec(newPos, predId);
+                initializeFact(newPos, predId);
             }
             for (size_t predId : groundEffNeg) {
-                initializeFactBitVec(newPos, predId);
+                initializeFact(newPos, predId);
             }
             for (const Signature& eff : pseudoEff) {
                 if (!_htn.hasQConstants(eff._usig)) {
                     int predId = _htn.getGroundFactId(eff._usig, eff._negated);
                     if (predId > 0) {
-                        initializeFactBitVec(newPos, predId);
+                        initializeFact(newPos, predId);
                         continue;
                     }
                 }
                 BitVec groundEffPos = ArgIterator2::getFullInstantiation2(eff._usig, eff._negated, _htn, _htn.getOpSortsForCondition(eff._usig, aSig));
                 
                 for (size_t predId : groundEffPos) {
-                    initializeFactBitVec(newPos, predId);
+                    initializeFact(newPos, predId);
                 }
             }
         }
@@ -937,15 +937,15 @@ void TreeExpander::initializeNextEffectsBitVec(Position& newPos) {
     }
 }
 
-void TreeExpander::initializeFactBitVec(Position& newPos, const int predId) {
+void TreeExpander::initializeFact(Position& newPos, const int predId) {
 
     const USignature& fact = _htn.getGroundPositiveFact(predId);
 
-    if (_analysis.isInitializedBitVec(predId)) return;
+    if (_analysis.isInitialized(predId)) return;
 
-    _analysis.addInitializedFactBitVec(predId);
+    _analysis.addInitializedFact(predId);
 
-    if (_analysis.isReachableBitVec(predId, /*negated=*/true)) {
+    if (_analysis.isReachable(predId, /*negated=*/true)) {
         newPos.addFalseFact(fact);
         newPos.addFalseFactId(predId);
     }

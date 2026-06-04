@@ -20,12 +20,12 @@ private:
 
     USigSet _init_state;
 
-    BitVec _init_state_pos_bitvec;
-    BitVec _init_state_neg_bitvec;
-    BitVec _pos_layer_facts_bitvec;
-    BitVec _neg_layer_facts_bitvec;
-    BitVec _initialized_facts_bitvec;
-    BitVec _relevant_facts_bitvec;
+    BitVec _init_state_pos;
+    BitVec _init_state_neg;
+    BitVec _pos_layer_facts;
+    BitVec _neg_layer_facts;
+    BitVec _initialized_facts;
+    BitVec _relevant_facts;
     int _cutoff_neg_facts;
     BitVec _empty;
     NodeHashMap<USignature, SigSet, USignatureHasher> _pseudo_fact_changes_cache;
@@ -47,8 +47,8 @@ private:
     NodeHashMap<USignature, SigSet, USignatureHasher> _fact_changes_cache;
 
     // TEST
-    NodeHashMap<int, BitVec> _fact_changes_ground_pos_bitvec;
-    NodeHashMap<int, BitVec> _fact_changes_ground_neg_bitvec;
+    NodeHashMap<int, BitVec> _fact_changes_ground_pos;
+    NodeHashMap<int, BitVec> _fact_changes_ground_neg;
     NodeHashMap<int, SigSet> _fact_change_pseudo_facts;
     // END TEST
 
@@ -82,19 +82,19 @@ public:
             _cutoff_neg_facts = posFacts.size(); // All predicate with idx >= _cutoff_neg_facts are only negative facts
 
             _htn.setGroundPosAndNegFacts(posFacts, exclusiveNegFacts);
-            _pos_layer_facts_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
-            _neg_layer_facts_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
-            _init_state_pos_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
-            _init_state_neg_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
-            _relevant_facts_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
+            _pos_layer_facts = BitVec(_htn.getNumPositiveGroundFacts());
+            _neg_layer_facts = BitVec(_htn.getNumPositiveGroundFacts());
+            _init_state_pos = BitVec(_htn.getNumPositiveGroundFacts());
+            _init_state_neg = BitVec(_htn.getNumPositiveGroundFacts());
+            _relevant_facts = BitVec(_htn.getNumPositiveGroundFacts());
             _empty = BitVec(_htn.getNumPositiveGroundFacts(), false);
             for (int i = 0; i < _htn.getNumPositiveGroundFacts(); ++i) {
                 const USignature& iSig = _htn.getGroundPositiveFact(i);
                 // Log::i("Init Fact %d: %s\n", i, TOSTR(iSig));
                 if (_init_state.count(iSig)) {
-                    _init_state_pos_bitvec.set(i);
+                    _init_state_pos.set(i);
                 } else {
-                    _init_state_neg_bitvec.set(i);
+                    _init_state_neg.set(i);
                 }
             }
             Statistics::getInstance().endTiming(TimingStage::INIT_GROUNDING);
@@ -126,16 +126,16 @@ public:
 
     void resetReachability() {
         // Reset the bit vectors
-        _pos_layer_facts_bitvec = _init_state_pos_bitvec;
-        _neg_layer_facts_bitvec = _init_state_neg_bitvec;
-        _initialized_facts_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
+        _pos_layer_facts = _init_state_pos;
+        _neg_layer_facts = _init_state_neg;
+        _initialized_facts = BitVec(_htn.getNumPositiveGroundFacts());
     }
 
     // Update the "initial state" used by resetReachability(). Call this when the effective
     // starting state of the search shifts (e.g. after a batch of tasks is accomplished).
     void updateInitialState(const BitVec& pos, const BitVec& neg) {
-        _init_state_pos_bitvec = pos;
-        _init_state_neg_bitvec = neg;
+        _init_state_pos = pos;
+        _init_state_neg = neg;
     }
 
     enum FactInstantiationMode {FULL, LIFTED};
@@ -156,74 +156,74 @@ public:
 
 
 
-    // API BITVEC
-    bool isReachableBitVec(const int predId, bool negated) {
+    // Reachability API
+    bool isReachable(const int predId, bool negated) {
         if (negated) {
-            return _neg_layer_facts_bitvec.test(predId);
+            return _neg_layer_facts.test(predId);
         } else {
-            return predId < _cutoff_neg_facts && _pos_layer_facts_bitvec.test(predId);
+            return predId < _cutoff_neg_facts && _pos_layer_facts.test(predId);
         }
     }
 
-    const BitVec& getReachableFactsBitVec(bool negated) {
-        return negated ? _neg_layer_facts_bitvec : _pos_layer_facts_bitvec;
+    const BitVec& getReachableFacts(bool negated) {
+        return negated ? _neg_layer_facts : _pos_layer_facts;
     }
 
-    void addReachableFactBitVec(const int predId, bool negated) {
+    void addReachableFact(const int predId, bool negated) {
         if (negated) {
-            _neg_layer_facts_bitvec.set(predId);
+            _neg_layer_facts.set(predId);
         } else if (predId < _cutoff_neg_facts) {
-            _pos_layer_facts_bitvec.set(predId);
+            _pos_layer_facts.set(predId);
         }
     }
 
-    void setReachableFactsBitVec(const BitVec& pos_facts, const BitVec& neg_facts) {
-        _pos_layer_facts_bitvec = pos_facts;
-        _neg_layer_facts_bitvec = neg_facts;
+    void setReachableFacts(const BitVec& pos_facts, const BitVec& neg_facts) {
+        _pos_layer_facts = pos_facts;
+        _neg_layer_facts = neg_facts;
     }
 
-    void addMultipleReachableFactsBitVec(const BitVec& facts, bool negated) {
+    void addMultipleReachableFacts(const BitVec& facts, bool negated) {
         if (negated) {
-            _neg_layer_facts_bitvec.or_with(facts);
+            _neg_layer_facts.or_with(facts);
         } else {
-            _pos_layer_facts_bitvec.or_with(facts);
+            _pos_layer_facts.or_with(facts);
         }
     }
 
-    bool isInvariantBitVec(const int predId, bool negated) {
-        return !isReachableBitVec(predId, !negated);
+    bool isInvariant(const int predId, bool negated) {
+        return !isReachable(predId, !negated);
     }
 
-    void removeInvariantGroundFactsBitVec(BitVec& facts, bool negated) {
+    void removeInvariantGroundFacts(BitVec& facts, bool negated) {
         if (negated) {
-            facts.and_with(_pos_layer_facts_bitvec);
+            facts.and_with(_pos_layer_facts);
         } else {
-            facts.and_with(_neg_layer_facts_bitvec);
+            facts.and_with(_neg_layer_facts);
         }
     }
 
-    void addInitializedFactBitVec(const int predId) {
-        _initialized_facts_bitvec.set(predId);
-        if (isReachableBitVec(predId, /*negated=*/true)) {
-            _neg_layer_facts_bitvec.set(predId);
+    void addInitializedFact(const int predId) {
+        _initialized_facts.set(predId);
+        if (isReachable(predId, /*negated=*/true)) {
+            _neg_layer_facts.set(predId);
         }
     }
 
-    bool isInitializedBitVec(const int predId) {
-        return _initialized_facts_bitvec.test(predId);
+    bool isInitialized(const int predId) {
+        return _initialized_facts.test(predId);
     }
 
-    inline bool hasValidPreconditionsBitVec(const SigSet& preconds) {
-        for (const Signature& pre : preconds) if (!isPseudoOrGroundFactReachableBitVec(pre._usig, pre._negated)) {
+    inline bool hasValidPreconditions(const SigSet& preconds) {
+        for (const Signature& pre : preconds) if (!isPseudoOrGroundFactReachable(pre._usig, pre._negated)) {
             // Log::i("Precondition %s is not reachable\n", TOSTR(pre));
-            // printReachableFactsBitVec();
+            // printReachableFacts();
             // printReachableFacts();
             return false;
         } 
         return true;
     }
 
-    inline bool isPseudoOrGroundFactReachableBitVec(const USignature& sig, bool negated) {
+    inline bool isPseudoOrGroundFactReachable(const USignature& sig, bool negated) {
         if (!_htn.isFullyGround(sig)) return true;
 
         if (_htn.isEqualityPredicate(sig._name_id)) {
@@ -250,7 +250,7 @@ public:
         
         if (!_htn.hasQConstants(sig)) {
             int predId = _htn.getGroundFactId(sig, negated);
-            return predId >= 0 && isReachableBitVec(predId, negated);
+            return predId >= 0 && isReachable(predId, negated);
         }
         // Q-Fact:
         BitVec result = ArgIterator2::getFullInstantiation2(sig, negated, _htn, _htn.getSorts(sig._name_id));
@@ -258,7 +258,7 @@ public:
             // Log::i("Sig %s can be grounded to %s\n", TOSTR(sig), TOSTR(_htn.getGroundPositiveFact(predId)));
         // }
         // If any of the instantiations is reachable, return true
-        const BitVec& facts = negated ? _neg_layer_facts_bitvec : _pos_layer_facts_bitvec;
+        const BitVec& facts = negated ? _neg_layer_facts : _pos_layer_facts;
         result.and_with(facts);
         return result.any();
         // }
@@ -266,47 +266,47 @@ public:
         // return isReachable(sig, negated);
     }
 
-    void addRelevantFactBitVec(const int predId) {
-        _relevant_facts_bitvec.set(predId);
+    void addRelevantFact(const int predId) {
+        _relevant_facts.set(predId);
     }
 
-    void addMultipleRelevantFactsBitVec(const BitVec& facts) {
-        _relevant_facts_bitvec.or_with(facts);
+    void addMultipleRelevantFacts(const BitVec& facts) {
+        _relevant_facts.or_with(facts);
     }
 
-    // bool isRelevantBitVec(const int predId) {
-    //     return _relevant_facts_bitvec.test(predId);
+    // bool isRelevant(const int predId) {
+    //     return _relevant_facts.test(predId);
     // }
 
-    bool isRelevantBitVec(const USignature& fact, bool negated) {
+    bool isRelevant(const USignature& fact, bool negated) {
         int predId = _htn.getGroundFactId(fact, negated);
-        return predId >= 0 && _relevant_facts_bitvec.test(predId);
+        return predId >= 0 && _relevant_facts.test(predId);
     }
 
-    void printRelevantFactsBitVec() {
-        Log::i("Relevant facts (bitvec):\n");
-        for (int predId: _relevant_facts_bitvec) {
+    void printRelevantFacts() {
+        Log::i("Relevant facts:\n");
+        for (int predId: _relevant_facts) {
             Log::i("  %s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
         }
     }
 
-    bool isRelevantBitVec(const int predId) {
-        return _relevant_facts_bitvec.test(predId);
+    bool isRelevant(const int predId) {
+        return _relevant_facts.test(predId);
     }
 
-    const BitVec& getRelevantFactsBitVec() {
-        return _relevant_facts_bitvec;
+    const BitVec& getRelevantFacts() {
+        return _relevant_facts;
     }
 
     const BitVec& getPossibleGroundFactChanges(const USignature& sig, bool negated, FactInstantiationMode mode = FULL, OperationType opType = UNKNOWN);
     const SigSet& getPossiblePseudoGroundFactChanges(const USignature& sig, FactInstantiationMode mode = FULL, OperationType opType = UNKNOWN);
 
-    void printReachableFactsBitVec() {
-        Log::i("Reachable facts bitvec:\n");
-        for (int predId: _pos_layer_facts_bitvec) {
+    void printReachableFacts() {
+        Log::i("Reachable facts:\n");
+        for (int predId: _pos_layer_facts) {
             Log::i("  +%s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
         }
-        for (int predId: _neg_layer_facts_bitvec) {
+        for (int predId: _neg_layer_facts) {
             Log::i("  -%s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
         }
     }

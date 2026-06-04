@@ -81,11 +81,11 @@ private:
 
     void addPreconditionConstraints(Position& pos);
     void addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isActionRepetition);
-    std::optional<SubstitutionConstraint> addPreconditionBitVec(Position& pos, const USignature& op, const Signature& fact, bool addQFact = true);
+    std::optional<SubstitutionConstraint> addPrecondition(Position& pos, const USignature& op, const Signature& fact, bool addQFact = true);
 
     enum EffectMode { INDIRECT, DIRECT, DIRECT_NO_QFACT };
     bool addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode);
-    void addGroundEffectBitVec(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode);
+    void addGroundEffect(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode);
     bool addPseudoGroundEffect(Position& pos, Position& left, const USignature& op, const Signature& fact, EffectMode mode);
 
     std::optional<Reduction> createValidReduction(Position& pos, const USignature& rSig, const USignature& task);
@@ -95,8 +95,8 @@ private:
     void propagateReductions(Position& newPos, Position& above);
     std::vector<USignature> instantiateAllActionsOfTask(Position& pos, const USignature& task);
     std::vector<USignature> instantiateAllReductionsOfTask(Position& pos, const USignature& task);
-    void initializeNextEffectsBitVec(Position& pos);
-    void initializeFactBitVec(Position& newPos, const int predId);
+    void initializeNextEffects(Position& pos);
+    void initializeFact(Position& newPos, const int predId);
     void addQConstantTypeConstraints(Position& pos, const USignature& op);
 };
 

@@ -13,7 +13,6 @@ SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn)
       _num_failed_sat(0),
       _num_pos_done(0),
       _restart_planner(false),
-      _init_state(htn.getInitState()),
       _htn(htn),
       _domain_name(getDomaineNameFromDomainFile(htn.getParams().getDomainFilename()))
 {
@@ -24,16 +23,16 @@ SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn)
     _add_tasks_as_clauses = _settings_manager.get_setting(_domain_name, "independent_init_tasks");
     _init_time_spend_to_solve_tasks = std::chrono::high_resolution_clock::now();
 
-    // Initialize the init state bitvec
-    _init_state_pos_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
-    _init_state_neg_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
+    const USigSet& initState = _htn.getInitState();
+    _init_state_pos = BitVec(_htn.getNumPositiveGroundFacts());
+    _init_state_neg = BitVec(_htn.getNumPositiveGroundFacts());
     for (int i = 0; i < _htn.getNumPositiveGroundFacts(); ++i) {
         const USignature& iSig = _htn.getGroundPositiveFact(i);
         // Log::i("Init Fact %d: %s\n", i, TOSTR(iSig));
-        if (_init_state.count(iSig)) {
-            _init_state_pos_bitvec.set(i);
+        if (initState.count(iSig)) {
+            _init_state_pos.set(i);
         } else {
-            _init_state_neg_bitvec.set(i);
+            _init_state_neg.set(i);
         }
     }
 }
@@ -83,7 +82,7 @@ bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<
             Position* boundaryLeaf = leafPositions[solve_positions];
             for (int i = 0; i < _htn.getNumPositiveGroundFacts(); ++i) {
                 const USignature& sig = _htn.getGroundPositiveFact(i);
-                if (_reachable_state_pos_after_tasks_accomplished_bitvec.test(i)) {
+                if (_reachable_state_pos_facts_after_tasks_accomplished.test(i)) {
                     boundaryLeaf->addTrueFact(sig);
                     boundaryLeaf->addTrueFactId(i);
                 } else {
@@ -173,8 +172,8 @@ bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<
 
 void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding &enc, const std::vector<Position*> &leafPositions, int solvePositions)
 {
-    _reachable_state_pos_after_tasks_accomplished = _init_state;
-    _reachable_state_neg_after_tasks_accomplished.clear();
+    _reachable_state_pos_facts_after_tasks_accomplished = _init_state_pos;
+    _reachable_state_neg_facts_after_tasks_accomplished = _init_state_neg;
 
     // TODO FIXME. OTHER TECHNIQUE WORKS FINE, BUT IT IS LESS EFFICIENT
     if (_add_tasks_as_clauses)
@@ -206,7 +205,8 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                 if (posPrecondition._negated)
                     continue; // Only consider positive preconditions
 
-                if (!_reachable_state_pos_after_tasks_accomplished.count(posPrecondition._usig))
+                int predId = _htn.getGroundFactId(posPrecondition._usig, /*negated=*/false);
+                if (predId < 0 || !_reachable_state_pos_facts_after_tasks_accomplished.test(predId))
                 {
                     int varAction = leaf.getVariableOrZero(VarType::OP, aSig);
                     int varPosPrecondition = leaf.getVariableOrZero(VarType::FACT, posPrecondition._usig);
@@ -224,8 +224,11 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                     continue; // Only consider negative effects
 
                 Log::d("  Adding negative effect %s to reachable state after tasks accomplished\n", TOSTR(negEffect._usig));
-                _reachable_state_pos_after_tasks_accomplished.erase(negEffect._usig);
-                _reachable_state_neg_after_tasks_accomplished.insert(negEffect._usig);
+                int predId = _htn.getGroundFactId(negEffect._usig, /*negated=*/true);
+                if (predId >= 0) {
+                    _reachable_state_pos_facts_after_tasks_accomplished.clear(predId);
+                    _reachable_state_neg_facts_after_tasks_accomplished.set(predId);
+                }
             }
             // Then add the positive effects of the action
             for (const auto &posEffect : action.getEffects())
@@ -234,21 +237,11 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                     continue; // Only consider positive effects
 
                 Log::d("  Adding positive effect %s to reachable state after tasks accomplished\n", TOSTR(posEffect._usig));
-                _reachable_state_neg_after_tasks_accomplished.erase(posEffect._usig);
-                _reachable_state_pos_after_tasks_accomplished.insert(posEffect._usig);
-            }
-        }
-
-        // Add it into a bitvec
-        _reachable_state_pos_after_tasks_accomplished_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
-        _reachable_state_neg_after_tasks_accomplished_bitvec = BitVec(_htn.getNumPositiveGroundFacts());
-
-        for (int i = 0; i < _htn.getNumPositiveGroundFacts(); ++i) {
-            const USignature& iSig = _htn.getGroundPositiveFact(i);
-            if (_reachable_state_pos_after_tasks_accomplished.count(iSig)) {
-                _reachable_state_pos_after_tasks_accomplished_bitvec.set(i);
-            } else {
-                _reachable_state_neg_after_tasks_accomplished_bitvec.set(i);
+                int predId = _htn.getGroundFactId(posEffect._usig, /*negated=*/false);
+                if (predId >= 0) {
+                    _reachable_state_neg_facts_after_tasks_accomplished.clear(predId);
+                    _reachable_state_pos_facts_after_tasks_accomplished.set(predId);
+                }
             }
         }
 
@@ -259,25 +252,21 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
     }
     else
     {
-
-        _reachable_state_pos_after_tasks_accomplished_bitvec = _init_state_pos_bitvec;
-        _reachable_state_neg_after_tasks_accomplished_bitvec = _init_state_neg_bitvec;
-
         // Otherwise, do the classical way
         for (int i = 0; i < solvePositions; ++i)
         {
             Position &pos = *leafPositions[i];
 
-            const BitVec& pos_facts_changed = pos.getFactChangeBitVec(/*negated=*/false);
-            const BitVec& neg_facts_changed = pos.getFactChangeBitVec(/*negated=*/true);
-            _reachable_state_pos_after_tasks_accomplished_bitvec.or_with(pos_facts_changed);
-            _reachable_state_neg_after_tasks_accomplished_bitvec.or_with(neg_facts_changed);
+            const BitVec& pos_facts_changed = pos.getFactChange(/*negated=*/false);
+            const BitVec& neg_facts_changed = pos.getFactChange(/*negated=*/true);
+            _reachable_state_pos_facts_after_tasks_accomplished.or_with(pos_facts_changed);
+            _reachable_state_neg_facts_after_tasks_accomplished.or_with(neg_facts_changed);
         }
     }
 
     Log::d("Size of reachable state after tasks accomplished: %zu positive, %zu negative\n",
-           _reachable_state_pos_after_tasks_accomplished_bitvec.count(),
-           _reachable_state_neg_after_tasks_accomplished_bitvec.count());
+           _reachable_state_pos_facts_after_tasks_accomplished.count(),
+           _reachable_state_neg_facts_after_tasks_accomplished.count());
 
     int a = 0;
 }

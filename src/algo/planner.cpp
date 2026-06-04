@@ -86,7 +86,7 @@ void Planner::encodeLeaves(const TreeExpander::ExpansionResult& expansion) {
     Statistics& stats = Statistics::getInstance();
     const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
 
-    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFactsBitVec().count());
+    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFacts().count());
     Log::i("Encoding ...\n");
     _enc.setNewInitPos(expansion.newInitPos);
 
@@ -199,8 +199,8 @@ bool Planner::findPrimitiveSolutionInSearchTree() {
         // Shift the analysis "initial state" to the post-task boundary state so that
         // resetReachability() naturally starts from there in the next expansion.
         _analysis.updateInitialState(
-            _separate_tasks_scheduler->getReachableStatePosAfterTasksAccomplishedBitVec(),
-            _separate_tasks_scheduler->getReachableStateNegAfterTasksAccomplishedBitVec()
+            _separate_tasks_scheduler->getReachableStatePosFactsAfterTasksAccomplished(),
+            _separate_tasks_scheduler->getReachableStateNegFactsAfterTasksAccomplished()
         );
         // Tell the expander where to start the next expansion (boundary position).
         _tree_expander.setExpansionBoundary(
@@ -304,4 +304,3 @@ void Planner::setSoftLitsForCurrentLeaves() {
         }
     }
 }
-

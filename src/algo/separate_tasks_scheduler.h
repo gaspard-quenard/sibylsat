@@ -19,16 +19,12 @@ class SeparateTasksScheduler {
     int    _num_pos_done;               // Number of positions already solved.
     bool   _tcp_exponential_resolving;   // Whether to adjust _num_tasks_to_solve exponentially.
     bool   _add_tasks_as_clauses;         // Whether to add tasks accomplished as clauses or assumptions.
-    const USigSet _init_state;          // Initial state of the HTN instance.
     HtnInstance& _htn;            // Reference to the HTN instance.
-    USigSet _reachable_state_pos_after_tasks_accomplished; // State after tasks accomplished (used for fact analysis).
-    USigSet _reachable_state_neg_after_tasks_accomplished; // State after tasks accomplished (used for fact analysis).
-    
 
-    BitVec _init_state_pos_bitvec;       // Bit vector for positive initial state facts.
-    BitVec _init_state_neg_bitvec;       // Bit vector for negative initial state facts.
-    BitVec _reachable_state_pos_after_tasks_accomplished_bitvec; // Bit vector for reachable state after tasks accomplished (used for fact analysis).
-    BitVec _reachable_state_neg_after_tasks_accomplished_bitvec; // Bit vector for reachable state after tasks accomplished (used for fact analysis).
+    BitVec _init_state_pos;       // Positive initial state fact ids.
+    BitVec _init_state_neg;       // Negative initial state fact ids.
+    BitVec _reachable_state_pos_facts_after_tasks_accomplished; // Positive reachable fact ids after tasks accomplished.
+    BitVec _reachable_state_neg_facts_after_tasks_accomplished; // Negative reachable fact ids after tasks accomplished.
 
     std::string _domain_name;           // Name of the domain.
     DomainSettingsManager _settings_manager;  // Individual domain settings manager. Here, it indicate for each domain whether their tasks are independent or not.
@@ -107,18 +103,11 @@ public:
     bool updateAfterSolved(Encoding &enc, const std::vector<Position*> &leafPositions);
 
 
-    const USigSet& getReachableStatePosAfterTasksAccomplished() const {
-        return _reachable_state_pos_after_tasks_accomplished;
+    const BitVec& getReachableStatePosFactsAfterTasksAccomplished() const {
+        return _reachable_state_pos_facts_after_tasks_accomplished;
     }
-    const USigSet& getReachableStateNegAfterTasksAccomplished() const {
-        return _reachable_state_neg_after_tasks_accomplished;
-    }
-
-    const BitVec& getReachableStatePosAfterTasksAccomplishedBitVec() const {
-        return _reachable_state_pos_after_tasks_accomplished_bitvec;
-    }
-    const BitVec& getReachableStateNegAfterTasksAccomplishedBitVec() const {
-        return _reachable_state_neg_after_tasks_accomplished_bitvec;
+    const BitVec& getReachableStateNegFactsAfterTasksAccomplished() const {
+        return _reachable_state_neg_facts_after_tasks_accomplished;
     }
 
     /**

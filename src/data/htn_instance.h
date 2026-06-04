@@ -38,7 +38,7 @@ private:
     // Test with ground facts
     std::vector<USignature> _ground_pos_facts;
     int _cutoff_neg_facts = -1;
-    BitVec all_preds_pos_bitvec; // All one except all value after the cutoff
+    BitVec all_preds_pos; // All one except all value after the cutoff
     NodeHashMap<const USignature, int, USignatureHasher> _ground_facts_map;
     
     // Maps a string to its name ID within the problem.
@@ -402,9 +402,9 @@ public:
 
         _cutoff_neg_facts = _ground_pos_facts.size() - negFacts.size();
 
-        all_preds_pos_bitvec = BitVec(_ground_pos_facts.size(), true);
+        all_preds_pos = BitVec(_ground_pos_facts.size(), true);
         for (size_t i = _cutoff_neg_facts; i < _ground_pos_facts.size(); ++i) {
-            all_preds_pos_bitvec.clear(i);
+            all_preds_pos.clear(i);
         }
 
 

@@ -1695,9 +1695,9 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
 
     // _stats.beginTiming(TimingStage::GET_ALL_PREDS);
 
-    BitVec all_preds_id = negated ? BitVec(getNumPositiveGroundFacts(), true) : all_preds_pos_bitvec;
+    BitVec all_preds_id = negated ? BitVec(getNumPositiveGroundFacts(), true) : all_preds_pos;
 
-    // Do we already have the BitVec filter for all predicates of this name_id ?
+    // Do we already have the filter for all predicates of this name_id?
     if (!_filter_by_name_id.count(name_id))
     {
         // No, we need to create it
@@ -1721,7 +1721,7 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
         // Is it a constant at this idx ?
         if (fixed_constant.size() > i && fixed_constant[i] != -1) {
             int cst = fixed_constant[i];
-            // Do we already have the BitVec filter for this constant for this param idx ?
+            // Do we already have the filter for this constant for this param idx?
             // Create a unique key for the constant at param idx
             std::string k = key_const(cst, i);
 
@@ -1739,7 +1739,7 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
         }
         else {
             int sort = sorts_per_args[i];
-            // Do we already have the BitVec for this sort for this param idx ?
+            // Do we already have the filter for this sort for this param idx?
             std::string key = key_sort(sort, i);
             if (!_filter_by_sort_at_idx_args.count(key)) {
                 const FlatHashSet<int>& constant_of_sort = getConstantsOfSort(sort);
@@ -1757,7 +1757,7 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
             // Do we have a restrictive sort for this param idx ?
             if (restrictive_sorts_per_args.size() > i && restrictive_sorts_per_args[i] != -1) {
                 int restrictive_sort = restrictive_sorts_per_args[i];
-                // Do we already have the BitVec for this restrictive sort for this param idx ?
+                // Do we already have the filter for this restrictive sort for this param idx?
                 std::string key_restrictive = key_sort(restrictive_sort, i);
                 if (!_filter_by_sort_at_idx_args.count(key_restrictive)) {
                     const FlatHashSet<int>& constant_of_restrictive_sort = getConstantsOfSort(restrictive_sort);

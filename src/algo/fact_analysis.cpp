@@ -194,13 +194,13 @@ const SigSet &FactAnalysis::getPossibleFactChanges(const USignature &sig, FactIn
             if (!pseudo_params)
             {
                 // Initialize the BitVec if not exists for this nameId
-                if (!_fact_changes_ground_pos_bitvec.count(nameId))
+                if (!_fact_changes_ground_pos.count(nameId))
                 {
-                    _fact_changes_ground_pos_bitvec[nameId] = BitVec(_htn.getNumPositiveGroundFacts());
-                    _fact_changes_ground_neg_bitvec[nameId] = BitVec(_htn.getNumPositiveGroundFacts());
+                    _fact_changes_ground_pos[nameId] = BitVec(_htn.getNumPositiveGroundFacts());
+                    _fact_changes_ground_neg[nameId] = BitVec(_htn.getNumPositiveGroundFacts());
                 }
 
-                BitVec &fact_change_ground = fact._negated ? _fact_changes_ground_neg_bitvec[nameId] : _fact_changes_ground_pos_bitvec[nameId];
+                BitVec &fact_change_ground = fact._negated ? _fact_changes_ground_neg[nameId] : _fact_changes_ground_pos[nameId];
 
                 if (_htn.isFullyGround(fact._usig)) {
                     int predId = _htn.getGroundFactId(fact._usig, fact._negated);
@@ -374,24 +374,24 @@ const BitVec &FactAnalysis::getPossibleGroundFactChanges(const USignature &sig, 
     if (opType == ACTION)
         return _empty;
 
-    if (!_fact_changes_ground_pos_bitvec.count(sig._name_id))
+    if (!_fact_changes_ground_pos.count(sig._name_id))
     {
         // If not exists, compute the fact changes
         getPossibleFactChanges(sig, mode, opType);
     }
 
     if (negated)
-        return _fact_changes_ground_neg_bitvec[sig._name_id];
+        return _fact_changes_ground_neg[sig._name_id];
     else
     {
         // Print all the fact to debug
         // Log::i("== Fact changes for %s (%d):\n", TOSTR(sig), sig._name_id);
-        for (size_t factId : _fact_changes_ground_pos_bitvec[sig._name_id])
+        for (size_t factId : _fact_changes_ground_pos[sig._name_id])
         {
             const USignature &fact = _htn.getGroundPositiveFact(factId);
             // Log::i("Possible fact change: %s\n", TOSTR(fact));
         }
-        return _fact_changes_ground_pos_bitvec[sig._name_id];
+        return _fact_changes_ground_pos[sig._name_id];
     }
 }
 
@@ -552,7 +552,7 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
             {
                 if (!_htn.hasQConstants(preSig._usig) && _htn.isFullyGround(preSig._usig)) {
                     int predId = _htn.getGroundFactId(preSig._usig, preSig._negated);
-                    if (predId >= 0 && isReachableBitVec(predId, preSig._negated))
+                    if (predId >= 0 && isReachable(predId, preSig._negated))
                     {
                         addTuple(preSig._usig);
                         any = true; anyValid = true;
@@ -566,7 +566,7 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
                         any = true;
                         const USignature &decUSig = _htn.getGroundPositiveFact(pred_idx);
                         // Log::i("___ Decoding %s of precondition %s\n", TOSTR(decUSig), TOSTR(preSig._usig));
-                        if (!isReachableBitVec(pred_idx, preSig._negated))
+                        if (!isReachable(pred_idx, preSig._negated))
                         {
                             // Log::i("___ Discard %s as decoding of precondition %s because it is not reachable\n", TOSTR(decUSig), TOSTR(preSig._usig));
                             continue;

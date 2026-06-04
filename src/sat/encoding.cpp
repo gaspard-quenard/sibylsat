@@ -172,7 +172,7 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
         const USigSet* defFacts[] = {&newPos.getTrueFacts(), &newPos.getFalseFacts()};
         bool trueFacts = true;
         for (auto set : defFacts) {for (const auto& fact : *set) {
-                if (!newPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevantBitVec(fact, !trueFacts)) {
+                if (!newPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevant(fact, !trueFacts)) {
 
                     if (_use_sibylsat_expansion) {
                         int var = _vars.encodeVariable(VarType::FACT, newPos, fact);
@@ -244,7 +244,7 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
     bool negated = false;
     for (int i = 0; i < 2; i++) {
         for (const USignature& factSig : *cHere[i]) {
-            if (_analysis.isRelevantBitVec(factSig, negated)) {
+            if (_analysis.isRelevant(factSig, negated)) {
                 int var = newPos.getVariableOrZero(VarType::FACT, factSig);
                 if (var == 0) {
                     // Variable is not encoded yet.
@@ -1155,7 +1155,7 @@ void Encoding::encodeNewRelevantsFacts(Position& initPos) {
     bool trueFacts = true;
     for (const auto& set : defFacts) { 
         for (const auto& fact : *set) {
-            if (!initPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevantBitVec(fact, !trueFacts)) {
+            if (!initPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevant(fact, !trueFacts)) {
                 int var = _vars.encodeVariable(VarType::FACT, initPos, fact);
                 _sat.addClause((trueFacts ? 1 : -1) * var);
                 _new_relevants_facts_to_encode[fact] = var;

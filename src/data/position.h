@@ -63,8 +63,8 @@ private:
     NodeHashSet<int> _true_facts_ids;
     NodeHashSet<int> _false_facts_ids;
 
-    BitVec _pos_fact_changed_bitvec; // All the fact positive that might change at this position.
-    BitVec _neg_fact_changed_bitvec; // All the fact negative that might change at this position.
+    BitVec _pos_fact_changed; // All the fact positive that might change at this position.
+    BitVec _neg_fact_changed; // All the fact negative that might change at this position.
 
     // Do not seem to be really better... there
     NodeHashMap<int, USigSet>* _pos_fact_supports_id = nullptr;
@@ -156,7 +156,7 @@ public:
     NodeHashMap<USignature, USigSet, USignatureHasher>& getPosFactSupports();
     NodeHashMap<USignature, USigSet, USignatureHasher>& getNegFactSupports();
 
-    // For BitVec
+    // Fact change helpers.
     NodeHashMap<int, USigSet>& getPosFactSupportsId();
     NodeHashMap<int, USigSet>& getNegFactSupportsId();
     IndirectFactSupportMapId& getPosIndirectFactSupportsId();
@@ -250,24 +250,24 @@ public:
         return _heuristic_value_per_reduction[reduction];
     }
 
-    void initFactChangesBitVec(int numPreds) {
-        _pos_fact_changed_bitvec = BitVec(numPreds);
-        _neg_fact_changed_bitvec = BitVec(numPreds);
+    void initFactChanges(int numPreds) {
+        _pos_fact_changed = BitVec(numPreds);
+        _neg_fact_changed = BitVec(numPreds);
     }
 
-    void addFactChangeBitVec(int predId, bool negated) {
-        BitVec& bv = negated ? _neg_fact_changed_bitvec : _pos_fact_changed_bitvec;
+    void addFactChange(int predId, bool negated) {
+        BitVec& bv = negated ? _neg_fact_changed : _pos_fact_changed;
         bv.set(predId);
     }
-    void addMultipleFactChangesBitVec(const BitVec& facts, bool negated) {
+    void addMultipleFactChanges(const BitVec& facts, bool negated) {
         if (negated) {
-            _neg_fact_changed_bitvec.or_with(facts);
+            _neg_fact_changed.or_with(facts);
         } else {
-            _pos_fact_changed_bitvec.or_with(facts);
+            _pos_fact_changed.or_with(facts);
         }
     }
-    const BitVec& getFactChangeBitVec(bool negated) const {
-        return negated ? _neg_fact_changed_bitvec : _pos_fact_changed_bitvec;
+    const BitVec& getFactChange(bool negated) const {
+        return negated ? _neg_fact_changed : _pos_fact_changed;
     }
 
     void addGroupMutexEncoded(int group_mutex) {_group_mutex_encoded.insert(group_mutex);}
