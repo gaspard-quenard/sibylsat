@@ -66,7 +66,6 @@ void TreeExpander::createInitialLeaves() {
             auto& r = rOpt.value();
             USignature sig = r.getSignature();
             rootReductionPosition->addReduction(sig);
-            rootReductionPosition->addAxiomaticOp(sig);
             rootReductionPosition->addExpansionSize(r.getSubtasks().size());
         }
     }
@@ -82,7 +81,6 @@ void TreeExpander::createInitialLeaves() {
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
     goalPosition->addAction(goalSig);
-    goalPosition->addAxiomaticOp(goalSig);
     addPreconditionConstraints(*goalPosition);
     goalPosition->setPos(_depth, 1);
 }

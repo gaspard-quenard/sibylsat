@@ -14,24 +14,23 @@ const int STAGE_ACTIONCONSTRAINTS    = 0;
 const int STAGE_ACTIONEFFECTS        = 1;
 const int STAGE_ATLEASTONEELEMENT    = 2;
 const int STAGE_ATMOSTONEELEMENT     = 3;
-const int STAGE_AXIOMATICOPS         = 4;
-const int STAGE_DIRECTFRAMEAXIOMS    = 5;
-const int STAGE_EXPANSIONS           = 6;
-const int STAGE_FACTPROPAGATION      = 7;
-const int STAGE_FACTVARENCODING      = 8;
-const int STAGE_FORBIDDENOPERATIONS  = 9;
-const int STAGE_INDIRECTFRAMEAXIOMS  = 10;
-const int STAGE_INITSUBSTITUTIONS    = 11;
-const int STAGE_PREDECESSORS         = 12;
-const int STAGE_QCONSTEQUALITY       = 13;
-const int STAGE_QFACTSEMANTICS       = 14;
-const int STAGE_QTYPECONSTRAINTS     = 15;
-const int STAGE_REDUCTIONCONSTRAINTS = 16;
-const int STAGE_SUBSTITUTIONCONSTRAINTS = 17;
-const int STAGE_TRUEFACTS            = 18;
-const int STAGE_ASSUMPTIONS          = 19;
-const int STAGE_PLANLENGTHCOUNTING   = 20;
-const int STAGE_MUTEX                = 21;
+const int STAGE_DIRECTFRAMEAXIOMS    = 4;
+const int STAGE_EXPANSIONS           = 5;
+const int STAGE_FACTPROPAGATION      = 6;
+const int STAGE_FACTVARENCODING      = 7;
+const int STAGE_FORBIDDENOPERATIONS  = 8;
+const int STAGE_INDIRECTFRAMEAXIOMS  = 9;
+const int STAGE_INITSUBSTITUTIONS    = 10;
+const int STAGE_PREDECESSORS         = 11;
+const int STAGE_QCONSTEQUALITY       = 12;
+const int STAGE_QFACTSEMANTICS       = 13;
+const int STAGE_QTYPECONSTRAINTS     = 14;
+const int STAGE_REDUCTIONCONSTRAINTS = 15;
+const int STAGE_SUBSTITUTIONCONSTRAINTS = 16;
+const int STAGE_TRUEFACTS            = 17;
+const int STAGE_ASSUMPTIONS          = 18;
+const int STAGE_PLANLENGTHCOUNTING   = 19;
+const int STAGE_MUTEX                = 20;
 
 enum class TimingStage {
     INIT_GROUNDING,
@@ -231,9 +230,9 @@ private:
 
 private:
     // Stage names
-    const char* STAGES_NAMES[22] = {
+    const char* STAGES_NAMES[21] = {
         "actionconstraints", "actioneffects", "atleastoneelement", "atmostoneelement",
-        "axiomaticops", "directframeaxioms", "expansions", "factpropagation",
+        "directframeaxioms", "expansions", "factpropagation",
         "factvarencoding", "forbiddenoperations", "indirectframeaxioms", "initsubstitutions",
         "predecessors", "qconstequality", "qfactsemantics", "qtypeconstraints",
         "reductionconstraints", "substitutionconstraints", "truefacts", "assumptions",

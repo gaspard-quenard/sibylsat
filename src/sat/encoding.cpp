@@ -81,17 +81,6 @@ void Encoding::encode(Position& newPos) {
         encodePreventionIdenticalSignatureThanParentsForAllMethods(newPos);
     }
 
-    // choice of axiomatic ops
-    _stats.begin(STAGE_AXIOMATICOPS);
-    const USigSet& axiomaticOps = newPos.getAxiomaticOps();
-    if (!axiomaticOps.empty()) {
-        for (const USignature& op : axiomaticOps) {
-            _sat.appendClause(_vars.getVariable(VarType::OP, newPos, op));
-        }
-        _sat.endClause();
-    }
-    _stats.end(STAGE_AXIOMATICOPS);
-
     _stats.endPosition();
 }
 
@@ -483,6 +472,13 @@ void Encoding::encodeOperationConstraints(Position& newPos) {
     _new_q_constants.clear();
     
     if (numOccurringOps == 0) return;
+
+    if (numOccurringOps == 1) {
+        _stats.begin(STAGE_ATLEASTONEELEMENT);
+        _sat.addClause(elementVars[0]);
+        _stats.end(STAGE_ATLEASTONEELEMENT);
+        return;
+    }
 
     if ((int)elementVars.size() >= _params.getIntParam("bamot")) {
         // Binary at-most-one

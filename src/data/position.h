@@ -47,8 +47,6 @@ private:
     // Used for optimal planning
     NodeHashMap<USignature, int, USignatureHasher> _heuristic_value_per_reduction;
 
-    USigSet _axiomatic_ops;
-
     // All VIRTUAL facts potentially occurring at this position.
     USigSet _qfacts;
     // Maps a q-fact to the set of possibly valid decoded facts.
@@ -132,7 +130,6 @@ public:
     void addExpansion(const USignature& parent, const USignature& child);
     void addExpansionSubstitution(const USignature& parent, const USignature& child, const Substitution& s);
     void addExpansionSubstitution(const USignature& parent, const USignature& child, Substitution&& s);
-    void addAxiomaticOp(const USignature& op);
     void addExpansionSize(size_t size);
     
     void removeActionOccurrence(const USignature& action);
@@ -174,7 +171,6 @@ public:
     NodeHashMap<USignature, USigSet, USignatureHasher>& getExpansions();
     NodeHashMap<USignature, USigSet, USignatureHasher>& getPredecessors();
     const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& getExpansionSubstitutions() const;
-    const USigSet& getAxiomaticOps() const;
     size_t getMaxExpansionSize() const;
 
     size_t getLayerIndex() const;

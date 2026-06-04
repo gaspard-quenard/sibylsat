@@ -131,9 +131,6 @@ void Position::addExpansionSubstitution(const USignature& parent, const USignatu
 void Position::addExpansionSubstitution(const USignature& parent, const USignature& child, const Substitution& s) {
     _expansion_substitutions[parent][child] = s;
 }
-void Position::addAxiomaticOp(const USignature& op) {
-    _axiomatic_ops.insert(op);
-}
 void Position::addExpansionSize(size_t size) {_max_expansion_size = std::max(_max_expansion_size, size);}
 
 void Position::removeActionOccurrence(const USignature& action) {
@@ -219,7 +216,6 @@ const USigSet& Position::getReductions() const {return _reductions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getExpansions() {return _expansions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getPredecessors() {return _predecessors;}
 const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& Position::getExpansionSubstitutions() const {return _expansion_substitutions;}
-const USigSet& Position::getAxiomaticOps() const {return _axiomatic_ops;}
 size_t Position::getMaxExpansionSize() const {return _max_expansion_size;}
 
 void Position::clearAtPastPosition() {
@@ -233,8 +229,6 @@ void Position::clearAtPastPosition() {
     */
    _expansion_substitutions.clear();
    _expansion_substitutions.reserve(0);
-    _axiomatic_ops.clear();
-    _axiomatic_ops.reserve(0);
     _q_constants_type_constraints.clear();
     _q_constants_type_constraints.reserve(0);
     clearSubstitutions();
@@ -325,8 +319,6 @@ void Position::clearFullPos() {
 
    _expansion_substitutions.clear();
    _expansion_substitutions.reserve(0);
-    _axiomatic_ops.clear();
-    _axiomatic_ops.reserve(0);
     _q_constants_type_constraints.clear();
     _q_constants_type_constraints.reserve(0);
     clearSubstitutions();
