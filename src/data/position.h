@@ -180,7 +180,6 @@ public:
     size_t getLayerIndex() const;
     size_t getPositionIndex() const;
     size_t getOffset() const;
-    void clearAfterInstantiation();
     void clearAtPastPosition();
     void clearAtPastLayer();
     void clearSubstitutions() {

@@ -212,8 +212,7 @@ bool Planner::findPrimitiveSolutionInSearchTree() {
 }
 
 bool Planner::findAbstractPlanInSearchTree() {
-    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
-    Log::i("Failed to find a solution at depth %i. Trying to find an abstract plan...\n", currentDepth);
+    Log::i("Failed to find a primitive solution... Trying to find an abstract plan...\n");
 
     if (_separate_tasks) {
         _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);

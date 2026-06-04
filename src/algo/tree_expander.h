@@ -8,7 +8,6 @@
 #include "util/params.h"
 #include "data/position.h"
 #include "data/htn_instance.h"
-#include "algo/instantiator.h"
 #include "algo/fact_analysis.h"
 #include "algo/retroactive_pruning.h"
 #include "algo/domination_resolver.h"
@@ -24,7 +23,6 @@ private:
     Position* _root_position = nullptr;
     std::vector<Position*> _leaf_positions;
     FactAnalysis _analysis;
-    Instantiator _instantiator;
     RetroactivePruning* _pruning = nullptr;
     DominationResolver _domination_resolver;
     TDG* _tdg = nullptr;
@@ -73,7 +71,7 @@ public:
 
 private:
     void incrementPosition(const Position& pos);
-    void refreshLeafMetadata();
+    bool isPotentiallyApplicable(const HtnOp& op);
 
     void createNextPosition(Position& newPos, Position* parent, Position* left);
     void applyLegacyBoundarySetup(const std::vector<Position*>& currentLeaves);

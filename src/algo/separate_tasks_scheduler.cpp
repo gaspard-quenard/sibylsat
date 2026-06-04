@@ -282,10 +282,8 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
     int a = 0;
 }
 
-bool SeparateTasksScheduler::handleAbstractPlanFailure(Encoding &enc, int layerSize){
-//     _phase      = Phase::EXPLORE;
-// _hi_batch   = _lo_batch = _best_batch = 1;
-// _best_tp    = 0.0;
+bool SeparateTasksScheduler::handleAbstractPlanFailure(Encoding &enc, int layerSize) 
+{
     if (_add_tasks_as_clauses) {
         if (_settings_manager.get_setting(_domain_name, "independent_init_tasks") == true) {
             Log::w("The tasks in the initial state may not be independent. Set the setting independent_init_tasks to false, and restart the full planner\n");

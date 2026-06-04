@@ -222,9 +222,6 @@ const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& Position::
 const USigSet& Position::getAxiomaticOps() const {return _axiomatic_ops;}
 size_t Position::getMaxExpansionSize() const {return _max_expansion_size;}
 
-void Position::clearAfterInstantiation() {
-}
-
 void Position::clearAtPastPosition() {
     _qfacts.clear();
     _qfacts.reserve(0);

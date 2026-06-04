@@ -10,7 +10,6 @@ TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn)
           _htn(htn),
           _stats(Statistics::getInstance()),
           _analysis(_htn, true, _htn.getParams().isNonzero("optimal")),
-          _instantiator(params, htn, _analysis),
           _domination_resolver(_htn),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _nonprimitive_support(_params.isNonzero("nps")),
@@ -30,10 +29,10 @@ void TreeExpander::incrementPosition(const Position& pos) {
     _num_instantiated_positions++;
 }
 
-void TreeExpander::refreshLeafMetadata() {
-    for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
-        _leaf_positions[pos]->setPos(_depth, pos);
-    }
+bool TreeExpander::isPotentiallyApplicable(const HtnOp& op) {
+    return _analysis.hasValidPreconditionsBitVec(op.getPreconditions()) &&
+           _analysis.hasValidPreconditionsBitVec(op.getExtraPreconditions()) &&
+           _htn.hasSomeInstantiation(op.getSignature());
 }
 
 void TreeExpander::createInitialLeaves() {
@@ -46,18 +45,22 @@ void TreeExpander::createInitialLeaves() {
     _root_position->setPos(-1, 0);
 
     Position* rootReductionPosition = new Position();
+    rootReductionPosition->setPos(_depth, 0);
     rootReductionPosition->setParentPosition(_root_position);
     rootReductionPosition->setLeftPosition(nullptr);
+
     Position* goalPosition = new Position();
+    goalPosition->setPos(_depth, 1);
     goalPosition->setParentPosition(_root_position);
     goalPosition->setLeftPosition(rootReductionPosition);
 
     _leaf_positions = {rootReductionPosition, goalPosition};
-    refreshLeafMetadata();
 
     /***** DEPTH 0, POSITION 0 ******/
 
-    for (USignature& rSig : _instantiator.getApplicableInstantiations(_htn.getInitReduction())) {
+    const Reduction& initReduction = _htn.getInitReduction();
+    if (isPotentiallyApplicable(initReduction)) {
+        USignature rSig = initReduction.getSignature();
         auto rOpt = createValidReduction(*rootReductionPosition, rSig, USignature());
         if (rOpt) {
             auto& r = rOpt.value();
@@ -82,9 +85,6 @@ void TreeExpander::createInitialLeaves() {
     goalPosition->addAxiomaticOp(goalSig);
     addPreconditionConstraints(*goalPosition);
     goalPosition->setPos(_depth, 1);
-
-    rootReductionPosition->clearAfterInstantiation();
-    goalPosition->clearAfterInstantiation();
 }
 
 void TreeExpander::printStatistics() const {
@@ -233,9 +233,6 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
                         current->getActions().size(),
                         current->getQFacts().size(),
                         current->getPosFactSupportsId().size() + current->getNegFactSupportsId().size());
-                if (nextLeafIndex > 0) {
-                    _leaf_positions[nextLeafIndex - 1]->clearAfterInstantiation();
-                }
             } else {
                 result.leafEncodingActions.push_back(LeafEncodingAction::FULL);
             }
@@ -252,10 +249,6 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
                 allLeavesDeveloped = true;
             }
         }
-    }
-
-    if (result.expandAll && nextLeafIndex > 0) {
-        _leaf_positions[nextLeafIndex - 1]->clearAfterInstantiation();
     }
     _stats.endTiming(TimingStage::EXPANSION);
     return result;
@@ -822,31 +815,30 @@ std::vector<USignature> TreeExpander::instantiateAllActionsOfTask(Position& pos,
     std::vector<USignature> result;
 
     if (!_htn.isAction(task)) return result;
-    
-    for (USignature& sig : _instantiator.getApplicableInstantiations(_htn.toAction(task._name_id, task._args))) {
-        Action action = _htn.toAction(sig._name_id, sig._args);
 
-        action = _htn.replaceVariablesWithQConstants(
-            action,
-            _analysis.getReducedArgumentDomains(action),
-            pos.getLayerIndex(),
-            pos.getPositionIndex());
+    Action action = _htn.toAction(task._name_id, task._args);
+    if (!isPotentiallyApplicable(action)) return result;
 
-        action.removeInconsistentEffects();
+    const USignature originalSig = action.getSignature();
+    action = _htn.replaceVariablesWithQConstants(
+        action,
+        _analysis.getReducedArgumentDomains(action),
+        pos.getLayerIndex(),
+        pos.getPositionIndex());
 
-        if (!_htn.isFullyGround(action.getSignature())) continue;
-        if (!_htn.hasConsistentlyTypedArgs(sig)) continue;
-        if (!_analysis.hasValidPreconditionsBitVec(action.getPreconditions())) {
-            continue;
-        }
-        if (!_analysis.hasValidPreconditionsBitVec(action.getExtraPreconditions())) {
-            continue;
-        }
-        
-        sig = action.getSignature();
-        _htn.getOpTable().addAction(action);
-        result.push_back(action.getSignature());
+    action.removeInconsistentEffects();
+
+    if (!_htn.isFullyGround(action.getSignature())) return result;
+    if (!_htn.hasConsistentlyTypedArgs(originalSig)) return result;
+    if (!_analysis.hasValidPreconditionsBitVec(action.getPreconditions())) {
+        return result;
     }
+    if (!_analysis.hasValidPreconditionsBitVec(action.getExtraPreconditions())) {
+        return result;
+    }
+
+    _htn.getOpTable().addAction(action);
+    result.push_back(action.getSignature());
     return result;
 }
 
@@ -878,11 +870,10 @@ std::vector<USignature> TreeExpander::instantiateAllReductionsOfTask(Position& p
             Reduction rSub = r.substituteRed(s);
             USignature origSig = rSub.getSignature();
             if (!_htn.hasConsistentlyTypedArgs(origSig)) continue;
-            
-            for (USignature& red : _instantiator.getApplicableInstantiations(rSub)) {
-                auto rOpt = createValidReduction(pos, red, task);
-                if (rOpt) result.push_back(rOpt.value().getSignature());
-            }
+            if (!isPotentiallyApplicable(rSub)) continue;
+
+            auto rOpt = createValidReduction(pos, rSub.getSignature(), task);
+            if (rOpt) result.push_back(rOpt.value().getSignature());
         }
     }
     return result;
