@@ -69,7 +69,7 @@ private:
     void incrementPosition(const Position& pos);
     bool isPotentiallyApplicable(const HtnOp& op);
 
-    void createNextPosition(Position& newPos, Position* parent, Position* left);
+    void createNextPosition(Position& newPos, size_t pos, Position* parent, Position* left);
     void createNextPositionFromAbove(Position& newPos, Position& above);
     void createNextPositionFromLeft(Position& newPos, Position& left);
     void createNextPositionFromLeftSimplified(Position& newPos);

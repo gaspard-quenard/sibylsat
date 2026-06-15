@@ -164,7 +164,7 @@ const SigSet &FactAnalysis::getPossibleFactChanges(const USignature &sig, FactIn
                             }
 
                             // Log::i("Sorts of the condition: %s\n", TOSTR(sigSorts));
-                            // BitVec result = ArgIterator2::getFullInstantiation2(sigGround, fact._negated, _htn, sigSorts);
+                            // BitVec result = _htn.getMatchingGroundFactIds(sigGround, fact._negated, sigSorts);
                             // Log::i("__ Possible decodings using bit vec\n");
                             // for (std::size_t idx : result)
                             // {
@@ -211,7 +211,7 @@ const SigSet &FactAnalysis::getPossibleFactChanges(const USignature &sig, FactIn
                 // } else {
                 // Log::i("Get all ground instantiations of %s for %s (%d)\n", TOSTR(fact._usig), TOSTR(sig), nameId);
                 // Log::i("Sorts of the fact: %s\n", isInitReduction ? TOSTR(_htn.getSorts(fact._usig._name_id)) : TOSTR(trueSortsFact));
-                    BitVec result = ArgIterator2::getFullInstantiation2(fact._usig, fact._negated, _htn, isInitReduction ? _htn.getSorts(fact._usig._name_id) : trueSortsFact);
+                    BitVec result = _htn.getMatchingGroundFactIds(fact._usig, fact._negated, isInitReduction ? _htn.getSorts(fact._usig._name_id) : trueSortsFact);
                 // for (std::size_t idx : result)
                 // {
                     // const USignature &sigGround = _htn.getGroundPositiveFact(idx);
@@ -560,7 +560,7 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
                 }
                 else
                 {
-                    BitVec result = ArgIterator2::getFullInstantiation2(preSig._usig, preSig._negated, _htn, preSorts);
+                    BitVec result = _htn.getMatchingGroundFactIds(preSig._usig, preSig._negated, preSorts);
                     for (std::size_t pred_idx : result)
                     {
                         any = true;

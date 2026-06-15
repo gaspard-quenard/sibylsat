@@ -436,12 +436,13 @@ public:
         assert(idx >= 0 && idx < _ground_pos_facts.size() || Log::e("Index out of bounds: %i, size: %zu\n", idx, _ground_pos_facts.size()));
         return _ground_pos_facts[idx];
     }
-    const BitVec getAllPredicatesId(int name_id, bool negated, const std::vector<int>& sorts_per_args, const std::vector<int>& restrictive_sorts_per_args = std::vector<int>(), const std::vector<int>& fixed_constant = std::vector<int>());
-
-    inline std::string key_sort(int sort, int idx)   { return "S_" + std::to_string(sort) + '_' + std::to_string(idx); }
-    inline std::string key_const(int cst,  int idx)  { return "C_" + std::to_string(cst)  + '_' + std::to_string(idx); }
+    BitVec getMatchingGroundFactIds(const USignature& sig, bool negated, const std::vector<int>& sorts_per_args = {});
 
 private:
+
+    BitVec filterGroundFactIds(int name_id, bool negated, const std::vector<int>& sorts_per_args, const std::vector<int>& restrictive_sorts_per_args = std::vector<int>(), const std::vector<int>& fixed_constant = std::vector<int>());
+    inline std::string key_sort(int sort, int idx)   { return "S_" + std::to_string(sort) + '_' + std::to_string(idx); }
+    inline std::string key_const(int cst,  int idx)  { return "C_" + std::to_string(cst)  + '_' + std::to_string(idx); }
 
     void primitivizeSimpleReductions();
     

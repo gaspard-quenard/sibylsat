@@ -1690,19 +1690,35 @@ HtnInstance::~HtnInstance() {
     delete &_p;
 }
 
-const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const std::vector<int>& sorts_per_args, const std::vector<int>& restrictive_sorts_per_args, const std::vector<int>& fixed_constant)
+BitVec HtnInstance::getMatchingGroundFactIds(const USignature& sig, bool negated, const std::vector<int>& sortsInput)
+{
+    std::vector<int> sorts = sortsInput.empty() ? getSorts(sig._name_id) : sortsInput;
+    std::vector<int> restrictiveSorts(sig._args.size(), -1);
+    std::vector<int> fixedConstants(sig._args.size(), -1);
+    for (size_t i = 0; i < sig._args.size(); ++i) {
+        if (isQConstant(sig._args[i])) {
+            restrictiveSorts[i] = getPrimarySortOfQConstant(sig._args[i]);
+        } else if (!isVariable(sig._args[i])) {
+            fixedConstants[i] = sig._args[i];
+        }
+    }
+
+    return filterGroundFactIds(sig._name_id, negated, sorts, restrictiveSorts, fixedConstants);
+}
+
+BitVec HtnInstance::filterGroundFactIds(int name_id, bool negated, const std::vector<int>& sorts_per_args, const std::vector<int>& restrictive_sorts_per_args, const std::vector<int>& fixed_constant)
 {
 
     // _stats.beginTiming(TimingStage::GET_ALL_PREDS);
 
-    BitVec all_preds_id = negated ? BitVec(getNumPositiveGroundFacts(), true) : all_preds_pos;
+    BitVec matchingFactIds = negated ? BitVec(getNumPositiveGroundFacts(), true) : all_preds_pos;
 
-    // Do we already have the filter for all predicates of this name_id?
+    // Do we already have the filter for all facts of this name_id?
     if (!_filter_by_name_id.count(name_id))
     {
         // No, we need to create it
         BitVec bv(getNumPositiveGroundFacts());
-        // Iterate overall positive ground facts, and set the bit if the predicate matches the name_id
+        // Iterate over all positive ground facts, and set the bit if the fact matches the name_id.
         for (size_t i = 0; i < getNumPositiveGroundFacts(); i++)
         {
             const USignature &fact = getGroundPositiveFact(i);
@@ -1714,7 +1730,7 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
         _filter_by_name_id[name_id] = bv;
     }
     // Filter by name_id
-    all_preds_id.and_with(_filter_by_name_id[name_id]);
+    matchingFactIds.and_with(_filter_by_name_id[name_id]);
 
     for (size_t i = 0; i < sorts_per_args.size(); i++)
     {
@@ -1735,7 +1751,7 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
                 _filter_by_constant_at_idx_args[k] = std::move(bv);
             }
             // Filter by constant at idx
-            all_preds_id.and_with(_filter_by_constant_at_idx_args[k]);
+            matchingFactIds.and_with(_filter_by_constant_at_idx_args[k]);
         }
         else {
             int sort = sorts_per_args[i];
@@ -1752,7 +1768,7 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
                 _filter_by_sort_at_idx_args[key] = std::move(bv);
             }
             // Filter by sort at idx
-            all_preds_id.and_with(_filter_by_sort_at_idx_args[key]);
+            matchingFactIds.and_with(_filter_by_sort_at_idx_args[key]);
 
             // Do we have a restrictive sort for this param idx ?
             if (restrictive_sorts_per_args.size() > i && restrictive_sorts_per_args[i] != -1) {
@@ -1770,10 +1786,10 @@ const BitVec HtnInstance::getAllPredicatesId(int name_id, bool negated, const st
                     _filter_by_sort_at_idx_args[key_restrictive] = std::move(bv);
                 }
                 // Filter by restrictive sort at idx
-                all_preds_id.and_with(_filter_by_sort_at_idx_args[key_restrictive]);
+                matchingFactIds.and_with(_filter_by_sort_at_idx_args[key_restrictive]);
             }
         }
     }
     // _stats.endTiming(TimingStage::GET_ALL_PREDS);
-    return all_preds_id;
+    return matchingFactIds;
 }

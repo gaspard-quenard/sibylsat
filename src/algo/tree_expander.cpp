@@ -49,9 +49,7 @@ void TreeExpander::createInitialLeaves() {
     rootReductionPosition->setLeftPosition(nullptr);
 
     Position* goalPosition = new Position();
-    goalPosition->setPos(_depth, 1);
     goalPosition->setParentPosition(_root_position);
-    goalPosition->setLeftPosition(rootReductionPosition);
 
     _leaf_positions = {rootReductionPosition, goalPosition};
 
@@ -74,13 +72,12 @@ void TreeExpander::createInitialLeaves() {
 
     /***** DEPTH 0, POSITION 1 ******/
 
-    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition);
+    createNextPosition(*goalPosition, /*pos=*/1, /*parent=*/nullptr, rootReductionPosition);
 
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
     goalPosition->addAction(goalSig);
     addPreconditionConstraints(*goalPosition);
-    goalPosition->setPos(_depth, 1);
 }
 
 void TreeExpander::printStatistics() const {
@@ -199,12 +196,9 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
 
         for (size_t offset = 0; offset < expansionSize; offset++) {
             Position* current = new Position();
-            current->setParentPosition(&above);
-            _leaf_positions.push_back(current);
-            current->setPos(_depth, nextLeafIndex);
             Position* left = nextLeafIndex > 0 ? _leaf_positions[nextLeafIndex - 1] : nullptr;
-            current->setLeftPosition(left);
-            createNextPosition(*current, &above, left);
+            _leaf_positions.push_back(current);
+            createNextPosition(*current, nextLeafIndex, &above, left);
 
             if (result.expandAll) {
                 Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
@@ -233,13 +227,12 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
     return result;
 }
 
-void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left) {
-    size_t pos = newPos.getPositionIndex();
-
+void TreeExpander::createNextPosition(Position& newPos, size_t pos, Position* parent, Position* left) {
     newPos.setPos(_depth, pos);
     if (parent != nullptr) {
         newPos.setParentPosition(parent);
     }
+    newPos.setLeftPosition(left);
     newPos.initFactChanges(_htn.getNumPositiveGroundFacts());
 
     if (pos != _expansion_start_index && left != nullptr) {
@@ -413,7 +406,7 @@ std::optional<SubstitutionConstraint> TreeExpander::addPrecondition(Position& po
         return std::optional<SubstitutionConstraint>(std::move(c));
     } 
     else if (_htn.isStaticPredicate(factAbs._name_id)) {
-        BitVec result = ArgIterator2::getFullInstantiation2(factAbs, /*negated=*/false, _htn, sorts);
+        BitVec result = _htn.getMatchingGroundFactIds(factAbs, /*negated=*/false, sorts);
         c.fixPolarity(fact._negated ? SubstitutionConstraint::NO_INVALID : SubstitutionConstraint::ANY_VALID);
         for (int predId: result) {
             const USignature& decFactAbs = _htn.getGroundPositiveFact(predId);
@@ -562,7 +555,7 @@ bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const US
     }
     bool isPositiveEffOfAction = (_htn.isAction(opSig) || (_use_sibylsat_expansion && mode == DIRECT)) && !fact._negated;
 
-    BitVec result = ArgIterator2::getFullInstantiation2(factAbs, fact._negated, _htn, sorts);
+    BitVec result = _htn.getMatchingGroundFactIds(factAbs, fact._negated, sorts);
     for (int predId: result) {
         const USignature& decFactAbs = _htn.getGroundPositiveFact(predId);
         auto path = SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices);
