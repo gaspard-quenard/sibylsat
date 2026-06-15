@@ -68,7 +68,6 @@ public:
         _tree_expander.attachPruning(*_pruning);
         if (_separate_tasks) {
             _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn);
-            _tree_expander.attachSeparateTasksScheduler(*_separate_tasks_scheduler);
         }
     }
     int findPlan();

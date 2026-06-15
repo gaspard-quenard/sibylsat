@@ -33,11 +33,6 @@ void Position::setParentPosition(Position* parent) {
 void Position::addQFact(const USignature& qfact) {
     _qfacts.insert(qfact);
 }
-void Position::addTrueFact(const USignature& fact) {_true_facts.insert(fact);}
-void Position::addFalseFact(const USignature& fact) {_false_facts.insert(fact);}
-void Position::addTrueFactId(int factId) { _true_facts_ids.insert(factId);}
-void Position::addFalseFactId(int factId) { _false_facts_ids.insert(factId);}
-void Position::addDefinitiveFact(const Signature& fact) {(fact._negated ? _false_facts : _true_facts).insert(fact._usig);}
 
 
 void Position::addFactSupportId(int predId, bool negated, const USignature& operation) {
@@ -184,8 +179,6 @@ size_t Position::getPositionIndex() const {return _pos;}
 size_t Position::getOffset() const {return _offset;}
 
 const USigSet& Position::getQFacts() const {return _qfacts;}
-const USigSet& Position::getTrueFacts() const {return _true_facts;}
-const USigSet& Position::getFalseFacts() const {return _false_facts;}
 
 NodeHashMap<int, USigSet>& Position::getPosFactSupportsId() {
     if (_pos_fact_supports_id == nullptr) return EMPTY_USIG_TO_USIG_SET_MAP_ID;
@@ -243,14 +236,6 @@ void Position::clearAtPastLayer() {
     _pos_qfact_decodings.reserve(0);
     _neg_qfact_decodings.clear();
     _neg_qfact_decodings.reserve(0);
-    _true_facts.clear();
-    _true_facts.reserve(0);
-    _true_facts_ids.clear();
-    _true_facts_ids.reserve(0);
-    _false_facts.clear();
-    _false_facts.reserve(0);
-    _false_facts_ids.clear();
-    _false_facts_ids.reserve(0);
     _fact_variables.clear();
     _fact_variables.reserve(0);
     /*
@@ -285,14 +270,6 @@ void Position::clearFullPos() {
     _pos_qfact_decodings.reserve(0);
     _neg_qfact_decodings.clear();
     _neg_qfact_decodings.reserve(0);
-    _true_facts.clear();
-    _true_facts.reserve(0);
-    _true_facts_ids.clear();
-    _true_facts_ids.reserve(0);
-    _false_facts_ids.clear();
-    _false_facts_ids.reserve(0);
-    _false_facts.clear();
-    _false_facts.reserve(0);
     _fact_variables.clear();
     _fact_variables.reserve(0); 
 

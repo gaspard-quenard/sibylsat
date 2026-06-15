@@ -142,6 +142,20 @@ void Encoding::encodeOperationVariables(Position& newPos) {
     _stats.end(STAGE_REDUCTIONCONSTRAINTS);
 }
 
+void Encoding::encodeInitialRelevantFacts(Position& pos, bool rememberForPropagation) {
+    for (const int predId : _analysis.getRelevantFacts()) {
+        const USignature& fact = _htn.getGroundPositiveFact(predId);
+        int var = pos.getVariableOrZero(VarType::FACT, fact);
+        if (var == 0) {
+            var = _vars.encodeVariable(VarType::FACT, pos, fact);
+            _sat.addClause((_analysis.isInitiallyReachable(predId, /*negated=*/false) ? 1 : -1) * var);
+            if (rememberForPropagation) {
+                _new_relevants_facts_to_encode[fact] = var;
+            }
+        }
+    }
+}
+
 void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnvironment& env) {
 
     _new_fact_vars.clear();
@@ -157,23 +171,7 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
 
     if (newPos.getPositionIndex() == 0 || newPos.getPositionIndex() == _new_init_pos) {
         _new_relevants_facts_to_encode.clear();
-        // Encode all relevant definitive facts
-        const USigSet* defFacts[] = {&newPos.getTrueFacts(), &newPos.getFalseFacts()};
-        bool trueFacts = true;
-        for (auto set : defFacts) {for (const auto& fact : *set) {
-                if (!newPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevant(fact, !trueFacts)) {
-
-                    if (_use_sibylsat_expansion) {
-                        int var = _vars.encodeVariable(VarType::FACT, newPos, fact);
-                        _sat.addClause((trueFacts ? 1 : -1) * var);
-                        _new_relevants_facts_to_encode[fact] = var;
-                    } else {
-                        _new_fact_vars.insert(_vars.encodeVariable(VarType::FACT, newPos, fact));
-                    }
-                }
-            }
-            trueFacts = false;
-        }
+        encodeInitialRelevantFacts(newPos, _use_sibylsat_expansion);
     } else {
         // Encode frame axioms which will assign variables to all ground facts
         // that have some support to change at this position
@@ -227,27 +225,6 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
 
     _stats.end(STAGE_FACTVARENCODING);
 
-    // Facts that must hold at this position
-    _stats.begin(STAGE_TRUEFACTS);
-    const USigSet* cHere[] = {&newPos.getTrueFacts(), &newPos.getFalseFacts()}; 
-    bool negated = false;
-    for (int i = 0; i < 2; i++) {
-        for (const USignature& factSig : *cHere[i]) {
-            if (_analysis.isRelevant(factSig, negated)) {
-                int var = newPos.getVariableOrZero(VarType::FACT, factSig);
-                if (var == 0) {
-                    // Variable is not encoded yet.
-                    _sat.addClause((i == 0 ? 1 : -1) * _vars.encodeVariable(VarType::FACT, newPos, factSig));
-                } else {
-                    // Variable is already encoded. If the variable is new, constrain it.
-                    if (_new_fact_vars.count(var)) _sat.addClause((i == 0 ? 1 : -1) * var);
-                }
-                Log::d("(%i,%i) DEFFACT %s\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex(), TOSTR(factSig));
-            }
-        }
-        negated = true;
-    }
-    _stats.end(STAGE_TRUEFACTS);
 }
 
 void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encoding::EncodingEnvironment& env, bool onlyForNewRelevantsFacts) {
@@ -1144,23 +1121,8 @@ void Encoding::encodePreventionIdenticalSignatureThanParentsForAllMethods(Positi
 
 
 void Encoding::encodeNewRelevantsFacts(Position& initPos) {
-    int num_relevants_facts = 0;
     _new_relevants_facts_to_encode.clear();
-    // Encode all relevant definitive facts
-    const USigSet* defFacts[] = {&initPos.getTrueFacts(), &initPos.getFalseFacts()};
-    bool trueFacts = true;
-    for (const auto& set : defFacts) { 
-        for (const auto& fact : *set) {
-            if (!initPos.hasVariable(VarType::FACT, fact) && _analysis.isRelevant(fact, !trueFacts)) {
-                int var = _vars.encodeVariable(VarType::FACT, initPos, fact);
-                _sat.addClause((trueFacts ? 1 : -1) * var);
-                _new_relevants_facts_to_encode[fact] = var;
-                num_relevants_facts++;
-            }
-        }
-        trueFacts = false;
-    }
-    // Log::i("Number of new relevant facts encoded: %d\n", num_relevants_facts);
+    encodeInitialRelevantFacts(initPos, /*rememberForPropagation=*/true);
 }
 
 

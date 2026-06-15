@@ -2,7 +2,6 @@
 #include <assert.h>
 
 #include "tree_expander.h"
-#include "algo/separate_tasks_scheduler.h"
 #include "util/log.h"
 
 TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn)
@@ -70,7 +69,6 @@ void TreeExpander::createInitialLeaves() {
         }
     }
     addPreconditionConstraints(*rootReductionPosition);
-    initializeNextEffects(*rootReductionPosition);
 
     incrementPosition(*rootReductionPosition);
 
@@ -130,16 +128,12 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
     _stats.beginTiming(TimingStage::EXPANSION);
+    _analysis.resetReachability();
 
     size_t developedLeafCount = 0;
     const size_t totalLeavesToDevelop = nodesToDevelopSet.size();
     bool allLeavesDeveloped = false;
     bool leftLeafIsDeveloped = false;
-
-    // Set up the analysis state before expansion whenever there are already-done positions.
-    if (!result.expandAll && _separate_tasks_scheduler != nullptr) {
-        applyLegacyBoundarySetup(currentLeaves);
-    }
 
     // Leaves before _expansion_start_index were already solved in a previous SAT call and
     // are carried into the new layer unchanged.
@@ -171,20 +165,7 @@ TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Posit
             carriedLeaf.setPos(_depth, nextLeafIndex);
             _leaf_positions.push_back(currentLeaf);
 
-            if (nextLeafIndex == 0) {
-                propagateInitialState(carriedLeaf, *currentLeaves[0]);
-            } else if (_depth > 0
-                    && _expansion_start_index > 0
-                    && nextLeafIndex == _expansion_start_index) {
-                for (int i = 0; i < _htn.getNumPositiveGroundFacts(); i++) {
-                    const USignature& sig = _htn.getGroundPositiveFact(i);
-                    if (_analysis.isReachable(i, /*negated=*/false)) {
-                        carriedLeaf.addTrueFact(sig);
-                    } else {
-                        carriedLeaf.addFalseFact(sig);
-                    }
-                }
-            } else {
+            if (nextLeafIndex > firstLeafToEncode) {
                 Position& leftLeaf = *_leaf_positions[nextLeafIndex - 1];
 
                 if (leftLeafIsDeveloped) {
@@ -261,18 +242,7 @@ void TreeExpander::createNextPosition(Position& newPos, Position* parent, Positi
     }
     newPos.initFactChanges(_htn.getNumPositiveGroundFacts());
 
-    // _expansion_start_index is 0 in the normal case. When a batch of tasks has been
-    // pre-solved, it points to the first position that still needs expansion — which
-    // plays the same role as position 0 (new initial state, propagateInitialState applies).
-    const size_t initPos = _expansion_start_index;
-
-    if (pos == initPos) {
-        assert(parent != nullptr || _depth == 0);
-        if (_depth > 0) {
-            propagateInitialState(newPos, *parent);
-        }
-    }
-    else if (left != nullptr) {
+    if (pos != _expansion_start_index && left != nullptr) {
         createNextPositionFromLeft(newPos, *left);
     }
 
@@ -284,11 +254,6 @@ void TreeExpander::createNextPosition(Position& newPos, Position* parent, Positi
         _domination_resolver.eliminateDominatedOperations(newPos);
     }
 
-    if (!_use_sibylsat_expansion) { 
-        _stats.beginTiming(TimingStage::EXPANSION_INITIALIZED_NEXT_EFFECTS);
-        initializeNextEffects(newPos);
-        _stats.endTiming(TimingStage::EXPANSION_INITIALIZED_NEXT_EFFECTS);
-    }
 }
 
 void TreeExpander::createNextPositionFromAbove(Position& newPos, Position& above) {
@@ -399,7 +364,6 @@ std::optional<SubstitutionConstraint> TreeExpander::addPrecondition(Position& po
             assert(equality_is_correct || Log::e("Precondition %s not reachable!\n", TOSTR(fact)));
             if (equality_is_correct && !fact._negated) {
                 int predId = _htn.getGroundFactId(factAbs, fact._negated);
-                initializeFact(pos, predId);
                 _analysis.addRelevantFact(predId);
             }
             return std::optional<SubstitutionConstraint>();
@@ -413,7 +377,6 @@ std::optional<SubstitutionConstraint> TreeExpander::addPrecondition(Position& po
         assert(_analysis.isReachable(predId, fact._negated) || Log::e("Precondition %s not reachable!\n", TOSTR(fact)));
 
         if (_analysis.isReachable(predId, !fact._negated)) {
-            initializeFact(pos, predId);
             _analysis.addRelevantFact(predId);
         }
         return std::optional<SubstitutionConstraint>();
@@ -506,7 +469,6 @@ std::optional<SubstitutionConstraint> TreeExpander::addPrecondition(Position& po
         if (addQFact) pos.addQFact(factAbs);
         for (const int& predId : relevantsPredIds) {
             const USignature& decFactAbs = _htn.getGroundPositiveFact(predId);
-            initializeFact(pos, predId);
             if (addQFact) pos.addQFactDecoding(factAbs, decFactAbs, fact._negated);
             _analysis.addRelevantFact(predId);
         }
@@ -650,43 +612,6 @@ bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const US
     if (!staticallyResolvable && mode == DIRECT) pos.addQFact(factAbs);
     
     return true;
-}
-
-
-void TreeExpander::propagateInitialState(Position& newPos, const Position& above) {
-    assert(newPos.getLayerIndex() > 0);
-
-    _analysis.resetReachability();
-
-    for (const int predId : above.getTrueFactsIds()) {
-        const USignature& predFact = _htn.getGroundPositiveFact(predId);
-        newPos.addTrueFact(predFact);
-        newPos.addTrueFactId(predId);
-        _analysis.addInitializedFact(predId);
-    }
-    for (const int predId : above.getFalseFactsIds()) {
-        const USignature& predFact = _htn.getGroundPositiveFact(predId);
-        newPos.addFalseFact(predFact);
-        newPos.addFalseFactId(predId);
-        _analysis.addInitializedFact(predId);
-    }
-
-}
-
-// Set up the analysis state before expansion for the separate-tasks mode.
-void TreeExpander::applyLegacyBoundarySetup(const std::vector<Position*>& currentLeaves) {
-    assert(_separate_tasks_scheduler != nullptr);
-    const int numPosDone = _separate_tasks_scheduler->getPositionsDone(currentLeaves.size());
-    if (numPosDone <= 0) return;
-
-    Log::i("Boundary setup: resetting analysis for %i already-done positions\n", numPosDone);
-    Position tmpPos;
-    tmpPos.setPos(_depth, 0);
-    propagateInitialState(tmpPos, *currentLeaves[0]);
-    _analysis.setReachableFacts(
-        _separate_tasks_scheduler->getReachableStatePosFactsAfterTasksAccomplished(),
-        _separate_tasks_scheduler->getReachableStateNegFactsAfterTasksAccomplished()
-    );
 }
 
 void TreeExpander::propagateActions(Position& newPos, Position& above) {
@@ -900,57 +825,6 @@ std::optional<Reduction> TreeExpander::createValidReduction(Position& pos, const
         rOpt.emplace(red);
     }
     return rOpt;
-}
-
-void TreeExpander::initializeNextEffects(Position& newPos) {
-    const USigSet* ops[2] = {&newPos.getActions(), &newPos.getReductions()};
-    bool isAction = true;
-    for (const auto& set : ops) {
-        for (const auto& aSig : *set) {
-            const BitVec& groundEffPos = _analysis.getPossibleGroundFactChanges(aSig, /*negated=*/false);
-            const BitVec& groundEffNeg = _analysis.getPossibleGroundFactChanges(aSig, /*negated=*/true);
-            const SigSet& pseudoEff = _analysis.getPossiblePseudoGroundFactChanges(aSig);
-            for (size_t predId : groundEffPos) {
-                initializeFact(newPos, predId);
-            }
-            for (size_t predId : groundEffNeg) {
-                initializeFact(newPos, predId);
-            }
-            for (const Signature& eff : pseudoEff) {
-                if (!_htn.hasQConstants(eff._usig)) {
-                    int predId = _htn.getGroundFactId(eff._usig, eff._negated);
-                    if (predId > 0) {
-                        initializeFact(newPos, predId);
-                        continue;
-                    }
-                }
-                BitVec groundEffPos = ArgIterator2::getFullInstantiation2(eff._usig, eff._negated, _htn, _htn.getOpSortsForCondition(eff._usig, aSig));
-                
-                for (size_t predId : groundEffPos) {
-                    initializeFact(newPos, predId);
-                }
-            }
-        }
-        isAction = false;
-    }
-}
-
-void TreeExpander::initializeFact(Position& newPos, const int predId) {
-
-    const USignature& fact = _htn.getGroundPositiveFact(predId);
-
-    if (_analysis.isInitialized(predId)) return;
-
-    _analysis.addInitializedFact(predId);
-
-    if (_analysis.isReachable(predId, /*negated=*/true)) {
-        newPos.addFalseFact(fact);
-        newPos.addFalseFactId(predId);
-    }
-    else { 
-        newPos.addTrueFact(fact);
-        newPos.addTrueFactId(predId);
-    }
 }
 
 void TreeExpander::addQConstantTypeConstraints(Position& pos, const USignature& op) {

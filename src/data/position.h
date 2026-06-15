@@ -53,14 +53,6 @@ private:
     NodeHashMap<USignature, USigSet, USignatureHasher> _pos_qfact_decodings;
     NodeHashMap<USignature, USigSet, USignatureHasher> _neg_qfact_decodings;
 
-    // All facts that are definitely true at this position.
-    USigSet _true_facts;
-    // All facts that are definitely false at this position.
-    USigSet _false_facts;
-
-    NodeHashSet<int> _true_facts_ids;
-    NodeHashSet<int> _false_facts_ids;
-
     BitVec _pos_fact_changed; // All the fact positive that might change at this position.
     BitVec _neg_fact_changed; // All the fact negative that might change at this position.
 
@@ -100,11 +92,6 @@ public:
     Position* getLeftPosition() const { return _left_position; }
 
     void addQFact(const USignature& qfact);
-    void addTrueFact(const USignature& fact);
-    void addFalseFact(const USignature& fact);
-    void addTrueFactId(int factId);
-    void addFalseFactId(int factId);
-    void addDefinitiveFact(const Signature& fact);
 
     void setHasPrimitiveOps(bool has);
     void setHasNonprimitiveOps(bool has);
@@ -146,10 +133,6 @@ public:
 
     const USigSet& getQFacts() const;
     int getNumQFacts() const;
-    const USigSet& getTrueFacts() const;
-    const USigSet& getFalseFacts() const;
-    const NodeHashSet<int>& getTrueFactsIds() const {return _true_facts_ids;}
-    const NodeHashSet<int>& getFalseFactsIds() const {return _false_facts_ids;}
     NodeHashMap<USignature, USigSet, USignatureHasher>& getPosFactSupports();
     NodeHashMap<USignature, USigSet, USignatureHasher>& getNegFactSupports();
 

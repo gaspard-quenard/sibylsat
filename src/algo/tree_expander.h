@@ -13,8 +13,6 @@
 #include "algo/domination_resolver.h"
 #include "data/tdg.h"
 
-class SeparateTasksScheduler;
-
 class TreeExpander {
 private:
     Parameters& _params;
@@ -26,7 +24,6 @@ private:
     RetroactivePruning* _pruning = nullptr;
     DominationResolver _domination_resolver;
     TDG* _tdg = nullptr;
-    SeparateTasksScheduler* _separate_tasks_scheduler = nullptr;
     size_t _depth = 0;
     size_t _expansion_start_index = 0;
 
@@ -52,7 +49,6 @@ public:
 
     void attachPruning(RetroactivePruning& pruning) { _pruning = &pruning; }
     void attachTDG(TDG& tdg) { _tdg = &tdg; }
-    void attachSeparateTasksScheduler(SeparateTasksScheduler& scheduler) { _separate_tasks_scheduler = &scheduler; }
 
     // Set the index from which the next expandLeaves call should start expanding.
     // Leaves before this index are carried over as-is (already solved by the scheduler).
@@ -74,7 +70,6 @@ private:
     bool isPotentiallyApplicable(const HtnOp& op);
 
     void createNextPosition(Position& newPos, Position* parent, Position* left);
-    void applyLegacyBoundarySetup(const std::vector<Position*>& currentLeaves);
     void createNextPositionFromAbove(Position& newPos, Position& above);
     void createNextPositionFromLeft(Position& newPos, Position& left);
     void createNextPositionFromLeftSimplified(Position& newPos);
@@ -90,13 +85,10 @@ private:
 
     std::optional<Reduction> createValidReduction(Position& pos, const USignature& rSig, const USignature& task);
 
-    void propagateInitialState(Position& newPos, const Position& above);
     void propagateActions(Position& newPos, Position& above);
     void propagateReductions(Position& newPos, Position& above);
     std::vector<USignature> instantiateAllActionsOfTask(Position& pos, const USignature& task);
     std::vector<USignature> instantiateAllReductionsOfTask(Position& pos, const USignature& task);
-    void initializeNextEffects(Position& pos);
-    void initializeFact(Position& newPos, const int predId);
     void addQConstantTypeConstraints(Position& pos, const USignature& op);
 };
 

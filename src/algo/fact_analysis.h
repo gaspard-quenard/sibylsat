@@ -24,7 +24,6 @@ private:
     BitVec _init_state_neg;
     BitVec _pos_layer_facts;
     BitVec _neg_layer_facts;
-    BitVec _initialized_facts;
     BitVec _relevant_facts;
     int _cutoff_neg_facts;
     BitVec _empty;
@@ -128,7 +127,6 @@ public:
         // Reset the bit vectors
         _pos_layer_facts = _init_state_pos;
         _neg_layer_facts = _init_state_neg;
-        _initialized_facts = BitVec(_htn.getNumPositiveGroundFacts());
     }
 
     // Update the "initial state" used by resetReachability(). Call this when the effective
@@ -169,17 +167,23 @@ public:
         return negated ? _neg_layer_facts : _pos_layer_facts;
     }
 
+    const BitVec& getInitialFacts(bool negated) const {
+        return negated ? _init_state_neg : _init_state_pos;
+    }
+
+    bool isInitiallyReachable(const int predId, bool negated) const {
+        if (negated) {
+            return _init_state_neg.test(predId);
+        }
+        return predId < _cutoff_neg_facts && _init_state_pos.test(predId);
+    }
+
     void addReachableFact(const int predId, bool negated) {
         if (negated) {
             _neg_layer_facts.set(predId);
         } else if (predId < _cutoff_neg_facts) {
             _pos_layer_facts.set(predId);
         }
-    }
-
-    void setReachableFacts(const BitVec& pos_facts, const BitVec& neg_facts) {
-        _pos_layer_facts = pos_facts;
-        _neg_layer_facts = neg_facts;
     }
 
     void addMultipleReachableFacts(const BitVec& facts, bool negated) {
@@ -200,17 +204,6 @@ public:
         } else {
             facts.and_with(_neg_layer_facts);
         }
-    }
-
-    void addInitializedFact(const int predId) {
-        _initialized_facts.set(predId);
-        if (isReachable(predId, /*negated=*/true)) {
-            _neg_layer_facts.set(predId);
-        }
-    }
-
-    bool isInitialized(const int predId) {
-        return _initialized_facts.test(predId);
     }
 
     inline bool hasValidPreconditions(const SigSet& preconds) {

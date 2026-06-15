@@ -127,6 +127,7 @@ private:
     Position* getAbovePosition(const Position& pos) const;
     EncodingEnvironment buildEnvironment(Position& pos, EncodingContext context) const;
     void encodeOperationVariables(Position& pos);
+    void encodeInitialRelevantFacts(Position& pos, bool rememberForPropagation);
     void encodeFactVariables(Position& pos, const EncodingEnvironment& env);
     void encodeFrameAxioms(Position& pos, Position& left, const EncodingEnvironment& env, bool onlyForNewRelevantsFacts = false);
     void encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int opVar, const IntPairTree& tree);
