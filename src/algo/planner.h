@@ -23,6 +23,7 @@ private:
     Position*& _root_position;
     std::vector<Position*>& _leaf_positions;
     FactAnalysis& _analysis;
+    MethodEffectAnalysis& _method_effects;
     Encoding _enc;
     std::unique_ptr<RetroactivePruning> _pruning;
     PlanWriter _plan_writer;
@@ -47,6 +48,7 @@ public:
               _root_position(_tree_expander.getRootPositionRef()),
               _leaf_positions(_tree_expander.getLeafPositions()),
               _analysis(_tree_expander.getAnalysis()),
+              _method_effects(_tree_expander.getMethodEffects()),
               _enc(_params, _htn, _analysis, _root_position, _leaf_positions),
               _pruning(std::make_unique<RetroactivePruning>(_enc)),
               _plan_writer(_htn, _params),
@@ -57,8 +59,8 @@ public:
                       && _use_sibylsat_expansion
                       && !_optimal),
               _optimization_factor(_params.getFloatParam("of")) {
-        PreconditionInference::infer(_htn, _analysis, PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
-        if (_htn.getParams().isNonzero("mutex") && _analysis.checkGroundingFacts()) {
+        PreconditionInference::infer(_htn, _method_effects, PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
+        if (_htn.getParams().isNonzero("mutex")) {
             _htn._sas_plus->cleanMutexGroupsWithPandaPiGrounderPreprocessingFacts(_analysis.getGroundPosFacts());
         }
         if (_optimal) {

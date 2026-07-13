@@ -113,18 +113,6 @@ namespace Names {
         return out + "}";
     }
 
-    std::string to_string(const FactFrame& f) {
-        std::string out = "{\n";
-        for (const Signature& pre : f.preconditions) {
-            out += "  " + to_string(pre) + "\n";
-        }
-        out += "} " + to_string(f.sig) + " {\n";
-        for (const auto& eff : f.effects) {
-            out += "  " + to_string(eff) + "\n";
-        }
-        return out + "}";
-    }
-
     std::string to_string(const Substitution& s) {
         std::string out = "";
         for (const auto& [src, dest] : s) {

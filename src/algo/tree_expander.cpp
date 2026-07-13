@@ -8,7 +8,8 @@ TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn)
         : _params(params),
           _htn(htn),
           _stats(Statistics::getInstance()),
-          _analysis(_htn, true, _htn.getParams().isNonzero("optimal")),
+          _analysis(_htn),
+          _method_effects(_htn, _analysis),
           _domination_resolver(_htn),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _nonprimitive_support(_params.isNonzero("nps")),
@@ -267,26 +268,26 @@ void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) 
 
             bool repeatedAction = isAction && _htn.isActionRepetition(aSig._name_id);
 
-            BitVec groundEffPos = _analysis.getPossibleGroundFactChanges(aSig, /*negated=*/false);
-            BitVec groundEffNeg = _analysis.getPossibleGroundFactChanges(aSig, /*negated=*/true);
-            const SigSet& pseudoEff = _analysis.getPossiblePseudoGroundFactChanges(aSig);
+            BitVec groundEffPos = _method_effects.getGroundEffects(aSig, /*negated=*/false);
+            BitVec groundEffNeg = _method_effects.getGroundEffects(aSig, /*negated=*/true);
+            const SigSet instantiatedEffects = _method_effects.instantiateEffects(aSig);
 
             addGroundEffect(newPos, aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
             addGroundEffect(newPos, aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
 
-            for (const Signature& pseudoPred : pseudoEff) {
+            for (const Signature& effect : instantiatedEffects) {
                 if (isAction && !addPseudoGroundEffect(
                         newPos,
                         left,
                         repeatedAction ? aSig.renamed(_htn.getActionNameFromRepetition(aSig._name_id)) : aSig, 
-                        pseudoPred,
+                        effect,
                         repeatedAction ? EffectMode::DIRECT_NO_QFACT : EffectMode::DIRECT)) {
                     
-                    Log::w("3_ Retroactively prune action %s due to impossible effect %s\n", TOSTR(aSig), TOSTR(pseudoPred));
+                    Log::w("3_ Retroactively prune action %s due to impossible effect %s\n", TOSTR(aSig), TOSTR(effect));
                     actionsToRemove.insert(aSig);
                     break;
                 }
-                if (!isAction && !addPseudoGroundEffect(newPos, left, aSig, pseudoPred, EffectMode::INDIRECT)) {
+                if (!isAction && !addPseudoGroundEffect(newPos, left, aSig, effect, EffectMode::INDIRECT)) {
                 }
             }
 

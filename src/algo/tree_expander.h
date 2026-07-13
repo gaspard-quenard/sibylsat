@@ -9,6 +9,7 @@
 #include "data/position.h"
 #include "data/htn_instance.h"
 #include "algo/fact_analysis.h"
+#include "algo/method_effect_analysis.h"
 #include "algo/retroactive_pruning.h"
 #include "algo/domination_resolver.h"
 #include "data/tdg.h"
@@ -21,6 +22,7 @@ private:
     Position* _root_position = nullptr;
     std::vector<Position*> _leaf_positions;
     FactAnalysis _analysis;
+    MethodEffectAnalysis _method_effects;
     RetroactivePruning* _pruning = nullptr;
     DominationResolver _domination_resolver;
     TDG* _tdg = nullptr;
@@ -62,6 +64,7 @@ public:
     const std::vector<Position*>& getLeafPositions() const { return _leaf_positions; }
     FactAnalysis& getAnalysis() { return _analysis; }
     const FactAnalysis& getAnalysis() const { return _analysis; }
+    MethodEffectAnalysis& getMethodEffects() { return _method_effects; }
     size_t getNumRetroactivePrunings() const;
     size_t getNumRetroactivelyPrunedOps() const;
 

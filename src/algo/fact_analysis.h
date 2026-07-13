@@ -3,20 +3,13 @@
 #define DOMPASCH_LILOTANE_ANALYSIS_H
 
 #include "data/htn_instance.h"
-#include "algo/network_traversal.h"
-#include "algo/arg_iterator.h"
-#include "util/statistics.h"
 #include "util/bitvec.h"
-
-typedef std::function<bool(const USignature&, bool)> StateEvaluator;
 
 class FactAnalysis {
 
 private:
 
     HtnInstance& _htn;
-    Statistics& _stats;
-    NetworkTraversal _traversal;
 
     USigSet _init_state;
 
@@ -26,86 +19,16 @@ private:
     BitVec _neg_layer_facts;
     BitVec _relevant_facts;
     int _cutoff_neg_facts;
-    BitVec _empty;
-    NodeHashMap<USignature, SigSet, USignatureHasher> _pseudo_fact_changes_cache;
 
-
-    const bool _preprocess_facts;
-    const bool _optimal;
     USigSet _ground_pos_facts;
     USigSet _ground_neg_facts;
     // For each lift fact, store the set of ground facts that it can be grounded to
     NodeHashMap<int, std::vector<FlatHashSet<int>>> _allowed_domain_per_pos_lift_facts;
     NodeHashMap<int, std::vector<FlatHashSet<int>>> _allowed_domain_per_neg_lift_facts;
 
-    // Maps an (action|reduction) name 
-    // to the set of (partially lifted) fact signatures
-    // that might be added to the state due to this operator. 
-    NodeHashMap<int, SigSet> _fact_changes; 
-    NodeHashMap<int, SigSet> _lifted_fact_changes;
-    NodeHashMap<USignature, SigSet, USignatureHasher> _fact_changes_cache;
-
-    // TEST
-    NodeHashMap<int, BitVec> _fact_changes_ground_pos;
-    NodeHashMap<int, BitVec> _fact_changes_ground_neg;
-    NodeHashMap<int, SigSet> _fact_change_pseudo_facts;
-    // END TEST
-
-    NodeHashMap<int, FactFrame> _fact_frames;
-
 public:
-    
-    FactAnalysis(HtnInstance& htn, bool preprocess_facts, bool optimal) : _htn(htn), _traversal(htn),  _preprocess_facts(preprocess_facts), _optimal(optimal), _init_state(_htn.getInitState()), _stats(Statistics::getInstance()) {
-        
-        // If we preprocess facts, we need to ground them
-        if (_preprocess_facts || _optimal) {
-            Statistics::getInstance().beginTiming(TimingStage::INIT_GROUNDING);
-            getGroundFacts(_optimal);
-            std::vector<USignature> posFacts, negFacts;
-            for (const USignature& fact : _ground_pos_facts) {
-                posFacts.push_back(fact);
-                // negFacts.push_back(fact);
-            }
 
-            // Get all the _ground_neg_facts that is not in the _ground_pos_facts
-            std::vector<USignature> exclusiveNegFacts;
-            for (const USignature& fact : _ground_neg_facts) {
-                if (!_ground_pos_facts.count(fact)) {
-                    exclusiveNegFacts.push_back(fact);
-                }
-            }
-            Log::i("Found %zu exclusive negative facts.\n", exclusiveNegFacts.size());
-            // for (const USignature& negFact : exclusiveNegFacts) {
-            //     posFacts.push_back(negFact);
-            // }
-            _cutoff_neg_facts = posFacts.size(); // All predicate with idx >= _cutoff_neg_facts are only negative facts
-
-            _htn.setGroundPosAndNegFacts(posFacts, exclusiveNegFacts);
-            _pos_layer_facts = BitVec(_htn.getNumPositiveGroundFacts());
-            _neg_layer_facts = BitVec(_htn.getNumPositiveGroundFacts());
-            _init_state_pos = BitVec(_htn.getNumPositiveGroundFacts());
-            _init_state_neg = BitVec(_htn.getNumPositiveGroundFacts());
-            _relevant_facts = BitVec(_htn.getNumPositiveGroundFacts());
-            _empty = BitVec(_htn.getNumPositiveGroundFacts(), false);
-            for (int i = 0; i < _htn.getNumPositiveGroundFacts(); ++i) {
-                const USignature& iSig = _htn.getGroundPositiveFact(i);
-                // Log::i("Init Fact %d: %s\n", i, TOSTR(iSig));
-                if (_init_state.count(iSig)) {
-                    _init_state_pos.set(i);
-                } else {
-                    _init_state_neg.set(i);
-                }
-            }
-            Statistics::getInstance().endTiming(TimingStage::INIT_GROUNDING);
-            Log::i("Grounding time: %f\n", Statistics::getInstance().getTiming(TimingStage::INIT_GROUNDING));
-        }
-
-        resetReachability();
-    }
-    
-    bool checkGroundingFacts() {
-        return _preprocess_facts;
-    }
+    explicit FactAnalysis(HtnInstance& htn);
 
     bool isInGroundFacts(const USignature& fact, bool negated) {
         if (negated) {
@@ -123,6 +46,8 @@ public:
         return isInGroundFacts(fact._usig, fact._negated);
     }
 
+    const std::vector<FlatHashSet<int>>& getGroundFactArgumentDomains(const Signature& fact);
+
     void resetReachability() {
         // Reset the bit vectors
         _pos_layer_facts = _init_state_pos;
@@ -134,19 +59,6 @@ public:
     void updateInitialState(const BitVec& pos, const BitVec& neg) {
         _init_state_pos = pos;
         _init_state_neg = neg;
-    }
-
-    enum FactInstantiationMode {FULL, LIFTED};
-    enum OperationType {ACTION, REDUCTION, UNKNOWN};
-    const SigSet& getPossibleFactChanges(const USignature& sig, FactInstantiationMode mode = FULL, OperationType opType = UNKNOWN);
-
-    void eraseCachedPossibleFactChanges(const USignature& sig);
-
-    SigSet inferPreconditions(const USignature& op) {
-        static USigSet EMPTY_USIG_SET;
-        auto factFrame = getFactFrame(op, EMPTY_USIG_SET);
-        EMPTY_USIG_SET.clear();
-        return factFrame.preconditions;
     }
 
     std::vector<FlatHashSet<int>> getReducedArgumentDomains(const HtnOp& op);
@@ -291,9 +203,6 @@ public:
         return _relevant_facts;
     }
 
-    const BitVec& getPossibleGroundFactChanges(const USignature& sig, bool negated, FactInstantiationMode mode = FULL, OperationType opType = UNKNOWN);
-    const SigSet& getPossiblePseudoGroundFactChanges(const USignature& sig, FactInstantiationMode mode = FULL, OperationType opType = UNKNOWN);
-
     void printReachableFacts() {
         Log::i("Reachable facts:\n");
         for (int predId: _pos_layer_facts) {
@@ -305,22 +214,12 @@ public:
     }
 
 private:
-    FactFrame getFactFrame(const USignature& sig, USigSet& currentOps);
     /**
      * Ground the problems using pandaPiGrounder. By default, make the pandaPiGrounder output only the ground facts that are reachable.
      * If getAlsoGroundOps is true, make the pandaPiGrounder also output the ground operators (methods and tasks) that are reachable.
      */
     void getGroundFacts(bool getAlsoGroundOps);
     void extractGroundFactsFromPandaPiGrounderFile(const std::string& filename);
-
-    /**
-     * For a lift fact, return for each argument the set of object that it can be grounded to using the set of all possible ground facts that are reachable.
-     * Can only be called when using the option preprocessFacts.
-     */
-    const std::vector<FlatHashSet<int>>& getMaxAllowedDomainForLiftFactParams(const Signature& sig);
-
-    void removeDuplicatesInLiftedFactChanges(int nameId);
-    bool isLiftedFactSuperset(const USignature& liftedFact, const USignature& possibleSuperset);
 
 };
 
