@@ -57,7 +57,7 @@ public:
     void setExpansionBoundary(size_t boundary) { _expansion_start_index = boundary; }
 
     void createInitialLeaves();
-    ExpansionResult expandLeaves(const std::vector<Position*>& nodesToDevelop);
+    ExpansionResult expandLeaves(const std::vector<Position*>& leavesToExpand);
     void printStatistics() const;
     Position*& getRootPositionRef() { return _root_position; }
     std::vector<Position*>& getLeafPositions() { return _leaf_positions; }
@@ -71,25 +71,28 @@ public:
 private:
     void incrementPosition(const Position& pos);
     bool isPotentiallyApplicable(const HtnOp& op);
+    size_t computeExpansionSize(const Position& position) const;
+    void expandLeaf(Position& parent, size_t expansionSize, ExpansionResult& result);
+    void carryLeaf(Position& leaf, LeafEncodingAction encodingAction, ExpansionResult& result);
 
     void createNextPosition(Position& newPos, size_t pos, Position* parent, Position* left);
-    void createNextPositionFromAbove(Position& newPos, Position& above);
-    void createNextPositionFromLeft(Position& newPos, Position& left);
-    void createNextPositionFromLeftSimplified(Position& newPos);
+    void createNextPositionFromParent(Position& newPos, Position& parent);
+    void computeAndApplyOutgoingEffects(Position& position);
+    void applyOutgoingEffects(const Position& position);
 
     void addPreconditionConstraints(Position& pos);
     void addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isActionRepetition);
     std::optional<SubstitutionConstraint> addPrecondition(Position& pos, const USignature& op, const Signature& fact, bool addQFact = true);
 
     enum EffectMode { INDIRECT, DIRECT, DIRECT_NO_QFACT };
-    bool addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode);
-    void addGroundEffect(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode);
-    bool addPseudoGroundEffect(Position& pos, Position& left, const USignature& op, const Signature& fact, EffectMode mode);
+    bool addGroundEffect(OutgoingEffects& effects, const USignature& opSig, int predId, bool negated, EffectMode mode);
+    void addGroundEffect(OutgoingEffects& effects, const USignature& opSig, BitVec facts, bool negated, EffectMode mode);
+    bool addPseudoGroundEffect(OutgoingEffects& effects, Position& position, const USignature& op, const Signature& fact, EffectMode mode);
 
     std::optional<Reduction> createValidReduction(Position& pos, const USignature& rSig, const USignature& task);
 
-    void propagateActions(Position& newPos, Position& above);
-    void propagateReductions(Position& newPos, Position& above);
+    void propagateActions(Position& newPos, Position& parent);
+    void propagateReductions(Position& newPos, Position& parent);
     std::vector<USignature> instantiateAllActionsOfTask(Position& pos, const USignature& task);
     std::vector<USignature> instantiateAllReductionsOfTask(Position& pos, const USignature& task);
     void addQConstantTypeConstraints(Position& pos, const USignature& op);

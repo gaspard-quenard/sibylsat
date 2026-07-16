@@ -35,6 +35,16 @@ bool TreeExpander::isPotentiallyApplicable(const HtnOp& op) {
            _htn.hasSomeInstantiation(op.getSignature());
 }
 
+size_t TreeExpander::computeExpansionSize(const Position& position) const {
+    size_t expansionSize = 1;
+    for (const USignature& reduction : position.getReductions()) {
+        expansionSize = std::max(
+                expansionSize,
+                _htn.getOpTable().getReduction(reduction).getSubtasks().size());
+    }
+    return expansionSize;
+}
+
 void TreeExpander::createInitialLeaves() {
 
     const int initSize = 2;
@@ -64,12 +74,12 @@ void TreeExpander::createInitialLeaves() {
             auto& r = rOpt.value();
             USignature sig = r.getSignature();
             rootReductionPosition->addReduction(sig);
-            rootReductionPosition->addExpansionSize(r.getSubtasks().size());
         }
     }
     addPreconditionConstraints(*rootReductionPosition);
 
     incrementPosition(*rootReductionPosition);
+    computeAndApplyOutgoingEffects(*rootReductionPosition);
 
     /***** DEPTH 0, POSITION 1 ******/
 
@@ -92,140 +102,112 @@ void TreeExpander::printStatistics() const {
     Log::i("# dominated operations: %i\n", _domination_resolver.getNumDominatedOps());
 }
 
-TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Position*>& nodesToDevelop) {
+TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Position*>& leavesToExpand) {
     ExpansionResult result;
-    std::vector<Position*> currentLeaves = _leaf_positions;
-    FlatHashSet<Position*> nodesToDevelopSet;
-    nodesToDevelopSet.reserve(nodesToDevelop.size());
-    for (Position* node : nodesToDevelop) {
-        nodesToDevelopSet.insert(node);
+    // In BFS mode, leavesToExpand aliases _leaf_positions, so read it before moving the frontier.
+    FlatHashSet<Position*> leavesToExpandSet;
+    leavesToExpandSet.reserve(leavesToExpand.size());
+    for (Position* leaf : leavesToExpand) {
+        leavesToExpandSet.insert(leaf);
     }
-    result.expandAll = nodesToDevelopSet.size() == currentLeaves.size();
+    std::vector<Position*> currentLeaves = std::move(_leaf_positions);
 
+    std::vector<size_t> expansionSizes(currentLeaves.size(), 1);
     size_t nextLeafCount = 0;
-    if (result.expandAll) {
-        for (Position* leaf : currentLeaves) {
-            nextLeafCount += leaf->getMaxExpansionSize();
+    size_t selectedLeafCount = 0;
+    for (size_t leafIndex = 0; leafIndex < currentLeaves.size(); leafIndex++) {
+        if (leavesToExpandSet.count(currentLeaves[leafIndex])) {
+            expansionSizes[leafIndex] = computeExpansionSize(*currentLeaves[leafIndex]);
+            selectedLeafCount++;
         }
-    } else {
-        nextLeafCount = currentLeaves.size();
-        for (Position* node : nodesToDevelopSet) {
-            nextLeafCount += node->getMaxExpansionSize() - 1;
-        }
+        nextLeafCount += expansionSizes[leafIndex];
     }
+    result.expandAll = selectedLeafCount == currentLeaves.size();
 
     if (!result.expandAll) {
         result.leafEncodingActions.reserve(nextLeafCount);
-        result.expandedNodes.reserve(nodesToDevelopSet.size());
+        result.expandedNodes.reserve(selectedLeafCount);
     }
 
     _depth++;
-    size_t nextLeafIndex = 0;
-    _leaf_positions.clear();
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
     _stats.beginTiming(TimingStage::EXPANSION);
     _analysis.resetReachability();
 
-    size_t developedLeafCount = 0;
-    const size_t totalLeavesToDevelop = nodesToDevelopSet.size();
-    bool allLeavesDeveloped = false;
-    bool leftLeafIsDeveloped = false;
-
     // Leaves before _expansion_start_index were already solved in a previous SAT call and
     // are carried into the new layer unchanged.
-    const size_t numPositionsAlreadyDone = !result.expandAll ? _expansion_start_index : 0;
-    if (numPositionsAlreadyDone > 0) {
-        Log::i("Carrying %zu already-solved leaf positions into the new layer\n", numPositionsAlreadyDone);
-        result.newInitPos = numPositionsAlreadyDone;
-        for (size_t leafIndex = 0; leafIndex < numPositionsAlreadyDone; leafIndex++) {
+    const size_t carriedPrefixSize = !result.expandAll ? _expansion_start_index : 0;
+    if (carriedPrefixSize > 0) {
+        Log::i("Carrying %zu already-solved leaf positions into the new layer\n", carriedPrefixSize);
+        result.newInitPos = carriedPrefixSize;
+        for (size_t leafIndex = 0; leafIndex < carriedPrefixSize; leafIndex++) {
             Position* carriedLeaf = currentLeaves[leafIndex];
-            carriedLeaf->setPos(_depth, nextLeafIndex);
+            carriedLeaf->setPos(_depth, _leaf_positions.size());
             _leaf_positions.push_back(carriedLeaf);
             result.leafEncodingActions.push_back(LeafEncodingAction::NONE);
-            nextLeafIndex++;
         }
     }
 
-    const size_t firstLeafToExpand = numPositionsAlreadyDone;
-    const size_t firstLeafToEncode = numPositionsAlreadyDone;
+    const size_t firstActiveLeaf = carriedPrefixSize;
     bool needsEffectsAndFrame = false;
 
     Log::i("Instantiating ...\n");
 
-    for (size_t leafIndex = firstLeafToExpand; leafIndex < currentLeaves.size(); leafIndex++)  {
+    for (size_t leafIndex = firstActiveLeaf; leafIndex < currentLeaves.size(); leafIndex++)  {
         Position* currentLeaf = currentLeaves[leafIndex];
-        const bool developLeaf = result.expandAll || nodesToDevelopSet.count(currentLeaf);
-
-        if (!developLeaf) {
-            Position& carriedLeaf = *currentLeaf;
-            carriedLeaf.setPos(_depth, nextLeafIndex);
-            _leaf_positions.push_back(currentLeaf);
-
-            if (nextLeafIndex > firstLeafToEncode) {
-                Position& leftLeaf = *_leaf_positions[nextLeafIndex - 1];
-
-                if (leftLeafIsDeveloped) {
-                    carriedLeaf.clearFactSupportsId();
-                    createNextPositionFromLeft(carriedLeaf, leftLeaf);
-                } else if (!allLeavesDeveloped) {
-                    createNextPositionFromLeftSimplified(carriedLeaf);
-                }
-            }
-
-            leftLeafIsDeveloped = false;
-            result.leafEncodingActions.push_back(
-                leafIndex == firstLeafToEncode ? LeafEncodingAction::NEW_RELEVANTS
-                : needsEffectsAndFrame ? LeafEncodingAction::EFFECTS_AND_FRAME
-                : LeafEncodingAction::PROPAGATE_RELEVANTS);
-            needsEffectsAndFrame = false;
-            nextLeafIndex++;
-            continue;
-        }
-
-        Position& above = *currentLeaf;
-        size_t expansionSize = result.expandAll ? above.getMaxExpansionSize() : 1;
-        if (!result.expandAll) {
-            for (const auto& method : above.getReductions()) {
-                const Reduction& subReduction = _htn.getOpTable().getReduction(method);
-                expansionSize = std::max(expansionSize, subReduction.getSubtasks().size());
-            }
-            above.setExpansionSize(expansionSize);
-            result.expandedNodes.push_back(currentLeaf);
-        }
-
-        for (size_t offset = 0; offset < expansionSize; offset++) {
-            Position* current = new Position();
-            Position* left = nextLeafIndex > 0 ? _leaf_positions[nextLeafIndex - 1] : nullptr;
-            _leaf_positions.push_back(current);
-            createNextPosition(*current, nextLeafIndex, &above, left);
-
-            if (result.expandAll) {
-                Log::v("  Instantiation done. (r=%i a=%i qf=%i supp=%i)\n",
-                        current->getReductions().size(),
-                        current->getActions().size(),
-                        current->getQFacts().size(),
-                        current->getPosFactSupportsId().size() + current->getNegFactSupportsId().size());
-            } else {
-                result.leafEncodingActions.push_back(LeafEncodingAction::FULL);
-            }
-
-            incrementPosition(*current);
-            nextLeafIndex++;
-        }
-
-        if (!result.expandAll) {
-            developedLeafCount++;
-            leftLeafIsDeveloped = true;
+        if (leavesToExpandSet.count(currentLeaf)) {
+            expandLeaf(*currentLeaf, expansionSizes[leafIndex], result);
             needsEffectsAndFrame = true;
-            if (developedLeafCount == totalLeavesToDevelop) {
-                allLeavesDeveloped = true;
-            }
+        } else {
+            const LeafEncodingAction encodingAction = leafIndex == firstActiveLeaf
+                    ? LeafEncodingAction::NEW_RELEVANTS
+                    : needsEffectsAndFrame
+                            ? LeafEncodingAction::EFFECTS_AND_FRAME
+                            : LeafEncodingAction::PROPAGATE_RELEVANTS;
+            carryLeaf(*currentLeaf, encodingAction, result);
+            needsEffectsAndFrame = false;
         }
     }
     _stats.endTiming(TimingStage::EXPANSION);
     return result;
+}
+
+void TreeExpander::expandLeaf(Position& parent, size_t expansionSize, ExpansionResult& result) {
+    if (!result.expandAll) {
+        result.expandedNodes.push_back(&parent);
+    }
+
+    for (size_t childIndex = 0; childIndex < expansionSize; childIndex++) {
+        Position* child = new Position();
+        Position* left = _leaf_positions.empty() ? nullptr : _leaf_positions.back();
+        const size_t childPosition = _leaf_positions.size();
+        _leaf_positions.push_back(child);
+        createNextPosition(*child, childPosition, &parent, left);
+
+        if (result.expandAll) {
+            Log::v("  Instantiation done. (r=%i a=%i qf=%i)\n",
+                    child->getReductions().size(),
+                    child->getActions().size(),
+                    child->getQFacts().size());
+        } else {
+            result.leafEncodingActions.push_back(LeafEncodingAction::FULL);
+        }
+
+        incrementPosition(*child);
+        computeAndApplyOutgoingEffects(*child);
+    }
+}
+
+void TreeExpander::carryLeaf(
+        Position& leaf,
+        LeafEncodingAction encodingAction,
+        ExpansionResult& result) {
+    leaf.setPos(_depth, _leaf_positions.size());
+    _leaf_positions.push_back(&leaf);
+    result.leafEncodingActions.push_back(encodingAction);
+    applyOutgoingEffects(leaf);
 }
 
 void TreeExpander::createNextPosition(Position& newPos, size_t pos, Position* parent, Position* left) {
@@ -234,14 +216,10 @@ void TreeExpander::createNextPosition(Position& newPos, size_t pos, Position* pa
         newPos.setParentPosition(parent);
     }
     newPos.setLeftPosition(left);
-    newPos.initFactChanges(_htn.getNumPositiveGroundFacts());
-
-    if (pos != _expansion_start_index && left != nullptr) {
-        createNextPositionFromLeft(newPos, *left);
-    }
+    newPos.getOutgoingEffects().reset(_htn.getNumPositiveGroundFacts());
 
     if (parent != nullptr) {
-        createNextPositionFromAbove(newPos, *parent);
+        createNextPositionFromParent(newPos, *parent);
     }
 
     if (_params.isNonzero("edo")) {
@@ -250,18 +228,18 @@ void TreeExpander::createNextPosition(Position& newPos, size_t pos, Position* pa
 
 }
 
-void TreeExpander::createNextPositionFromAbove(Position& newPos, Position& above) {
-    propagateActions(newPos, above);
-    propagateReductions(newPos, above);
+void TreeExpander::createNextPositionFromParent(Position& newPos, Position& parent) {
+    propagateActions(newPos, parent);
+    propagateReductions(newPos, parent);
     addPreconditionConstraints(newPos);
 }
 
-void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) {
-    assert(left.getLayerIndex() == newPos.getLayerIndex());
-    assert(left.getPositionIndex()+1 == newPos.getPositionIndex());
+void TreeExpander::computeAndApplyOutgoingEffects(Position& position) {
+    OutgoingEffects& effects = position.getOutgoingEffects();
+    effects.reset(_htn.getNumPositiveGroundFacts());
 
     USigSet actionsToRemove;
-    const USigSet* ops[2] = {&left.getActions(), &left.getReductions()};
+    const USigSet* ops[2] = {&position.getActions(), &position.getReductions()};
     bool isAction = true;
     for (const auto& set : ops) {
         for (const auto& aSig : *set) {
@@ -272,13 +250,13 @@ void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) 
             BitVec groundEffNeg = _method_effects.getGroundEffects(aSig, /*negated=*/true);
             const SigSet instantiatedEffects = _method_effects.instantiateEffects(aSig);
 
-            addGroundEffect(newPos, aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
-            addGroundEffect(newPos, aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
+            addGroundEffect(effects, aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
+            addGroundEffect(effects, aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
 
             for (const Signature& effect : instantiatedEffects) {
                 if (isAction && !addPseudoGroundEffect(
-                        newPos,
-                        left,
+                        effects,
+                        position,
                         repeatedAction ? aSig.renamed(_htn.getActionNameFromRepetition(aSig._name_id)) : aSig, 
                         effect,
                         repeatedAction ? EffectMode::DIRECT_NO_QFACT : EffectMode::DIRECT)) {
@@ -287,7 +265,8 @@ void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) 
                     actionsToRemove.insert(aSig);
                     break;
                 }
-                if (!isAction && !addPseudoGroundEffect(newPos, left, aSig, effect, EffectMode::INDIRECT)) {
+                if (!isAction) {
+                    addPseudoGroundEffect(effects, position, aSig, effect, EffectMode::INDIRECT);
                 }
             }
 
@@ -297,15 +276,14 @@ void TreeExpander::createNextPositionFromLeft(Position& newPos, Position& left) 
 
     for (const auto& aSig : actionsToRemove) {
         assert(_pruning != nullptr);
-        _pruning->prune(aSig, left);
+        _pruning->prune(aSig, position);
     }
 }
 
-void TreeExpander::createNextPositionFromLeftSimplified(Position& newPos) {
-    const BitVec& pos_facts_changed = newPos.getFactChange(/*negated=*/false);
-    const BitVec& neg_facts_changed = newPos.getFactChange(/*negated=*/true);
-    _analysis.addMultipleReachableFacts(pos_facts_changed, /*negated=*/false);
-    _analysis.addMultipleReachableFacts(neg_facts_changed, /*negated=*/true);
+void TreeExpander::applyOutgoingEffects(const Position& position) {
+    const OutgoingEffects& effects = position.getOutgoingEffects();
+    _analysis.addMultipleReachableFacts(effects.getFactChanges(/*negated=*/false), /*negated=*/false);
+    _analysis.addMultipleReachableFacts(effects.getFactChanges(/*negated=*/true), /*negated=*/true);
 }
 
 void TreeExpander::addPreconditionConstraints(Position& pos) {
@@ -472,7 +450,7 @@ std::optional<SubstitutionConstraint> TreeExpander::addPrecondition(Position& po
 }
 
 
-void TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, BitVec effects, bool negated, EffectMode mode)
+void TreeExpander::addGroundEffect(OutgoingEffects& outgoing, const USignature& opSig, BitVec effects, bool negated, EffectMode mode)
 {
     if (effects.count() == 0) return;
 
@@ -481,22 +459,20 @@ void TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, BitVe
         _analysis.addMultipleRelevantFacts(effects);
     }
 
-    pos.addMultipleFactChanges(effects, negated);
+    outgoing.addFactChanges(effects, negated);
     _analysis.addMultipleReachableFacts(effects, negated);
 
     for (int predId: effects) {
         if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
-            pos.addFactSupportId(predId, negated, opSig);
+            outgoing.addSupport(predId, negated, opSig);
         } else {
-            pos.touchFactSupportId(predId, negated);
+            outgoing.touchSupport(predId, negated);
         }
     }   
 }
 
 
-bool TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, int predId, bool negated, EffectMode mode) {
-    assert(pos.getPositionIndex() > 0);
-
+bool TreeExpander::addGroundEffect(OutgoingEffects& outgoing, const USignature& opSig, int predId, bool negated, EffectMode mode) {
     if (_analysis.isInvariant(predId, negated)) return true;
 
     if (mode != INDIRECT) {
@@ -504,37 +480,41 @@ bool TreeExpander::addGroundEffect(Position& pos, const USignature& opSig, int p
     }
 
     if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
-        pos.addFactSupportId(predId, negated, opSig);
+        outgoing.addSupport(predId, negated, opSig);
     } else {
-        pos.touchFactSupportId(predId, negated);
+        outgoing.touchSupport(predId, negated);
     }
-    pos.addFactChange(predId, negated);
+    outgoing.addFactChange(predId, negated);
     
     _analysis.addReachableFact(predId, negated);
     return true;
 }
 
 
-bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const USignature& opSig, const Signature& fact, EffectMode mode) {
-    assert(pos.getPositionIndex() > 0);
+bool TreeExpander::addPseudoGroundEffect(
+        OutgoingEffects& outgoing,
+        Position& position,
+        const USignature& opSig,
+        const Signature& fact,
+        EffectMode mode) {
     USignature factAbs = fact.getUnsigned();
     bool isQFact = _htn.hasQConstants(factAbs);
 
     if (!isQFact) {
         int predId = _htn.getGroundFactId(factAbs, fact._negated);
         if (predId == -1) return false;
-        return addGroundEffect(pos, opSig, predId, fact._negated, mode);
+        return addGroundEffect(outgoing, opSig, predId, fact._negated, mode);
     }
 
     std::vector<int> sorts = _htn.getOpSortsForCondition(factAbs, opSig);
     std::vector<int> sortedArgIndices = SubstitutionConstraint::getSortedSubstitutedArgIndices(_htn, factAbs._args, sorts);
-    const bool isConstrained = left.getSubstitutionConstraints().count(opSig);
+    const bool isConstrained = position.getSubstitutionConstraints().count(opSig);
     
     std::vector<int> involvedQConsts(sortedArgIndices.size());
     for (size_t i = 0; i < sortedArgIndices.size(); i++) involvedQConsts[i] = factAbs._args[sortedArgIndices[i]];
     std::vector<SubstitutionConstraint*> fittingConstrs, otherConstrs;
     if (isConstrained) {
-        for (auto& c : left.getSubstitutionConstraints().at(opSig)) {
+        for (auto& c : position.getSubstitutionConstraints().at(opSig)) {
             if (c.getInvolvedQConstants() == involvedQConsts) fittingConstrs.push_back(&c);
             else if (c.getPolarity() == SubstitutionConstraint::NO_INVALID || c.involvesSupersetOf(involvedQConsts)) {
                 otherConstrs.push_back(&c);
@@ -590,29 +570,29 @@ bool TreeExpander::addPseudoGroundEffect(Position& pos, Position& left, const US
 
         _analysis.addReachableFact(predId, /*negated=*/fact._negated);
         if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
-            pos.addIndirectFactSupportId(predId, fact._negated, opSig, path);
+            outgoing.addIndirectSupport(predId, fact._negated, opSig, path);
         } else {
-            pos.touchFactSupportId(predId, fact._negated);
+            outgoing.touchSupport(predId, fact._negated);
         }
-        pos.addFactChange(predId, fact._negated);
+        outgoing.addFactChange(predId, fact._negated);
         if (mode != INDIRECT) {
-            if (mode == DIRECT) pos.addQFactDecoding(factAbs, decFactAbs, fact._negated);
+            if (mode == DIRECT) outgoing.addQFactDecoding(factAbs, decFactAbs, fact._negated);
             _analysis.addRelevantFact(predId);
         }
         staticallyResolvable = false;
     }
     if (!anyGood) return false;
 
-    if (!staticallyResolvable && mode == DIRECT) pos.addQFact(factAbs);
+    if (!staticallyResolvable && mode == DIRECT) outgoing.addQFact(factAbs);
     
     return true;
 }
 
-void TreeExpander::propagateActions(Position& newPos, Position& above) {
+void TreeExpander::propagateActions(Position& newPos, Position& parent) {
     size_t offset = newPos.getOffset();
     std::vector<USignature> actionsToPrune;
-    size_t numActionsBefore = above.getActions().size();
-    for (const auto& aSig : above.getActions()) {
+    size_t numActionsBefore = parent.getActions().size();
+    for (const auto& aSig : parent.getActions()) {
         const Action& a = _htn.getOpTable().getAction(aSig);
 
         bool valid = _analysis.hasValidPreconditions(a.getPreconditions())
@@ -620,19 +600,19 @@ void TreeExpander::propagateActions(Position& newPos, Position& above) {
 
         if (!valid) {
             Log::i("Retroactively prune action %s@(%i,%i): no children at offset %i\n",
-                TOSTR(aSig), above.getLayerIndex(), above.getPositionIndex(), offset);
+                TOSTR(aSig), parent.getLayerIndex(), parent.getPositionIndex(), offset);
             actionsToPrune.push_back(aSig);
         }
     }
 
     for (const auto& aSig : actionsToPrune) {
         assert(_pruning != nullptr);
-        _pruning->prune(aSig, above);
+        _pruning->prune(aSig, parent);
     }
-    assert(above.getActions().size() == numActionsBefore - actionsToPrune.size() 
-        || Log::e("%i != %i-%i\n", above.getActions().size(), numActionsBefore, actionsToPrune.size()));
+    assert(parent.getActions().size() == numActionsBefore - actionsToPrune.size()
+        || Log::e("%i != %i-%i\n", parent.getActions().size(), numActionsBefore, actionsToPrune.size()));
 
-    for (const auto& aSig : above.getActions()) {
+    for (const auto& aSig : parent.getActions()) {
         if (offset < 1) {
             assert(_htn.isFullyGround(aSig));
             if (_params.isNonzero("aar") && !_htn.isActionRepetition(aSig._name_id)) {
@@ -651,12 +631,12 @@ void TreeExpander::propagateActions(Position& newPos, Position& above) {
     }
 }
 
-void TreeExpander::propagateReductions(Position& newPos, Position& above) {
+void TreeExpander::propagateReductions(Position& newPos, Position& parent) {
     size_t offset = newPos.getOffset();
     NodeHashMap<USignature, USigSet, USignatureHasher> subtaskToParents;
     NodeHashSet<USignature, USignatureHasher> reductionsWithChildren;
 
-    for (const auto& rSig : above.getReductions()) {
+    for (const auto& rSig : parent.getReductions()) {
 
         const Reduction r = _htn.getOpTable().getReduction(rSig);
         
@@ -686,7 +666,6 @@ void TreeExpander::propagateReductions(Position& newPos, Position& above) {
             assert(_htn.isReduction(subRSig) && subRSig == subR.getSignature() && _htn.isFullyGround(subRSig));
 
             newPos.addReduction(subRSig);
-            newPos.addExpansionSize(subR.getSubtasks().size());
 
             if (_optimal) {
                 assert(_tdg != nullptr);
@@ -714,7 +693,7 @@ void TreeExpander::propagateReductions(Position& newPos, Position& above) {
     }
 
     std::vector<USignature> reductionsWithNoChildren;
-    for (const auto& rSig : above.getReductions()) {
+    for (const auto& rSig : parent.getReductions()) {
         if (!reductionsWithChildren.count(rSig)) {
             reductionsWithNoChildren.push_back(rSig);
         }
@@ -722,9 +701,9 @@ void TreeExpander::propagateReductions(Position& newPos, Position& above) {
 
     for (const auto& rSig : reductionsWithNoChildren) {
         Log::i("Retroactively prune reduction %s@(%i,%i): no children at offset %i\n", 
-                    TOSTR(rSig), above.getLayerIndex(), above.getPositionIndex(), offset);
+                    TOSTR(rSig), parent.getLayerIndex(), parent.getPositionIndex(), offset);
         assert(_pruning != nullptr);
-        _pruning->prune(rSig, above);
+        _pruning->prune(rSig, parent);
     }
 }
 

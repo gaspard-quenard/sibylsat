@@ -2,8 +2,8 @@
 #ifndef DOMPASCH_LILOTANE_POSITION_H
 #define DOMPASCH_LILOTANE_POSITION_H
 
+#include <memory>
 #include <vector>
-#include <set>
 
 #include "util/hashmap.h"
 #include "data/signature.h"
@@ -15,19 +15,51 @@
 
 typedef NodeHashMap<USignature, IntPairTree, USignatureHasher> IndirectFactSupportMapEntry;
 typedef NodeHashMap<USignature, Substitution, USignatureHasher> USigSubstitutionMap;
-
-
+typedef NodeHashMap<int, USigSet> DirectFactSupportMap;
 typedef NodeHashMap<int, IndirectFactSupportMapEntry> IndirectFactSupportMapId;
 
 enum VarType { FACT, OP };
 
-struct Position {
+class OutgoingEffects {
+private:
+    BitVec _positive_changes;
+    BitVec _negative_changes;
+
+    std::unique_ptr<DirectFactSupportMap> _positive_supports;
+    std::unique_ptr<DirectFactSupportMap> _negative_supports;
+    std::unique_ptr<IndirectFactSupportMapId> _positive_indirect_supports;
+    std::unique_ptr<IndirectFactSupportMapId> _negative_indirect_supports;
+
+    USigSet _qfacts;
+    NodeHashMap<USignature, USigSet, USignatureHasher> _positive_qfact_decodings;
+    NodeHashMap<USignature, USigSet, USignatureHasher> _negative_qfact_decodings;
 
 public:
+    void reset(size_t numFacts);
+    void addFactChange(int factId, bool negated);
+    void addFactChanges(const BitVec& facts, bool negated);
+    const BitVec& getFactChanges(bool negated) const;
 
-    static NodeHashMap<int, USigSet> EMPTY_USIG_TO_USIG_SET_MAP_ID;
-    static IndirectFactSupportMapId EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
+    void addSupport(int factId, bool negated, const USignature& operation);
+    void addIndirectSupport(int factId, bool negated, const USignature& operation, const std::vector<IntPair>& path);
+    void touchSupport(int factId, bool negated);
+    DirectFactSupportMap& getSupports(bool negated);
+    const DirectFactSupportMap& getSupports(bool negated) const;
+    IndirectFactSupportMapId& getIndirectSupports(bool negated);
+    const IndirectFactSupportMapId& getIndirectSupports(bool negated) const;
 
+    void addQFact(const USignature& fact);
+    void addQFactDecoding(const USignature& fact, const USignature& decoding, bool negated);
+    const USigSet& getQFacts() const { return _qfacts; }
+    bool hasQFactDecodings(const USignature& fact, bool negated) const;
+    const USigSet& getQFactDecodings(const USignature& fact, bool negated) const;
+
+    void clearSupports();
+    void clearDecodings();
+    void clear();
+};
+
+struct Position {
 private:
     size_t _layer_idx;
     size_t _pos;
@@ -53,22 +85,10 @@ private:
     NodeHashMap<USignature, USigSet, USignatureHasher> _pos_qfact_decodings;
     NodeHashMap<USignature, USigSet, USignatureHasher> _neg_qfact_decodings;
 
-    BitVec _pos_fact_changed; // All the fact positive that might change at this position.
-    BitVec _neg_fact_changed; // All the fact negative that might change at this position.
-
-    // Do not seem to be really better... there
-    NodeHashMap<int, USigSet>* _pos_fact_supports_id = nullptr;
-    NodeHashMap<int, USigSet>* _neg_fact_supports_id = nullptr;
-    IndirectFactSupportMapId* _pos_indir_fact_supports_id = nullptr;
-    IndirectFactSupportMapId* _neg_indir_fact_supports_id = nullptr;
-
-    NodeHashMap<USignature, USigSet, USignatureHasher>* _pos_fact_supports = nullptr;
-    NodeHashMap<USignature, USigSet, USignatureHasher>* _neg_fact_supports = nullptr;
+    OutgoingEffects _outgoing_effects;
 
     NodeHashMap<USignature, std::vector<TypeConstraint>, USignatureHasher> _q_constants_type_constraints;
     NodeHashMap<USignature, std::vector<SubstitutionConstraint>, USignatureHasher> _substitution_constraints;
-
-    size_t _max_expansion_size = 1;
 
     // Prop. variable for each occurring signature.
     NodeHashMap<USignature, int, USignatureHasher> _op_variables;
@@ -98,11 +118,6 @@ public:
     bool hasPrimitiveOps();
     bool hasNonprimitiveOps();
 
-    // For bitVec
-    void addFactSupportId(int predId, bool negated, const USignature& operation);
-    void addIndirectFactSupportId(int predId, bool negated, const USignature& op, const std::vector<IntPair>& path);
-    void touchFactSupportId(int predId, bool negated);
-
     void addQConstantTypeConstraint(const USignature& op, const TypeConstraint& c);
     void addSubstitutionConstraint(const USignature& op, SubstitutionConstraint&& constr);
 
@@ -117,7 +132,6 @@ public:
     void addExpansion(const USignature& parent, const USignature& child);
     void addExpansionSubstitution(const USignature& parent, const USignature& child, const Substitution& s);
     void addExpansionSubstitution(const USignature& parent, const USignature& child, Substitution&& s);
-    void addExpansionSize(size_t size);
     
     void removeActionOccurrence(const USignature& action);
     void removeReductionOccurrence(const USignature& reduction);
@@ -133,14 +147,8 @@ public:
 
     const USigSet& getQFacts() const;
     int getNumQFacts() const;
-    NodeHashMap<USignature, USigSet, USignatureHasher>& getPosFactSupports();
-    NodeHashMap<USignature, USigSet, USignatureHasher>& getNegFactSupports();
-
-    // Fact change helpers.
-    NodeHashMap<int, USigSet>& getPosFactSupportsId();
-    NodeHashMap<int, USigSet>& getNegFactSupportsId();
-    IndirectFactSupportMapId& getPosIndirectFactSupportsId();
-    IndirectFactSupportMapId& getNegIndirectFactSupportsId();
+    OutgoingEffects& getOutgoingEffects() { return _outgoing_effects; }
+    const OutgoingEffects& getOutgoingEffects() const { return _outgoing_effects; }
 
 
     const NodeHashMap<USignature, std::vector<TypeConstraint>, USignatureHasher>& getQConstantsTypeConstraints() const;
@@ -154,7 +162,6 @@ public:
     NodeHashMap<USignature, USigSet, USignatureHasher>& getExpansions();
     NodeHashMap<USignature, USigSet, USignatureHasher>& getPredecessors();
     const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& getExpansionSubstitutions() const;
-    size_t getMaxExpansionSize() const;
 
     size_t getLayerIndex() const;
     size_t getPositionIndex() const;
@@ -165,7 +172,6 @@ public:
         _substitution_constraints.clear();
         _substitution_constraints.reserve(0);
     }
-    void clearFactSupportsId();
     void clearDecodings();
     void clearFullPos();
 
@@ -216,7 +222,6 @@ public:
     }
 
 
-    void setExpansionSize(size_t size) {_max_expansion_size = size;}
     void setOffset(size_t offset) {_offset = offset;}
 
     void setHeuristicValue(const USignature& reduction, int value) {
@@ -227,26 +232,6 @@ public:
     int getHeuristicValue(const USignature& reduction) {
         assert(_heuristic_value_per_reduction.count(reduction) || Log::e("Unknown reduction %s queried!\n", Names::to_string(reduction).c_str()));
         return _heuristic_value_per_reduction[reduction];
-    }
-
-    void initFactChanges(int numPreds) {
-        _pos_fact_changed = BitVec(numPreds);
-        _neg_fact_changed = BitVec(numPreds);
-    }
-
-    void addFactChange(int predId, bool negated) {
-        BitVec& bv = negated ? _neg_fact_changed : _pos_fact_changed;
-        bv.set(predId);
-    }
-    void addMultipleFactChanges(const BitVec& facts, bool negated) {
-        if (negated) {
-            _neg_fact_changed.or_with(facts);
-        } else {
-            _pos_fact_changed.or_with(facts);
-        }
-    }
-    const BitVec& getFactChange(bool negated) const {
-        return negated ? _neg_fact_changed : _pos_fact_changed;
     }
 
     void addGroupMutexEncoded(int group_mutex) {_group_mutex_encoded.insert(group_mutex);}

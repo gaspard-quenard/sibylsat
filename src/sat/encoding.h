@@ -121,11 +121,29 @@ private:
         Position* leftOfAbove = nullptr;
         Position* reusedFacts = nullptr;
     };
+    struct QFactView {
+        USigSet facts;
+        NodeHashMap<USignature, USigSet, USignatureHasher> positiveDecodings;
+        NodeHashMap<USignature, USigSet, USignatureHasher> negativeDecodings;
+
+        void add(const Position& position);
+        void add(const OutgoingEffects& effects);
+        bool hasAnyDecodings(const USignature& fact) const;
+        bool hasDecodings(const USignature& fact, bool negated) const;
+        const USigSet& getDecodings(const USignature& fact, bool negated) const;
+    };
     enum class EncodingContext { CurrentLeaf, CarriedLeaf, CarriedLeafReuseSelf };
 
     Position* getLeftPosition(const Position& pos) const;
     Position* getAbovePosition(const Position& pos) const;
     EncodingEnvironment buildEnvironment(Position& pos, EncodingContext context) const;
+    QFactView buildQFactView(const Position& position, const Position* left) const;
+    int findReusableQFactVariable(
+            const USignature& qfact,
+            const Position& position,
+            const QFactView& qfacts,
+            const Position* source,
+            const QFactView& sourceQFacts) const;
     void encodeOperationVariables(Position& pos);
     void encodeInitialRelevantFacts(Position& pos, bool rememberForPropagation);
     void encodeFactVariables(Position& pos, const EncodingEnvironment& env);
@@ -146,7 +164,6 @@ private:
      */
     void encodePreventionIdenticalSignatureThanParentsForAllMethods(Position& pos);
 
-    // void encodeFrameAxiomsForNewRelevantsFacts(Position& newPos, Position& left);
 };
 
 #endif

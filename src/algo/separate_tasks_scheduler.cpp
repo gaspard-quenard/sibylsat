@@ -231,7 +231,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
 
         // Clean all the position done
         for (int i = 0; i < solvePositions - 1; ++i) {
-            leafPositions[i]->clearFactSupportsId();
+            leafPositions[i]->getOutgoingEffects().clearSupports();
         }
     }
     else
@@ -241,8 +241,9 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
         {
             Position &pos = *leafPositions[i];
 
-            const BitVec& pos_facts_changed = pos.getFactChange(/*negated=*/false);
-            const BitVec& neg_facts_changed = pos.getFactChange(/*negated=*/true);
+            const OutgoingEffects& effects = pos.getOutgoingEffects();
+            const BitVec& pos_facts_changed = effects.getFactChanges(/*negated=*/false);
+            const BitVec& neg_facts_changed = effects.getFactChanges(/*negated=*/true);
             _reachable_state_pos_facts_after_tasks_accomplished.or_with(pos_facts_changed);
             _reachable_state_neg_facts_after_tasks_accomplished.or_with(neg_facts_changed);
         }

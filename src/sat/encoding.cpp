@@ -21,6 +21,91 @@ Position* Encoding::getAbovePosition(const Position& pos) const {
     return parent == _root_position ? nullptr : parent;
 }
 
+void Encoding::QFactView::add(const Position& position) {
+    for (const USignature& fact : position.getQFacts()) {
+        facts.insert(fact);
+        if (position.hasQFactDecodings(fact, /*negated=*/false)) {
+            const USigSet& decodings = position.getQFactDecodings(fact, /*negated=*/false);
+            positiveDecodings[fact].insert(decodings.begin(), decodings.end());
+        }
+        if (position.hasQFactDecodings(fact, /*negated=*/true)) {
+            const USigSet& decodings = position.getQFactDecodings(fact, /*negated=*/true);
+            negativeDecodings[fact].insert(decodings.begin(), decodings.end());
+        }
+    }
+}
+
+void Encoding::QFactView::add(const OutgoingEffects& effects) {
+    for (const USignature& fact : effects.getQFacts()) {
+        facts.insert(fact);
+        if (effects.hasQFactDecodings(fact, /*negated=*/false)) {
+            const USigSet& decodings = effects.getQFactDecodings(fact, /*negated=*/false);
+            positiveDecodings[fact].insert(decodings.begin(), decodings.end());
+        }
+        if (effects.hasQFactDecodings(fact, /*negated=*/true)) {
+            const USigSet& decodings = effects.getQFactDecodings(fact, /*negated=*/true);
+            negativeDecodings[fact].insert(decodings.begin(), decodings.end());
+        }
+    }
+}
+
+bool Encoding::QFactView::hasDecodings(const USignature& fact, bool negated) const {
+    const auto& decodings = negated ? negativeDecodings : positiveDecodings;
+    return decodings.count(fact);
+}
+
+bool Encoding::QFactView::hasAnyDecodings(const USignature& fact) const {
+    return hasDecodings(fact, /*negated=*/false)
+            || hasDecodings(fact, /*negated=*/true);
+}
+
+const USigSet& Encoding::QFactView::getDecodings(const USignature& fact, bool negated) const {
+    const auto& decodings = negated ? negativeDecodings : positiveDecodings;
+    assert(decodings.count(fact));
+    return decodings.at(fact);
+}
+
+Encoding::QFactView Encoding::buildQFactView(const Position& position, const Position* left) const {
+    QFactView view;
+    view.add(position);
+    if (left != nullptr
+            && position.getPositionIndex() != 0
+            && position.getPositionIndex() != _new_init_pos) {
+        view.add(left->getOutgoingEffects());
+    }
+    return view;
+}
+
+int Encoding::findReusableQFactVariable(
+        const USignature& qfact,
+        const Position& position,
+        const QFactView& qfacts,
+        const Position* source,
+        const QFactView& sourceQFacts) const {
+    if (source == nullptr) return 0;
+
+    const int qfactVar = source->getVariableOrZero(VarType::FACT, qfact);
+    if (qfactVar == 0) return 0;
+
+    for (bool negated : {false, true}) {
+        if (!qfacts.hasDecodings(qfact, negated)) continue;
+        if (!sourceQFacts.hasDecodings(qfact, negated)) return 0;
+
+        const USigSet& sourceDecodings = sourceQFacts.getDecodings(qfact, negated);
+        for (const USignature& decoding : qfacts.getDecodings(qfact, negated)) {
+            const int factVar = position.getVariableOrZero(VarType::FACT, decoding);
+            const int sourceFactVar = source->getVariableOrZero(VarType::FACT, decoding);
+            if (!sourceDecodings.count(decoding)
+                    || factVar == 0
+                    || sourceFactVar == 0
+                    || factVar != sourceFactVar) {
+                return 0;
+            }
+        }
+    }
+    return qfactVar;
+}
+
 Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, EncodingContext context) const {
     Encoding::EncodingEnvironment env;
     env.left = getLeftPosition(pos);
@@ -179,47 +264,29 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
         encodeFrameAxioms(newPos, *env.left, env);
     }
 
-    auto reuseQFact = [&](const USignature& qfact, int var, const Position* otherPos, bool negated) {
-        if (!newPos.hasQFactDecodings(qfact, negated)) return true;
-        if (otherPos == nullptr || var == 0 || !otherPos->hasQFactDecodings(qfact, negated)
-                || otherPos->getQFactDecodings(qfact, negated).size() < newPos.getQFactDecodings(qfact, negated).size())
-            return false;
-        const auto& otherDecodings = otherPos->getQFactDecodings(qfact, negated);
-        for (const auto& decFact : newPos.getQFactDecodings(qfact, negated)) {
-            int decFactVar = newPos.getVariableOrZero(VarType::FACT, decFact);
-            int otherDecFactVar = otherPos->getVariableOrZero(VarType::FACT, decFact);
-            if (decFactVar == 0 || otherDecFactVar == 0 
-                    || decFactVar != otherDecFactVar 
-                    || !otherDecodings.count(decFact)) {
-                return false;
-            }
+    const QFactView qfacts = buildQFactView(newPos, env.left);
+    const QFactView leftQFacts = env.left == nullptr
+            ? QFactView()
+            : buildQFactView(*env.left, env.left->getLeftPosition());
+
+    for (const USignature& qfact : qfacts.facts) {
+        if (!qfacts.hasAnyDecodings(qfact)
+                || newPos.hasVariable(VarType::FACT, qfact)) {
+            continue;
         }
-        return true;
-    };
 
-    // Encode q-facts that are not encoded yet
-    for ([[maybe_unused]] const auto& qfact : newPos.getQFacts()) {
-        if (!newPos.hasQFactDecodings(qfact, true) && !newPos.hasQFactDecodings(qfact, false)) continue;
-        // assert(!newPos.hasVariable(VarType::FACT, qfact));
-        if (newPos.hasVariable(VarType::FACT, qfact)) continue;
+        int reusedVar = env.reusedFacts == nullptr
+                ? 0
+                : env.reusedFacts->getVariableOrZero(VarType::FACT, qfact);
+        if (reusedVar == 0) {
+            reusedVar = findReusableQFactVariable(
+                    qfact, newPos, qfacts, env.left, leftQFacts);
+        }
 
-        // Reuse variable from above?
-        int aboveVar = env.reusedFacts != nullptr ? env.reusedFacts->getVariableOrZero(VarType::FACT, qfact) : 0;
-        if (aboveVar != 0) {
-            // Reuse qfact variable from above
-            newPos.setVariable(VarType::FACT, qfact, aboveVar);
-
+        if (reusedVar != 0) {
+            newPos.setVariable(VarType::FACT, qfact, reusedVar);
         } else {
-            // Reuse variable from left?
-            int leftVar = env.left != nullptr ? env.left->getVariableOrZero(VarType::FACT, qfact) : 0;
-            if (reuseQFact(qfact, leftVar, env.left, true) && reuseQFact(qfact, leftVar, env.left, false)) {
-                // Reuse qfact variable from above
-                newPos.setVariable(VarType::FACT, qfact, leftVar);
-
-            } else {
-                // Encode new variable
-                _new_fact_vars.insert(_vars.encodeVariable(VarType::FACT, newPos, qfact));
-            }
+            _new_fact_vars.insert(_vars.encodeVariable(VarType::FACT, newPos, qfact));
         }
     }
 
@@ -245,9 +312,15 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encodin
         && left.getActions().size()+left.getReductions().size()
             <= leftOfAbove->getActions().size()+leftOfAbove->getReductions().size();
 
-    // Retrieve supports from left position
-    SupportsId* supp[2] = {&newPos.getNegFactSupportsId(), &newPos.getPosFactSupportsId()};
-    IndirectFactSupportMapId* iSupp[2] = {&newPos.getNegIndirectFactSupportsId(), &newPos.getPosIndirectFactSupportsId()};
+    OutgoingEffects& effects = left.getOutgoingEffects();
+    const SupportsId* supp[2] = {
+        &effects.getSupports(/*negated=*/true),
+        &effects.getSupports(/*negated=*/false)
+    };
+    IndirectFactSupportMapId* iSupp[2] = {
+        &effects.getIndirectSupports(/*negated=*/true),
+        &effects.getIndirectSupports(/*negated=*/false)
+    };
 
     // If mutex param is used, prevent incompatible facts from being true at the same time
     USigSet positiveFacts;
@@ -521,38 +594,26 @@ void Encoding::encodeSubstitutionVars(const USignature& opSig, int opVar, int ar
 }
 
 void Encoding::encodeQFactSemantics(Position& newPos, const Encoding::EncodingEnvironment& env, bool encodeOnlyEffectQFacts) {
-    USigSet qfactsEffsFromLeft;
+    QFactView qfacts;
     if (encodeOnlyEffectQFacts && env.left != nullptr) {
-        for (const auto& aSig : env.left->getActions()) {
-            if (_htn.isActionRepetition(aSig._name_id)) continue;
-            const SigSet& effects = _htn.getOpTable().getAction(aSig).getEffects();
-            for (const Signature& eff : effects) {
-                if (!_htn.hasQConstants(eff._usig)) continue;
-                qfactsEffsFromLeft.insert(eff._usig);
-            }
-        }
-        for (const auto& rSig: env.left->getReductions()) {
-            const SigSet& effects = _htn.getOpTable().getReduction(rSig).getEffects();
-            for (const Signature& eff : effects) {
-                if (!_htn.hasQConstants(eff._usig)) continue;
-                qfactsEffsFromLeft.insert(eff._usig);
-            }
-        }
+        qfacts.add(env.left->getOutgoingEffects());
+    } else {
+        qfacts = buildQFactView(newPos, env.left);
     }
+    const QFactView reusedQFacts = env.reusedFacts == nullptr
+            ? QFactView()
+            : buildQFactView(*env.reusedFacts, env.leftOfAbove);
 
     _stats.begin(STAGE_QFACTSEMANTICS);
     std::vector<int> substitutionVars; substitutionVars.reserve(128);
-    for (const auto& qfactSig : newPos.getQFacts()) {
+    for (const USignature& qfactSig : qfacts.facts) {
         assert(_htn.hasQConstants(qfactSig));
-
-        if (encodeOnlyEffectQFacts && !qfactsEffsFromLeft.count(qfactSig)) continue;
-        
         
         int qfactVar = _vars.getVariable(VarType::FACT, newPos, qfactSig);
 
         for (int sign = -1; sign <= 1; sign += 2) {
             bool negated = sign < 0;
-            if (!newPos.hasQFactDecodings(qfactSig, negated)) 
+            if (!qfacts.hasDecodings(qfactSig, negated))
                 continue;
 
             bool filterAbove = false;
@@ -562,7 +623,7 @@ void Encoding::encodeQFactSemantics(Position& newPos, const Encoding::EncodingEn
                 if (!_new_fact_vars.count(qfactVar)) {
                     if (env.reusedFacts != nullptr
                             && env.reusedFacts->getVariableOrZero(VarType::FACT, qfactSig) == qfactVar
-                            && env.reusedFacts->hasQFactDecodings(qfactSig, negated)) {
+                            && reusedQFacts.hasDecodings(qfactSig, negated)) {
                         filterAbove = true;
 
                         /*
@@ -582,11 +643,11 @@ void Encoding::encodeQFactSemantics(Position& newPos, const Encoding::EncodingEn
             }
             
             // For each possible fact decoding:
-            for (const auto& decFactSig : newPos.getQFactDecodings(qfactSig, negated)) {
+            for (const USignature& decFactSig : qfacts.getDecodings(qfactSig, negated)) {
                 
                 int decFactVar = newPos.getVariableOrZero(VarType::FACT, decFactSig);
                 if (decFactVar == 0) continue;
-                if (filterAbove && env.reusedFacts->getQFactDecodings(qfactSig, negated).count(decFactSig)) continue;
+                if (filterAbove && reusedQFacts.getDecodings(qfactSig, negated).count(decFactSig)) continue;
 
                 // Assemble list of substitution variables
                 for (size_t i = 0; i < qfactSig._args.size(); i++) {

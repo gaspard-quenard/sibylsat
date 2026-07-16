@@ -6,8 +6,124 @@
 #include "sat/variable_domain.h"
 #include "util/log.h"
 
-NodeHashMap<int, USigSet> Position::EMPTY_USIG_TO_USIG_SET_MAP_ID;
-IndirectFactSupportMapId Position::EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
+void OutgoingEffects::reset(size_t numFacts) {
+    _positive_changes = BitVec(numFacts);
+    _negative_changes = BitVec(numFacts);
+    clearSupports();
+    _qfacts.clear();
+    clearDecodings();
+}
+
+void OutgoingEffects::addFactChange(int factId, bool negated) {
+    (negated ? _negative_changes : _positive_changes).set(factId);
+}
+
+void OutgoingEffects::addFactChanges(const BitVec& facts, bool negated) {
+    (negated ? _negative_changes : _positive_changes).or_with(facts);
+}
+
+const BitVec& OutgoingEffects::getFactChanges(bool negated) const {
+    return negated ? _negative_changes : _positive_changes;
+}
+
+void OutgoingEffects::addSupport(int factId, bool negated, const USignature& operation) {
+    std::unique_ptr<DirectFactSupportMap>& supports = negated ? _negative_supports : _positive_supports;
+    if (supports == nullptr) {
+        supports = std::make_unique<DirectFactSupportMap>();
+    }
+    (*supports)[factId].insert(operation);
+}
+
+void OutgoingEffects::addIndirectSupport(
+        int factId,
+        bool negated,
+        const USignature& operation,
+        const std::vector<IntPair>& path) {
+    std::unique_ptr<IndirectFactSupportMapId>& supports = negated
+            ? _negative_indirect_supports
+            : _positive_indirect_supports;
+    if (supports == nullptr) {
+        supports = std::make_unique<IndirectFactSupportMapId>();
+    }
+    (*supports)[factId][operation].insert(path);
+}
+
+void OutgoingEffects::touchSupport(int factId, bool negated) {
+    std::unique_ptr<DirectFactSupportMap>& supports = negated ? _negative_supports : _positive_supports;
+    if (supports == nullptr) {
+        supports = std::make_unique<DirectFactSupportMap>();
+    }
+    (*supports)[factId];
+}
+
+const DirectFactSupportMap& OutgoingEffects::getSupports(bool negated) const {
+    static const DirectFactSupportMap empty;
+    const std::unique_ptr<DirectFactSupportMap>& supports = negated ? _negative_supports : _positive_supports;
+    return supports == nullptr ? empty : *supports;
+}
+
+DirectFactSupportMap& OutgoingEffects::getSupports(bool negated) {
+    static DirectFactSupportMap empty;
+    std::unique_ptr<DirectFactSupportMap>& supports = negated ? _negative_supports : _positive_supports;
+    return supports == nullptr ? empty : *supports;
+}
+
+const IndirectFactSupportMapId& OutgoingEffects::getIndirectSupports(bool negated) const {
+    static const IndirectFactSupportMapId empty;
+    const std::unique_ptr<IndirectFactSupportMapId>& supports = negated
+            ? _negative_indirect_supports
+            : _positive_indirect_supports;
+    return supports == nullptr ? empty : *supports;
+}
+
+IndirectFactSupportMapId& OutgoingEffects::getIndirectSupports(bool negated) {
+    static IndirectFactSupportMapId empty;
+    std::unique_ptr<IndirectFactSupportMapId>& supports = negated
+            ? _negative_indirect_supports
+            : _positive_indirect_supports;
+    return supports == nullptr ? empty : *supports;
+}
+
+void OutgoingEffects::addQFact(const USignature& fact) {
+    _qfacts.insert(fact);
+}
+
+void OutgoingEffects::addQFactDecoding(
+        const USignature& fact,
+        const USignature& decoding,
+        bool negated) {
+    auto& decodings = negated ? _negative_qfact_decodings : _positive_qfact_decodings;
+    decodings[fact].insert(decoding);
+}
+
+bool OutgoingEffects::hasQFactDecodings(const USignature& fact, bool negated) const {
+    const auto& decodings = negated ? _negative_qfact_decodings : _positive_qfact_decodings;
+    return decodings.count(fact);
+}
+
+const USigSet& OutgoingEffects::getQFactDecodings(const USignature& fact, bool negated) const {
+    const auto& decodings = negated ? _negative_qfact_decodings : _positive_qfact_decodings;
+    assert(decodings.count(fact) || Log::e("No outgoing qfact decodings for %s!\n", TOSTR(fact)));
+    return decodings.at(fact);
+}
+
+void OutgoingEffects::clearSupports() {
+    _positive_supports.reset();
+    _negative_supports.reset();
+    _positive_indirect_supports.reset();
+    _negative_indirect_supports.reset();
+}
+
+void OutgoingEffects::clearDecodings() {
+    _positive_qfact_decodings.clear();
+    _negative_qfact_decodings.clear();
+}
+
+void OutgoingEffects::clear() {
+    clearSupports();
+    _qfacts.clear();
+    clearDecodings();
+}
 
 Position::Position() : _layer_idx(-1), _pos(-1), _offset(0) {}
 void Position::setPos(size_t layerIdx, size_t pos) {_layer_idx = layerIdx; _pos = pos;}
@@ -32,29 +148,6 @@ void Position::setParentPosition(Position* parent) {
 
 void Position::addQFact(const USignature& qfact) {
     _qfacts.insert(qfact);
-}
-
-
-void Position::addFactSupportId(int predId, bool negated, const USignature& operation) {
-    // auto& supp = fact._negated ? _neg_fact_supports : _pos_fact_supports;
-    auto& supp = negated ? _neg_fact_supports_id : _pos_fact_supports_id;
-    // if (supp == nullptr) supp = new NodeHashMap<USignature, USigSet, USignatureHasher>();
-    if (supp == nullptr) supp = new NodeHashMap<int, USigSet>();
-    // auto& set = (*supp)[fact._usig];
-    auto& set = (*supp)[predId];
-    set.insert(operation);
-}
-void Position::addIndirectFactSupportId(int predId, bool negated, const USignature& op, const std::vector<IntPair>& path) {
-    auto& supp = negated ? _neg_indir_fact_supports_id : _pos_indir_fact_supports_id;
-    if (supp == nullptr) supp = new IndirectFactSupportMapId();
-    auto& tree = (*supp)[predId][op];
-    tree.insert(path);
-}
-void Position::touchFactSupportId(int predId, bool negated) {
-    // auto& supp = negated ? _neg_fact_supports_id : _pos_fact_supports_id;
-    auto& supp = negated ? _neg_fact_supports_id : _pos_fact_supports_id;
-    if (supp == nullptr) supp = new NodeHashMap<int, USigSet>();
-    (*supp)[predId];
 }
 
 
@@ -126,7 +219,6 @@ void Position::addExpansionSubstitution(const USignature& parent, const USignatu
 void Position::addExpansionSubstitution(const USignature& parent, const USignature& child, const Substitution& s) {
     _expansion_substitutions[parent][child] = s;
 }
-void Position::addExpansionSize(size_t size) {_max_expansion_size = std::max(_max_expansion_size, size);}
 
 void Position::removeActionOccurrence(const USignature& action) {
     _actions.erase(action);
@@ -180,25 +272,6 @@ size_t Position::getOffset() const {return _offset;}
 
 const USigSet& Position::getQFacts() const {return _qfacts;}
 
-NodeHashMap<int, USigSet>& Position::getPosFactSupportsId() {
-    if (_pos_fact_supports_id == nullptr) return EMPTY_USIG_TO_USIG_SET_MAP_ID;
-    return *_pos_fact_supports_id;
-}
-NodeHashMap<int, USigSet>& Position::getNegFactSupportsId() {
-    if (_neg_fact_supports_id == nullptr) return EMPTY_USIG_TO_USIG_SET_MAP_ID;
-    return *_neg_fact_supports_id;
-}
-IndirectFactSupportMapId& Position::getPosIndirectFactSupportsId() {
-    if (_pos_indir_fact_supports_id == nullptr) return EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
-    return *_pos_indir_fact_supports_id;
-}
-IndirectFactSupportMapId& Position::getNegIndirectFactSupportsId() {
-    if (_neg_indir_fact_supports_id == nullptr) return EMPTY_INDIRECT_FACT_SUPPORT_MAP_ID;
-    return *_neg_indir_fact_supports_id;
-}
-
-
-
 const NodeHashMap<USignature, std::vector<TypeConstraint>, USignatureHasher>& Position::getQConstantsTypeConstraints() const {
     return _q_constants_type_constraints;
 }
@@ -209,7 +282,6 @@ const USigSet& Position::getReductions() const {return _reductions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getExpansions() {return _expansions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getPredecessors() {return _predecessors;}
 const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& Position::getExpansionSubstitutions() const {return _expansion_substitutions;}
-size_t Position::getMaxExpansionSize() const {return _max_expansion_size;}
 
 void Position::clearAtPastPosition() {
     _qfacts.clear();
@@ -225,10 +297,7 @@ void Position::clearAtPastPosition() {
     _q_constants_type_constraints.clear();
     _q_constants_type_constraints.reserve(0);
     clearSubstitutions();
-    if (_pos_fact_supports_id != nullptr) delete _pos_fact_supports_id;
-    if (_neg_fact_supports_id != nullptr) delete _neg_fact_supports_id;
-    if (_pos_indir_fact_supports_id != nullptr) delete _pos_indir_fact_supports_id;
-    if (_neg_indir_fact_supports_id != nullptr) delete _neg_indir_fact_supports_id;
+    _outgoing_effects.clear();
 }
 
 void Position::clearAtPastLayer() {
@@ -246,25 +315,6 @@ void Position::clearAtPastLayer() {
     */
 }
 
-void Position::clearFactSupportsId() {
-    if (_pos_fact_supports_id != nullptr) {
-        _pos_fact_supports_id->clear();
-        _pos_fact_supports_id->reserve(0);
-    }
-    if (_neg_fact_supports_id != nullptr) {
-        _neg_fact_supports_id->clear();
-        _neg_fact_supports_id->reserve(0);
-    }
-    if (_pos_indir_fact_supports_id != nullptr) {
-        _pos_indir_fact_supports_id->clear();
-        _pos_indir_fact_supports_id->reserve(0);
-    }
-    if (_neg_indir_fact_supports_id != nullptr) {
-        _neg_indir_fact_supports_id->clear();
-        _neg_indir_fact_supports_id->reserve(0);
-    }
-}
-
 void Position::clearFullPos() {
     _pos_qfact_decodings.clear();
     _pos_qfact_decodings.reserve(0);
@@ -272,24 +322,7 @@ void Position::clearFullPos() {
     _neg_qfact_decodings.reserve(0);
     _fact_variables.clear();
     _fact_variables.reserve(0); 
-
-
-    if (_pos_fact_supports_id != nullptr) {
-        delete _pos_fact_supports_id;
-        _pos_fact_supports_id = nullptr;
-    }
-    if (_neg_fact_supports_id != nullptr) {
-        delete _neg_fact_supports_id;
-        _neg_fact_supports_id = nullptr;
-    }
-    if (_pos_indir_fact_supports_id != nullptr) {
-        delete _pos_indir_fact_supports_id;
-        _pos_indir_fact_supports_id = nullptr;
-    }
-    if (_neg_indir_fact_supports_id != nullptr) {
-        delete _neg_indir_fact_supports_id;
-        _neg_indir_fact_supports_id = nullptr;
-    }
+    _outgoing_effects.clear();
 
     _qfacts.clear();
     _qfacts.reserve(0);
