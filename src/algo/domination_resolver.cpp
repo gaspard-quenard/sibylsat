@@ -1,7 +1,7 @@
 
 #include "algo/domination_resolver.h"
 
-DominationResolver::DominationResult DominationResolver::getDominationStatus(const USignature& op, const USignature& other, Position& p) {
+DominationResolver::DominationResult DominationResolver::getDominationStatus(const USignature& op, const USignature& other) {
     DominationResult res;
     res.status = DIFFERENT;
 
@@ -23,8 +23,6 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
         bool isOtherQ = _htn.isQConstant(otherArg);
         if (!isQ && !isOtherQ) return res; // Different ground constants
 
-        // Check whether both q-constants originate from the same position
-        IntPair position(p.getLayerIndex(), p.getPositionIndex());
         if (isQ && isOtherQ && _htn.getOriginOfQConstant(arg) != _htn.getOriginOfQConstant(otherArg)) {
             return res;
         }
@@ -125,7 +123,7 @@ void DominationResolver::eliminateDominatedOperations(Position& newPos) {
             }
 
             for (auto& [other, dominatedByOther] : dominatingOps) {
-                auto result = getDominationStatus(op, other, newPos);
+                auto result = getDominationStatus(op, other);
                 if (result.status == DOMINATED) {
                     // This op is being dominated; mark for deletion
                     //Log::d("DOM %s << %s\n", TOSTR(op), TOSTR(other));

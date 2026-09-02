@@ -21,7 +21,7 @@ public:
         Substitution qconstSubstitutions;
     };
 
-    DominationResult getDominationStatus(const USignature& op, const USignature& other, Position& p);
+    DominationResult getDominationStatus(const USignature& op, const USignature& other);
     void eliminateDominatedOperations(Position& newPos);
 
     size_t getNumDominatedOps() const {

@@ -1,7 +1,6 @@
 #ifndef DOMPASCH_TREE_REXX_TREE_EXPANDER_H
 #define DOMPASCH_TREE_REXX_TREE_EXPANDER_H
 
-#include <memory>
 #include <vector>
 #include <optional>
 
@@ -60,9 +59,7 @@ public:
     void printStatistics() const;
     Position*& getRootPositionRef() { return _root_position; }
     std::vector<Position*>& getLeafPositions() { return _leaf_positions; }
-    const std::vector<Position*>& getLeafPositions() const { return _leaf_positions; }
     FactAnalysis& getAnalysis() { return _analysis; }
-    const FactAnalysis& getAnalysis() const { return _analysis; }
     MethodEffectAnalysis& getMethodEffects() { return _method_effects; }
     size_t getNumRetroactivePrunings() const;
     size_t getNumRetroactivelyPrunedOps() const;
@@ -74,7 +71,7 @@ private:
     void expandLeaf(Position& parent, size_t expansionSize);
     void carryLeaf(Position& leaf);
 
-    void createNextPosition(Position& newPos, size_t pos, Position* parent, Position* left);
+    void createNextPosition(Position& newPos, Position* parent, Position* left);
     void createNextPositionFromParent(Position& newPos, Position& parent);
     void computeOutgoingEffects(Position& position);
     void pruneImpossibleOperations(Position& position, const USigSet& operationsToRemove);

@@ -119,11 +119,10 @@ private:
 public:
 
     Position();
-    void setPos(size_t layerIdx, size_t pos);
+    void setPos(size_t layerIdx);
     void setParentPosition(Position* parent);
     Position* getParentPosition() const { return _parent_position; }
     const std::vector<Position*>& getChildrenPositions() const { return _children_positions; }
-    bool hasParentPosition() const { return _parent_position != nullptr; }
     void setLeftPosition(Position* left) { _left_position = left; }
     Position* getLeftPosition() const { return _left_position; }
 
@@ -154,15 +153,12 @@ public:
     void replaceOperation(const USignature& from, const USignature& to, Substitution&& s);
 
     const NodeHashMap<USignature, int, USignatureHasher>& getVariableTable(VarType type) const;
-    void setVariableTable(VarType type, const NodeHashMap<USignature, int, USignatureHasher>& table);
-    void moveVariableTable(VarType type, Position& destination);
 
     bool hasQFact(const USignature& fact) const;
     bool hasAction(const USignature& action) const;
     bool hasReduction(const USignature& red) const;
 
     const USigSet& getQFacts() const;
-    int getNumQFacts() const;
     OutgoingEffects& getOutgoingEffects() { return _outgoing_effects; }
     const OutgoingEffects& getOutgoingEffects() const { return _outgoing_effects; }
 
@@ -186,8 +182,6 @@ public:
     bool isFreshInCurrentLayer() const { return _fresh_in_current_layer; }
     void setFreshInCurrentLayer(bool fresh) { _fresh_in_current_layer = fresh; }
     size_t getOffset() const;
-    void clearAtPastPosition();
-    void clearAtPastLayer();
     void clearSubstitutions() {
         _substitution_constraints.clear();
         _substitution_constraints.reserve(0);

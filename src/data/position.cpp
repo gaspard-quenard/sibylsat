@@ -129,11 +129,8 @@ void OutgoingEffects::clear() {
 size_t Position::_next_pos_id = 1;
 
 Position::Position() : _layer_idx(-1), _offset(0) {}
-void Position::setPos(size_t layerIdx, size_t pos) {
+void Position::setPos(size_t layerIdx) {
     _layer_idx = layerIdx;
-    // _pos is a stable, globally unique id assigned in the constructor and
-    // never modified afterward (used for q-constant naming and logging).
-    (void) pos;
 }
 void Position::setParentPosition(Position* parent) {
     if (_parent_position == parent) return;
@@ -255,21 +252,6 @@ void Position::replaceOperation(const USignature& from, const USignature& to, Su
 const NodeHashMap<USignature, int, USignatureHasher>& Position::getVariableTable(VarType type) const {
     return type == OP ? _op_variables : _fact_variables;
 }
-void Position::setVariableTable(VarType type, const NodeHashMap<USignature, int, USignatureHasher>& table) {
-    if (type == OP) {
-        _op_variables = table;
-    } else {
-        _fact_variables = table;
-    }
-}
-void Position::moveVariableTable(VarType type, Position& destination) {
-    auto& src = type == OP ? _op_variables : _fact_variables;
-    auto& dest = type == OP ? destination._op_variables : destination._fact_variables;
-    dest = std::move(src);
-    src.clear();
-    src.reserve(0);
-}
-
 bool Position::hasQFact(const USignature& fact) const {return _qfacts.count(fact);}
 bool Position::hasAction(const USignature& action) const {return _actions.count(action);}
 bool Position::hasReduction(const USignature& red) const {return _reductions.count(red);}
@@ -290,38 +272,6 @@ const USigSet& Position::getReductions() const {return _reductions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getExpansions() {return _expansions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getPredecessors() {return _predecessors;}
 const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& Position::getExpansionSubstitutions() const {return _expansion_substitutions;}
-
-void Position::clearAtPastPosition() {
-    _qfacts.clear();
-    _qfacts.reserve(0);
-    /*
-    _expansions.clear();
-    _expansions.reserve(0);
-    _predecessors.clear();
-    _predecessors.reserve(0);
-    */
-   _expansion_substitutions.clear();
-   _expansion_substitutions.reserve(0);
-    _q_constants_type_constraints.clear();
-    _q_constants_type_constraints.reserve(0);
-    clearSubstitutions();
-    _outgoing_effects.clear();
-}
-
-void Position::clearAtPastLayer() {
-    _pos_qfact_decodings.clear();
-    _pos_qfact_decodings.reserve(0);
-    _neg_qfact_decodings.clear();
-    _neg_qfact_decodings.reserve(0);
-    _fact_variables.clear();
-    _fact_variables.reserve(0);
-    /*
-    _actions.clear();
-    _actions.reserve(0);
-    _reductions.clear();
-    _reductions.reserve(0);
-    */
-}
 
 void Position::clearFullPos() {
     _pos_qfact_decodings.clear();

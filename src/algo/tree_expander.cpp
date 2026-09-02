@@ -52,10 +52,10 @@ void TreeExpander::createInitialLeaves() {
     _depth = 0;
 
     _root_position = new Position();
-    _root_position->setPos(-1, 0);
+    _root_position->setPos(-1);
 
     Position* rootReductionPosition = new Position();
-    rootReductionPosition->setPos(_depth, 0);
+    rootReductionPosition->setPos(_depth);
     rootReductionPosition->setParentPosition(_root_position);
     rootReductionPosition->setLeftPosition(nullptr);
 
@@ -88,7 +88,7 @@ void TreeExpander::createInitialLeaves() {
 
     /***** DEPTH 0, POSITION 1 ******/
 
-    createNextPosition(*goalPosition, /*pos=*/1, /*parent=*/nullptr, rootReductionPosition);
+    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition);
 
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
@@ -108,7 +108,6 @@ void TreeExpander::printStatistics() const {
 }
 
 void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
-    // In BFS mode, leavesToExpand aliases _leaf_positions, so read it before moving the frontier.
     std::vector<Position*> currentLeaves = std::move(_leaf_positions);
 
     std::vector<size_t> expansionSizes(currentLeaves.size(), /*init_val=*/1);
@@ -169,9 +168,8 @@ void TreeExpander::expandLeaf(Position& parent, size_t expansionSize) {
         Position* child = new Position();
         child->setFreshInCurrentLayer(true);
         Position* left = _leaf_positions.empty() ? nullptr : _leaf_positions.back();
-        const size_t childPosition = _leaf_positions.size();
         _leaf_positions.push_back(child);
-        createNextPosition(*child, childPosition, &parent, left);
+        createNextPosition(*child, &parent, left);
 
         Log::v("  Instantiation done. (r=%i a=%i qf=%i)\n",
                 child->getReductions().size(),
@@ -188,8 +186,8 @@ void TreeExpander::carryLeaf(Position& leaf) {
     applyOutgoingEffects(leaf);
 }
 
-void TreeExpander::createNextPosition(Position& newPos, size_t pos, Position* parent, Position* left) {
-    newPos.setPos(_depth, pos);
+void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left) {
+    newPos.setPos(_depth);
     if (parent != nullptr) {
         newPos.setParentPosition(parent);
     }
