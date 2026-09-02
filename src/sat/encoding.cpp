@@ -70,7 +70,7 @@ Encoding::QFactView Encoding::buildQFactView(const Position& position, const Pos
     view.add(position);
     if (left != nullptr
             && position.getFrontierIndex() != 0
-            && position.getFrontierIndex() != _new_init_pos) {
+            && position.getFrontierIndex() != _active_frontier_start) {
         view.add(left->getOutgoingEffects());
     }
     return view;
@@ -111,7 +111,7 @@ Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, Encoding
     env.left = getLeftPosition(pos);
     env.above = getAbovePosition(pos);
     switch (context) {
-    case EncodingContext::FreshLeaf:
+    case EncodingContext::NewlyCreatedLeaf:
         env.leftOfAbove = env.above != nullptr ? env.above->getLeftPosition() : nullptr;
         env.reusedFacts = pos.getOffset() == 0 ? env.above : nullptr;
         break;
@@ -129,16 +129,16 @@ Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, Encoding
 
 void Encoding::encodeAllLeaves() {
     Statistics& stats = Statistics::getInstance();
-    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
+    const size_t currentExpansionIteration = _leaf_positions.front()->getCreationIteration();
 
-    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFacts().count());
+    Log::i("Collected %i relevant facts at this expansion iteration\n", _analysis.getRelevantFacts().count());
     Log::i("Encoding ...\n");
 
-    // Determine whether the whole frontier consists of freshly expanded leaves
+    // Determine whether the whole frontier consists of newly created leaves
     // (BFS expansion) or contains carried leaves (partial SibylSat expansion).
     bool expandedAllLeaves = true;
     for (Position* leaf : _leaf_positions) {
-        if (!leaf->isFreshInCurrentLayer()) {
+        if (!leaf->wasCreatedInLastExpansion()) {
             expandedAllLeaves = false;
             break;
         }
@@ -148,7 +148,7 @@ void Encoding::encodeAllLeaves() {
     if (expandedAllLeaves) {
         // BFS: every leaf of the new frontier is fresh and gets fully encoded.
         for (Position* leaf : _leaf_positions) {
-            Log::v("- Position (%i,%i)\n", currentDepth, leaf->getFrontierIndex());
+            Log::v("- Position (%i,%i)\n", currentExpansionIteration, leaf->getFrontierIndex());
             encode(*leaf);
         }
     } else {
@@ -159,14 +159,14 @@ void Encoding::encodeAllLeaves() {
         Log::i("New leaf count: %zu\n", _leaf_positions.size());
         for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
             Position* leaf = _leaf_positions[leafIndex];
-            if (leafIndex < _new_init_pos) {
+            if (leafIndex < _active_frontier_start) {
                 // Separate-tasks prefix: already encoded in a previous call.
                 continue;
             }
-            if (leaf->isFreshInCurrentLayer()) {
+            if (leaf->wasCreatedInLastExpansion()) {
                 encode(*leaf);
                 previousLeafWasExpanded = true;
-            } else if (leafIndex == _new_init_pos) {
+            } else if (leafIndex == _active_frontier_start) {
                 // First carried leaf after the prefix: (re-)collect its relevant facts.
                 encodeNewRelevantsFacts(*leaf);
                 previousLeafWasExpanded = false;
@@ -195,14 +195,14 @@ void Encoding::encodeAllLeaves() {
     if (!expandedAllLeaves) {
         FlatHashSet<Position*> expandedOldLeaves;
         for (Position* leaf : _leaf_positions) {
-            if (!leaf->isFreshInCurrentLayer()) continue;
+            if (!leaf->wasCreatedInLastExpansion()) continue;
             Position* parent = leaf->getParentPosition();
             if (parent != nullptr && parent != _root_position && !expandedOldLeaves.count(parent)) {
                 expandedOldLeaves.insert(parent);
             }
         }
         for (Position* node : expandedOldLeaves) {
-            Log::v("Freeing position %zu of depth %zu\n", node->getPositionIndex(), node->getLayerIndex());
+            Log::v("Freeing position %zu created in iteration %zu\n", node->getPositionId(), node->getCreationIteration());
             node->clearFullPos();
         }
         for (Position* leaf : _leaf_positions) {
@@ -212,7 +212,7 @@ void Encoding::encodeAllLeaves() {
 }
 
 void Encoding::encode(Position& newPos) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::FreshLeaf);
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::NewlyCreatedLeaf);
 
     _stats.beginPosition();
     
@@ -232,7 +232,7 @@ void Encoding::encode(Position& newPos) {
     encodeQFactSemantics(newPos, env);
 
     // Effects of "old" actions to the left
-    if (newPos.getFrontierIndex() != 0 && newPos.getFrontierIndex() != _new_init_pos && env.left != nullptr) {
+    if (newPos.getFrontierIndex() != 0 && newPos.getFrontierIndex() != _active_frontier_start && env.left != nullptr) {
         // Encode frame axioms for the left position
         encodeActionEffects(newPos, *env.left);
     }
@@ -332,13 +332,13 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
     _stats.begin(STAGE_FACTVARENCODING);
 
     // Reuse ground fact variables from above position
-    if (newPos.getLayerIndex() > 0 && env.reusedFacts != nullptr) {
+    if (newPos.getCreationIteration() > 0 && env.reusedFacts != nullptr) {
         for (const auto& [factSig, factVar] : env.reusedFacts->getVariableTable(VarType::FACT)) {
             if (!_htn.hasQConstants(factSig)) newPos.setVariable(VarType::FACT, factSig, factVar);
         }
     }
 
-    if (newPos.getFrontierIndex() == 0 || newPos.getFrontierIndex() == _new_init_pos) {
+    if (newPos.getFrontierIndex() == 0 || newPos.getFrontierIndex() == _active_frontier_start) {
         _new_relevants_facts_to_encode.clear();
         encodeInitialRelevantFacts(newPos, _use_sibylsat_expansion);
     } else {
@@ -655,7 +655,7 @@ void Encoding::encodeSubstitutionVars(const USignature& opSig, int opVar, int ar
     _new_q_constants.insert(arg);
 
     std::vector<int> substitutionVars;
-    //Log::d("INITSUBVARS @(%i,%i) %s:%s [ ", pos.getLayerIndex(), pos.getPositionIndex(), TOSTR(opSig), TOSTR(arg));
+    //Log::d("INITSUBVARS @(%i,%i) %s:%s [ ", pos.getCreationIteration(), pos.getPositionId(), TOSTR(opSig), TOSTR(arg));
     for (int c : _htn.popOperationDependentDomainOfQConstant(arg, opSig)) {
 
         assert(!_htn.isVariable(c));
@@ -754,7 +754,6 @@ void Encoding::encodeQFactSemantics(Position& newPos, const Encoding::EncodingEn
                 
                 // If the substitution is chosen,
                 // the q-fact and the corresponding actual fact are equivalent
-                //Log::v("QFACTSEM (%i,%i) %s -> %s\n", _layer_idx, _pos, TOSTR(qfactSig), TOSTR(decFactSig));
                 for (const int& varSubst : substitutionVars) {
                     _sat.appendClause(-varSubst);
                 }
@@ -1361,7 +1360,7 @@ const USignature Encoding::getOpHoldingAt(const Position& position) {
 
 void Encoding::printStatementsAtPosition(const Position& newPos) {
     Position* left = getLeftPosition(newPos);
-    Log::i("STATE AT (%i,%i)\n", (int) newPos.getLayerIndex(), (int) newPos.getPositionIndex());
+    Log::i("STATE AT (%i,%i)\n", (int) newPos.getCreationIteration(), (int) newPos.getPositionId());
     for (const auto& [sig, aVar] : newPos.getVariableTable(VarType::FACT)) {
         if (!_htn.isFullyGround(sig) || _htn.hasQConstants(sig)) continue; // skip non-ground facts)
         if (!_sat.holds(aVar)) continue; // skip false facts
@@ -1404,7 +1403,7 @@ const USignature Encoding::getDecodingOpHoldingAt(const Position& position) {
             }
 
             if (numSubstitutions == 0) {
-                Log::v("(%i,%i) No substitutions for arg %s of %s\n", (int) position.getLayerIndex(), (int) position.getPositionIndex(), TOSTR(arg), TOSTR(origSig));
+                Log::v("(%i,%i) No substitutions for arg %s of %s\n", (int) position.getCreationIteration(), (int) position.getPositionId(), TOSTR(arg), TOSTR(origSig));
                 return Sig::NONE_SIG;
             }
             assert(numSubstitutions == 1 || Log::e("%i substitutions for arg %s of %s\n", numSubstitutions, TOSTR(arg), TOSTR(origSig)));

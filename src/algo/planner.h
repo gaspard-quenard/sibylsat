@@ -18,7 +18,7 @@ typedef std::pair<std::vector<PlanItem>, std::vector<PlanItem>> Plan;
  * How the search tree is grown each iteration.
  */
 enum class ExpansionMode {
-    BFS,      // Expand every leaf of the current layer.
+    BFS,      // Expand every leaf of the current frontier.
     SIBYLSAT  // Expand only the leaves selected from the last abstract plan.
 };
 

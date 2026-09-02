@@ -76,14 +76,14 @@ public:
     void addAssumptionsForSolvedTasks(Encoding &enc);
 
     /**
-     * Given the current layer size, compute the position until which to add assumptions.
+     * Given the current frontier size, compute the position until which to add assumptions.
      *
-     * @param layerSize The size of the current layer.
+     * @param frontierSize The size of the current frontier.
      * @return The computed index (assumptions_until).
      */
-    int getAssumptionsUntil(int layerSize) const;
+    int getAssumptionsUntil(int frontierSize) const;
 
-    int getPositionsDone(int layerSize) const {
+    int getPositionsDone() const {
         return _num_pos_done;
     }
 
@@ -97,7 +97,6 @@ public:
      *
      * @param enc The encoding object (to extract the snapshot).
      * @param leafPositions The current ordered leaf positions.
-     * @param depth The current search depth.
      * @return True if all initial tasks have been solved; false otherwise.
      */
     bool updateAfterSolved(Encoding &enc, const std::vector<Position*> &leafPositions);
@@ -117,7 +116,7 @@ public:
      * @param enc The encoding object.
      * @return True if a abstract plan was eventually found; false otherwise.
      */
-    bool handleAbstractPlanFailure(Encoding &enc, int layerSize);
+    bool handleAbstractPlanFailure(Encoding &enc);
 
     /**
      * @return True if the scheduler indicates that the full planner must be restarted.

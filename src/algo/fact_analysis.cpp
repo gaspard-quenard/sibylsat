@@ -27,8 +27,8 @@ FactAnalysis::FactAnalysis(HtnInstance& htn)
     _htn.setGroundPosAndNegFacts(positiveFacts, exclusiveNegativeFacts);
 
     const int numGroundFacts = _htn.getNumPositiveGroundFacts();
-    _pos_layer_facts = BitVec(numGroundFacts);
-    _neg_layer_facts = BitVec(numGroundFacts);
+    _reachable_pos_facts = BitVec(numGroundFacts);
+    _reachable_neg_facts = BitVec(numGroundFacts);
     _init_state_pos = BitVec(numGroundFacts);
     _init_state_neg = BitVec(numGroundFacts);
     _relevant_facts = BitVec(numGroundFacts);

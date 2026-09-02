@@ -61,29 +61,26 @@ public:
 
 struct Position {
 private:
-    // Stable identifiers assigned once at creation. _layer_idx is the depth at
-    // which the position was created; _pos is a globally unique monotonic id
-    // (used for q-constant naming and logging only -- never a frontier index).
-    size_t _layer_idx = -1;
-    size_t _pos = _next_pos_id++;
+    // A position keeps the expansion iteration in which it was created and a
+    // globally unique id. Neither value represents its current frontier index.
+    size_t _creation_iteration = -1;
+    size_t _position_id = _next_position_id++;
     size_t _offset = 0;
 
     Position* _parent_position = nullptr;
     std::vector<Position*> _children_positions;
-    Position* _left_position = nullptr;  // Cached previous leaf (set per layer).
+    Position* _left_position = nullptr;  // Cached left neighbour from the relevant frontier.
 
-    // Per-layer ordering of this leaf within the current frontier.
-    // Unlike _pos (a stable unique id), this is re-assigned each layer and
-    // used by the encoding to know "which leaf is the Nth leaf of the layer".
+    // Ordering of this leaf within the current frontier. Unlike _position_id,
+    // this is reassigned after every expansion.
     size_t _frontier_index = -1;
 
-    // True if this position was newly created by the last expandLeaves call.
-    // Carried leaves (re-used from a previous layer) are false. Lets the
-    // encoding decide between full and incremental encoding without a result struct.
-    bool _fresh_in_current_layer = false;
+    // Carried leaves are false. The encoding uses this to choose between full
+    // and incremental encoding.
+    bool _created_in_last_expansion = false;
 
     // Running counter for globally unique position ids.
-    static size_t _next_pos_id;
+    static size_t _next_position_id;
 
     USigSet _actions;
     USigSet _reductions;
@@ -119,7 +116,7 @@ private:
 public:
 
     Position();
-    void setPos(size_t layerIdx);
+    void setCreationIteration(size_t iteration);
     void setParentPosition(Position* parent);
     Position* getParentPosition() const { return _parent_position; }
     const std::vector<Position*>& getChildrenPositions() const { return _children_positions; }
@@ -175,12 +172,12 @@ public:
     NodeHashMap<USignature, USigSet, USignatureHasher>& getPredecessors();
     const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& getExpansionSubstitutions() const;
 
-    size_t getLayerIndex() const;
-    size_t getPositionIndex() const;
+    size_t getCreationIteration() const;
+    size_t getPositionId() const;
     size_t getFrontierIndex() const { return _frontier_index; }
     void setFrontierIndex(size_t idx) { _frontier_index = idx; }
-    bool isFreshInCurrentLayer() const { return _fresh_in_current_layer; }
-    void setFreshInCurrentLayer(bool fresh) { _fresh_in_current_layer = fresh; }
+    bool wasCreatedInLastExpansion() const { return _created_in_last_expansion; }
+    void setCreatedInLastExpansion(bool created) { _created_in_last_expansion = created; }
     size_t getOffset() const;
     void clearSubstitutions() {
         _substitution_constraints.clear();
@@ -194,10 +191,10 @@ public:
         auto it = vars.find(sig);
         if (it == vars.end()) {
             // introduce a new variable
-            assert(!VariableDomain::isLocked() || Log::e("Unknown variable %s queried!\n", VariableDomain::varName(_layer_idx, _pos, sig).c_str()));
+            assert(!VariableDomain::isLocked() || Log::e("Unknown variable %s queried!\n", VariableDomain::varName(_creation_iteration, _position_id, sig).c_str()));
             int var = VariableDomain::nextVar();
             vars[sig] = var;
-            VariableDomain::printVar(var, _layer_idx, _pos, sig);
+            VariableDomain::printVar(var, _creation_iteration, _position_id, sig);
             return var;
         } else return it->second;
     }
@@ -219,7 +216,7 @@ public:
 
     inline int getVariable(VarType type, const USignature& sig) const {
         auto& vars = type == OP ? _op_variables : _fact_variables;
-        assert(vars.count(sig) || Log::e("Unknown variable %s queried!\n", VariableDomain::varName(_layer_idx, _pos, sig).c_str()));
+        assert(vars.count(sig) || Log::e("Unknown variable %s queried!\n", VariableDomain::varName(_creation_iteration, _position_id, sig).c_str()));
         return vars.at(sig);
     }
 

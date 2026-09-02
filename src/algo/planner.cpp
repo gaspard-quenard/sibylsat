@@ -125,7 +125,7 @@ void Planner::expandAndEncode(SearchMode mode) {
 
     // The separate-tasks boundary tells the encoding which carried leaves were
     // already encoded in a previous call (so they must be skipped).
-    _encoding.setNewInitPos(_tree_expander.getExpansionStartIndex());
+    _encoding.setActiveFrontierStart(_tree_expander.getActiveFrontierStart());
 
     // Encode the new frontier before querying the SAT solver on it.
     _encoding.encodeAllLeaves();
@@ -152,8 +152,8 @@ bool Planner::selectNextLeavesToDevelop(SearchMode mode) {
 }
 
 int Planner::outputSolution() {
-    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
-    Log::i("Found a solution at depth %i.\n", (int) currentDepth);
+    const size_t currentExpansionIteration = _leaf_positions.front()->getCreationIteration();
+    Log::i("Found a solution after %i expansion iterations.\n", (int) currentExpansionIteration);
     if (_optimization_factor != 0) {
         optimizeCurrentPlan();
     }
@@ -237,8 +237,8 @@ bool Planner::solveWithSeparateTasks() {
             _separate_tasks_scheduler->getReachableStateNegFactsAfterTasksAccomplished()
         );
         // Tell the expander where to start the next expansion (boundary position).
-        _tree_expander.setExpansionBoundary(
-            _separate_tasks_scheduler->getPositionsDone(_leaf_positions.size())
+        _tree_expander.setActiveFrontierStart(
+            _separate_tasks_scheduler->getPositionsDone()
         );
     }
 
@@ -254,7 +254,7 @@ bool Planner::findAbstractPlanInSearchTree() {
 
     bool foundAbstractPlan = _encoding.solve() == 10;
     if (!foundAbstractPlan && _separate_tasks) {
-        foundAbstractPlan = _separate_tasks_scheduler->handleAbstractPlanFailure(_encoding, _leaf_positions.size());
+        foundAbstractPlan = _separate_tasks_scheduler->handleAbstractPlanFailure(_encoding);
     }
 
     if (!foundAbstractPlan) {
@@ -271,7 +271,7 @@ bool Planner::findAbstractPlanInSearchTree() {
 }
 
 void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>& abstractPlan, int leafLimit) {
-    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
+    const size_t currentExpansionIteration = _leaf_positions.front()->getCreationIteration();
     _sibylsat_nodes_to_develop.clear();
     const size_t maxLeafIndex =
             leafLimit < 0 ? _leaf_positions.size() : std::min(_leaf_positions.size(), static_cast<size_t>(leafLimit));
@@ -281,7 +281,8 @@ void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>
             continue;
         }
         if (_htn_instance.isReduction(item.reduction)) {
-            Log::d("  Reduction %s is true at depth %i, leaf %zu\n", TOSTR(item.reduction), currentDepth, leafIndex);
+            Log::d("  Reduction %s is true at expansion iteration %i, leaf %zu\n",
+                    TOSTR(item.reduction), currentExpansionIteration, leafIndex);
             _sibylsat_nodes_to_develop.push_back(_leaf_positions[leafIndex]);
         }
     }
@@ -291,7 +292,7 @@ void Planner::optimizeCurrentPlan() {
     PlanOptimizer optimizer(_htn_instance, _leaf_positions, _encoding);
     Plan optimizedPlan;
     const int upperBound = _leaf_positions.empty() ? 0 : static_cast<int>(_leaf_positions.size()) - 1;
-    Log::i("Optimize the current depth with plan length upper bound %d\n", upperBound);
+    Log::i("Optimize the current frontier with plan length upper bound %d\n", upperBound);
     optimizer.optimizePlan(upperBound, optimizedPlan, PlanOptimizer::ConstraintAddition::TRANSIENT);
 }
 

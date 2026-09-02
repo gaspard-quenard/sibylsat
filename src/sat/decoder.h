@@ -48,7 +48,7 @@ public:
 
                 chosenActions++;
                 
-                Log::d("PLANDBG %i,%i A %s\n", (int) leaf.getLayerIndex(), (int) pos, TOSTR(aSig));
+                Log::d("PLANDBG %i,%i A %s\n", (int) leaf.getCreationIteration(), (int) pos, TOSTR(aSig));
 
                 // Decode q constants
                 USignature aDec = getDecodedQOp(leaf, aSig);
@@ -80,7 +80,7 @@ public:
 
     bool value(VarType type, const Position& pos, const USignature& sig) {
         int v = _vars.getVariable(type, pos, sig);
-        Log::d("VAL %s@(%i,%i)=%i %i\n", TOSTR(sig), (int) pos.getLayerIndex(), (int) pos.getPositionIndex(), v, _sat.holds(v));
+        Log::d("VAL %s@(%i,%i)=%i %i\n", TOSTR(sig), (int) pos.getCreationIteration(), (int) pos.getPositionId(), v, _sat.holds(v));
         return _sat.holds(v);
     }
 
@@ -109,7 +109,7 @@ public:
                 }
 
                 if (numSubstitutions == 0) {
-                    Log::v("(%i,%i) No substitutions for arg %s of %s\n", (int) position.getLayerIndex(), (int) position.getPositionIndex(), TOSTR(arg), TOSTR(origSig));
+                    Log::v("(%i,%i) No substitutions for arg %s of %s\n", (int) position.getCreationIteration(), (int) position.getPositionId(), TOSTR(arg), TOSTR(origSig));
                     return Sig::NONE_SIG;
                 }
                 assert(numSubstitutions == 1 || Log::e("%i substitutions for arg %s of %s\n", numSubstitutions, TOSTR(arg), TOSTR(origSig)));
@@ -196,7 +196,7 @@ public:
                 v = 0; // Set the id to 0 for the root
             }
 
-            Log::d("[%i] %s:%s @ (%i,%i)\n", v, TOSTR(rDecoded.getTaskSignature()), TOSTR(decRSig), (int) position.getLayerIndex(), (int) position.getPositionIndex());
+            Log::d("[%i] %s:%s @ (%i,%i)\n", v, TOSTR(rDecoded.getTaskSignature()), TOSTR(decRSig), (int) position.getCreationIteration(), (int) position.getPositionId());
 
             hierarchy.push_back(PlanItem(v, rDecoded.getTaskSignature(), decRSig, std::vector<int>()));
             size_t itemIndex = hierarchy.size() - 1;
@@ -204,7 +204,7 @@ public:
             const auto& children = position.getChildrenPositions();
             size_t numSubtasks = r.getSubtasks().size();
             assert(children.size() >= numSubtasks || Log::e("Plan error: Missing child positions for %s at %i,%i!\n",
-                    TOSTR(decRSig), (int) position.getLayerIndex(), (int) position.getPositionIndex()));
+                    TOSTR(decRSig), (int) position.getCreationIteration(), (int) position.getPositionId()));
 
             for (size_t childIdx = 0; childIdx < numSubtasks && childIdx < children.size(); childIdx++) {
                 Position* childPosition = children[childIdx];
@@ -222,12 +222,12 @@ public:
                     Log::d("    -> [%i] %s\n", childId, TOSTR(nextActionOrReductionTrue));
                     recursiveCreateHierarchy(classicalPlan, hierarchy, *childPosition);
                 } else {
-                    assert(false || Log::e("Plan error: Invalid action/reduction %s at %i,%i!\n", TOSTR(nextActionOrReductionTrue), (int) childPosition->getLayerIndex(), (int) childPosition->getPositionIndex()));
+                    assert(false || Log::e("Plan error: Invalid action/reduction %s at %i,%i!\n", TOSTR(nextActionOrReductionTrue), (int) childPosition->getCreationIteration(), (int) childPosition->getPositionId()));
                 }
             }
 
         } else {
-            Log::e("Plan error: Invalid action/reduction id=%i at %i,%i!\n", actionOrReductionTrue._name_id, (int) position.getLayerIndex(), (int) position.getPositionIndex());
+            Log::e("Plan error: Invalid action/reduction id=%i at %i,%i!\n", actionOrReductionTrue._name_id, (int) position.getCreationIteration(), (int) position.getPositionId());
             assert(actionOrReductionTrue._name_id != -1);
         }
     }

@@ -15,8 +15,8 @@ private:
 
     BitVec _init_state_pos;
     BitVec _init_state_neg;
-    BitVec _pos_layer_facts;
-    BitVec _neg_layer_facts;
+    BitVec _reachable_pos_facts;
+    BitVec _reachable_neg_facts;
     BitVec _relevant_facts;
     int _cutoff_neg_facts;
 
@@ -50,8 +50,8 @@ public:
 
     void resetReachability() {
         // Reset the bit vectors
-        _pos_layer_facts = _init_state_pos;
-        _neg_layer_facts = _init_state_neg;
+        _reachable_pos_facts = _init_state_pos;
+        _reachable_neg_facts = _init_state_neg;
     }
 
     // Update the "initial state" used by resetReachability(). Call this when the effective
@@ -69,14 +69,14 @@ public:
     // Reachability API
     bool isReachable(const int predId, bool negated) {
         if (negated) {
-            return _neg_layer_facts.test(predId);
+            return _reachable_neg_facts.test(predId);
         } else {
-            return predId < _cutoff_neg_facts && _pos_layer_facts.test(predId);
+            return predId < _cutoff_neg_facts && _reachable_pos_facts.test(predId);
         }
     }
 
     const BitVec& getReachableFacts(bool negated) {
-        return negated ? _neg_layer_facts : _pos_layer_facts;
+        return negated ? _reachable_neg_facts : _reachable_pos_facts;
     }
 
     const BitVec& getInitialFacts(bool negated) const {
@@ -92,17 +92,17 @@ public:
 
     void addReachableFact(const int predId, bool negated) {
         if (negated) {
-            _neg_layer_facts.set(predId);
+            _reachable_neg_facts.set(predId);
         } else if (predId < _cutoff_neg_facts) {
-            _pos_layer_facts.set(predId);
+            _reachable_pos_facts.set(predId);
         }
     }
 
     void addMultipleReachableFacts(const BitVec& facts, bool negated) {
         if (negated) {
-            _neg_layer_facts.or_with(facts);
+            _reachable_neg_facts.or_with(facts);
         } else {
-            _pos_layer_facts.or_with(facts);
+            _reachable_pos_facts.or_with(facts);
         }
     }
 
@@ -112,9 +112,9 @@ public:
 
     void removeInvariantGroundFacts(BitVec& facts, bool negated) {
         if (negated) {
-            facts.and_with(_pos_layer_facts);
+            facts.and_with(_reachable_pos_facts);
         } else {
-            facts.and_with(_neg_layer_facts);
+            facts.and_with(_reachable_neg_facts);
         }
     }
 
@@ -163,7 +163,7 @@ public:
             // Log::i("Sig %s can be grounded to %s\n", TOSTR(sig), TOSTR(_htn.getGroundPositiveFact(predId)));
         // }
         // If any of the instantiations is reachable, return true
-        const BitVec& facts = negated ? _neg_layer_facts : _pos_layer_facts;
+        const BitVec& facts = negated ? _reachable_neg_facts : _reachable_pos_facts;
         result.and_with(facts);
         return result.any();
         // }
@@ -205,10 +205,10 @@ public:
 
     void printReachableFacts() {
         Log::i("Reachable facts:\n");
-        for (int predId: _pos_layer_facts) {
+        for (int predId: _reachable_pos_facts) {
             Log::i("  +%s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
         }
-        for (int predId: _neg_layer_facts) {
+        for (int predId: _reachable_neg_facts) {
             Log::i("  -%s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
         }
     }

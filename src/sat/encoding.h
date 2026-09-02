@@ -27,7 +27,7 @@ private:
     VariableProvider _vars;
     Decoder _decoder;
 
-    size_t _new_init_pos = 0;
+    size_t _active_frontier_start = 0;
 
     NodeHashSet<Substitution, Substitution::Hasher> _forbidden_substitutions;
     FlatHashSet<int> _new_fact_vars;
@@ -64,9 +64,9 @@ public:
     void encode(Position& pos);
     /**
      * Encode the whole current frontier. Freshly expanded leaves are fully
-     * encoded; carried leaves (from a previous layer) get their effects and
+     * encoded; carried leaves (from the previous frontier) get their effects and
      * frame axioms encoded incrementally. Leaves in the separate-tasks prefix
-     * (frontier index < _new_init_pos) are skipped as they were already encoded.
+     * (frontier index < _active_frontier_start) are skipped as already encoded.
      */
     void encodeAllLeaves();
     void addAssumptionsPrimPlan(bool permanent = false, int assumptions_until = -1);
@@ -116,8 +116,8 @@ public:
         }
     }
 
-    void setNewInitPos(size_t newInitPos) {
-        _new_init_pos = newInitPos;
+    void setActiveFrontierStart(size_t index) {
+        _active_frontier_start = index;
     }
 
 private:
@@ -138,11 +138,11 @@ private:
         bool hasDecodings(const USignature& fact, bool negated) const;
         const USigSet& getDecodings(const USignature& fact, bool negated) const;
     };
-    // How a leaf is positioned relative to the previous layer, which determines
+    // How a leaf is positioned relative to the previous frontier, which determines
     // which facts/effects can be reused vs. must be re-encoded.
     enum class EncodingContext {
-        FreshLeaf,              // A newly expanded leaf (new Position object).
-        CarriedLeaf,            // A leaf carried over from the previous layer.
+        NewlyCreatedLeaf,       // A Position created by the last expansion.
+        CarriedLeaf,            // A leaf carried over from the previous frontier.
         CarriedLeafReuseSelf    // A carried leaf that reuses its own fact variables.
     };
 

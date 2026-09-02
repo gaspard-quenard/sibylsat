@@ -49,13 +49,13 @@ void TreeExpander::createInitialLeaves() {
 
     const int initSize = 2;
     Log::i("Creating initial leaves of size %i\n", initSize);
-    _depth = 0;
+    _expansion_iteration = 0;
 
     _root_position = new Position();
-    _root_position->setPos(-1);
+    _root_position->setCreationIteration(-1);
 
     Position* rootReductionPosition = new Position();
-    rootReductionPosition->setPos(_depth);
+    rootReductionPosition->setCreationIteration(_expansion_iteration);
     rootReductionPosition->setParentPosition(_root_position);
     rootReductionPosition->setLeftPosition(nullptr);
 
@@ -66,7 +66,7 @@ void TreeExpander::createInitialLeaves() {
     for (size_t i = 0; i < _leaf_positions.size(); i++) {
         _leaf_positions[i]->setFrontierIndex(i);
         _leaf_positions[i]->setLeftPosition(i > 0 ? _leaf_positions[i - 1] : nullptr);
-        _leaf_positions[i]->setFreshInCurrentLayer(true);
+        _leaf_positions[i]->setCreatedInLastExpansion(true);
     }
 
     /***** DEPTH 0, POSITION 0 ******/
@@ -97,7 +97,7 @@ void TreeExpander::createInitialLeaves() {
 }
 
 void TreeExpander::printStatistics() const {
-    Log::i("# number of depths: %zu\n", _depth + 1);
+    Log::i("# expansion iterations: %zu\n", _expansion_iteration + 1);
     Log::i("# instantiated positions: %i\n", _num_instantiated_positions);
     Log::i("# instantiated actions: %i\n", _num_instantiated_actions);
     Log::i("# instantiated reductions: %i\n", _num_instantiated_reductions);
@@ -119,24 +119,24 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
         nextLeafCount += expansionSizes[leafIndex];
     }
 
-    _depth++;
+    _expansion_iteration++;
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
-    // All leaves of the new frontier start as "not fresh"; expandLeaf marks
-    // newly created positions as fresh so the encoding can tell them apart.
+    // Mark positions carried from the previous frontier before creating the
+    // replacement frontier.
     for (Position* leaf : currentLeaves) {
-        leaf->setFreshInCurrentLayer(false);
+        leaf->setCreatedInLastExpansion(false);
     }
 
     _stats.beginTiming(TimingStage::EXPANSION);
     _analysis.resetReachability();
 
-    // Leaves before _expansion_start_index were already solved in a previous SAT call and
-    // are carried into the new layer unchanged.
-    const size_t carriedPrefixSize = _expansion_start_index;
+    // Leaves before _active_frontier_start were already solved in a previous SAT call and
+    // are carried into the new frontier unchanged.
+    const size_t carriedPrefixSize = _active_frontier_start;
     if (carriedPrefixSize > 0) {
-        Log::i("Carrying %zu already-solved leaf positions into the new layer\n", carriedPrefixSize);
+        Log::i("Carrying %zu already-solved leaf positions into the new frontier\n", carriedPrefixSize);
         for (size_t leafIndex = 0; leafIndex < carriedPrefixSize; leafIndex++) {
             carryLeaf(*currentLeaves[leafIndex]);
         }
@@ -166,7 +166,7 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
 void TreeExpander::expandLeaf(Position& parent, size_t expansionSize) {
     for (size_t childIndex = 0; childIndex < expansionSize; childIndex++) {
         Position* child = new Position();
-        child->setFreshInCurrentLayer(true);
+        child->setCreatedInLastExpansion(true);
         Position* left = _leaf_positions.empty() ? nullptr : _leaf_positions.back();
         _leaf_positions.push_back(child);
         createNextPosition(*child, &parent, left);
@@ -187,7 +187,7 @@ void TreeExpander::carryLeaf(Position& leaf) {
 }
 
 void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left) {
-    newPos.setPos(_depth);
+    newPos.setCreationIteration(_expansion_iteration);
     if (parent != nullptr) {
         newPos.setParentPosition(parent);
     }
@@ -580,7 +580,7 @@ void TreeExpander::propagateActions(Position& newPos, Position& parent) {
 
         if (!valid) {
             Log::i("Retroactively prune action %s@(%i,%i): no children at offset %i\n",
-                TOSTR(aSig), parent.getLayerIndex(), parent.getPositionIndex(), offset);
+                TOSTR(aSig), parent.getCreationIteration(), parent.getPositionId(), offset);
             actionsToPrune.push_back(aSig);
         }
     }
@@ -681,7 +681,7 @@ void TreeExpander::propagateReductions(Position& newPos, Position& parent) {
 
     for (const auto& rSig : reductionsWithNoChildren) {
         Log::i("Retroactively prune reduction %s@(%i,%i): no children at offset %i\n", 
-                    TOSTR(rSig), parent.getLayerIndex(), parent.getPositionIndex(), offset);
+                    TOSTR(rSig), parent.getCreationIteration(), parent.getPositionId(), offset);
         assert(_pruning != nullptr);
         _pruning->prune(rSig, parent);
     }
@@ -699,8 +699,8 @@ std::vector<USignature> TreeExpander::instantiateAllActionsOfTask(Position& pos,
     action = _htn.replaceVariablesWithQConstants(
         action,
         _analysis.getReducedArgumentDomains(action),
-        pos.getLayerIndex(),
-        pos.getPositionIndex());
+        pos.getCreationIteration(),
+        pos.getPositionId());
 
     action.removeInconsistentEffects();
 
@@ -760,7 +760,7 @@ std::optional<Reduction> TreeExpander::createValidReduction(Position& pos, const
 
     Reduction red = _htn.toReduction(sig._name_id, sig._args);
     auto domains = _analysis.getReducedArgumentDomains(red);
-    red = _htn.replaceVariablesWithQConstants(red, domains, pos.getLayerIndex(), pos.getPositionIndex());
+    red = _htn.replaceVariablesWithQConstants(red, domains, pos.getCreationIteration(), pos.getPositionId());
 
     bool isValid = true;
     if (task._name_id >= 0 && red.getTaskSignature() != task) isValid = false;

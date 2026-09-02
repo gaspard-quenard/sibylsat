@@ -54,8 +54,8 @@ void SeparateTasksScheduler::addAssumptionsForSolvedTasks(Encoding &enc) {
     }
 }
 
-int SeparateTasksScheduler::getAssumptionsUntil(int layer_size) const {
-    return layer_size - _init_task_network_size - 1 + _current_task_index;
+int SeparateTasksScheduler::getAssumptionsUntil(int frontierSize) const {
+    return frontierSize - _init_task_network_size - 1 + _current_task_index;
 }
 
 bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<Position*> &leafPositions) {
@@ -195,7 +195,8 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                     int varAction = leaf.getVariableOrZero(VarType::OP, aSig);
                     int varPosPrecondition = leaf.getVariableOrZero(VarType::FACT, posPrecondition._usig);
                     Log::e("Action %s (var: %d) has a positive precondition %s (var: %d) that is not satisfied in the reachable state after tasks accomplished\n", TOSTR(action.getSignature()), varAction, TOSTR(posPrecondition._usig), varPosPrecondition);
-                    Log::e("Leaf position: (%d,%d)\n", (int) leaf.getLayerIndex(), (int) leaf.getPositionIndex());
+                    Log::e("Leaf position: (%d,%d)\n",
+                            (int) leaf.getCreationIteration(), (int) leaf.getPositionId());
                     Log::e("This means that the action is not applicable in the reachable state after tasks accomplished\n");
                     Log::e("This is a bug in the planner, please report it\n");
                     exit(1);
@@ -256,7 +257,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
     int a = 0;
 }
 
-bool SeparateTasksScheduler::handleAbstractPlanFailure(Encoding &enc, int layerSize) 
+bool SeparateTasksScheduler::handleAbstractPlanFailure(Encoding &enc)
 {
     if (_add_tasks_as_clauses) {
         if (_settings_manager.get_setting(_domain_name, "independent_init_tasks") == true) {

@@ -3,7 +3,9 @@
 
 void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition mode) {
 
-    const int depth = _leaf_positions.empty() ? 0 : _leaf_positions.front()->getLayerIndex();
+    const int expansionIteration = _leaf_positions.empty()
+            ? 0
+            : _leaf_positions.front()->getCreationIteration();
     int currentPlanLength = upperBound;
     Log::v("PLO BEGIN %i\n", currentPlanLength);
 
@@ -147,8 +149,9 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
         Log::v("Position %i: Plan length bounds [%i,%i]\n", pos, minPlanLength, maxPlanLength);
     }
 
-    Log::i("Tightened initial plan length bounds at depth %i: [0,%zu] => [%i,%i]\n",
-            depth, _leaf_positions.empty() ? 0U : _leaf_positions.size() - 1, minPlanLength, maxPlanLength);
+    Log::i("Tightened initial plan length bounds at expansion iteration %i: [0,%zu] => [%i,%i]\n",
+            expansionIteration, _leaf_positions.empty() ? 0U : _leaf_positions.size() - 1,
+            minPlanLength, maxPlanLength);
     assert((int)planLengthVars.size() == maxPlanLength-minPlanLength+1 || Log::e("%i != %i-%i+1\n", planLengthVars.size(), maxPlanLength, minPlanLength));
     
     // Add primitiveness of all positions at the final layer

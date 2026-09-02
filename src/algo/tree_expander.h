@@ -25,8 +25,8 @@ private:
     RetroactivePruning* _pruning = nullptr;
     DominationResolver _domination_resolver;
     TDG* _tdg = nullptr;
-    size_t _depth = 0;
-    size_t _expansion_start_index = 0;
+    size_t _expansion_iteration = 0;
+    size_t _active_frontier_start = 0;
 
     const bool _use_sibylsat_expansion;
     const bool _nonprimitive_support;
@@ -44,9 +44,9 @@ public:
 
     // Set the index from which the next expandLeaves call should start expanding.
     // Leaves before this index are carried over as-is (already solved by the scheduler).
-    void setExpansionBoundary(size_t boundary) { _expansion_start_index = boundary; }
-    // The number of leaves carried over from the previous layer (the separate-tasks prefix).
-    size_t getExpansionStartIndex() const { return _expansion_start_index; }
+    void setActiveFrontierStart(size_t index) { _active_frontier_start = index; }
+    // The number of leaves carried over from the previous frontier (the separate-tasks prefix).
+    size_t getActiveFrontierStart() const { return _active_frontier_start; }
 
     void createInitialLeaves();
     /**

@@ -126,11 +126,11 @@ void OutgoingEffects::clear() {
 }
 
 // Starts at 1 so that id 0 is reserved for "no/default position" markers.
-size_t Position::_next_pos_id = 1;
+size_t Position::_next_position_id = 1;
 
-Position::Position() : _layer_idx(-1), _offset(0) {}
-void Position::setPos(size_t layerIdx) {
-    _layer_idx = layerIdx;
+Position::Position() : _creation_iteration(-1), _offset(0) {}
+void Position::setCreationIteration(size_t iteration) {
+    _creation_iteration = iteration;
 }
 void Position::setParentPosition(Position* parent) {
     if (_parent_position == parent) return;
@@ -202,15 +202,15 @@ const USigSet& Position::getQFactDecodings(const USignature& qFact, bool negated
 
 void Position::addAction(const USignature& action) {
     _actions.insert(action);
-    Log::d("+ACTION@(%i,%i) %s\n", _layer_idx, _pos, TOSTR(action));
+    Log::d("+ACTION@(%i,%i) %s\n", _creation_iteration, _position_id, TOSTR(action));
 }
 void Position::addAction(USignature&& action) {
-    Log::d("+ACTION@(%i,%i) %s\n", _layer_idx, _pos, TOSTR(action));
+    Log::d("+ACTION@(%i,%i) %s\n", _creation_iteration, _position_id, TOSTR(action));
     _actions.insert(std::move(action));
 }
 void Position::addReduction(const USignature& reduction) {
     _reductions.insert(reduction);
-    Log::d("+REDUCTION@(%i,%i) %s\n", _layer_idx, _pos, TOSTR(reduction));
+    Log::d("+REDUCTION@(%i,%i) %s\n", _creation_iteration, _position_id, TOSTR(reduction));
 }
 void Position::addExpansion(const USignature& parent, const USignature& child) {
     auto& set = _expansions[parent];
@@ -256,8 +256,8 @@ bool Position::hasQFact(const USignature& fact) const {return _qfacts.count(fact
 bool Position::hasAction(const USignature& action) const {return _actions.count(action);}
 bool Position::hasReduction(const USignature& red) const {return _reductions.count(red);}
 
-size_t Position::getLayerIndex() const {return _layer_idx;}
-size_t Position::getPositionIndex() const {return _pos;}
+size_t Position::getCreationIteration() const {return _creation_iteration;}
+size_t Position::getPositionId() const {return _position_id;}
 size_t Position::getOffset() const {return _offset;}
 
 const USigSet& Position::getQFacts() const {return _qfacts;}

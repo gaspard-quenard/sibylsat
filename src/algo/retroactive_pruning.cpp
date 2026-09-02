@@ -34,7 +34,7 @@ void RetroactivePruning::prune(const USignature& op, Position& position) {
     while (!openOps.empty()) {
         PositionedOp current = *openOps.begin();
         openOps.erase(current);
-        Log::d("PRUNE_UP %s@(%zu,%zu)\n", TOSTR(current.usig), current.position->getLayerIndex(), current.position->getPositionIndex());
+        Log::d("PRUNE_UP %s@(%zu,%zu)\n", TOSTR(current.usig), current.position->getCreationIteration(), current.position->getPositionId());
 
         Position* currentPosition = current.position;
         assert(currentPosition->hasAction(current.usig) || currentPosition->hasReduction(current.usig));
@@ -50,7 +50,7 @@ void RetroactivePruning::prune(const USignature& op, Position& position) {
         assert(currentPosition->getPredecessors().count(current.usig) || Log::e("%s has no predecessors!\n", TOSTR(current.usig)));
         for (const auto& parent : currentPosition->getPredecessors().at(current.usig)) {
             PositionedOp parentOp{parentPosition, parent};
-            assert(parentPosition->hasAction(parent) || parentPosition->hasReduction(parent) || Log::e("%s@(%zu,%zu)\n", TOSTR(parent), parentPosition->getLayerIndex(), parentPosition->getPositionIndex()));
+            assert(parentPosition->hasAction(parent) || parentPosition->hasReduction(parent) || Log::e("%s@(%zu,%zu)\n", TOSTR(parent), parentPosition->getCreationIteration(), parentPosition->getPositionId()));
             const auto& siblings = currentPosition->getExpansions().at(parent);
 
             // Mark op for removal from expansion of the parent
@@ -74,7 +74,7 @@ void RetroactivePruning::prune(const USignature& op, Position& position) {
         PositionedOp current = *opsToRemove.begin();
         opsToRemove.erase(current);
         Position* currentPosition = current.position;
-        Log::d("PRUNE_DOWN %s@(%zu,%zu)\n", TOSTR(current.usig), currentPosition->getLayerIndex(), currentPosition->getPositionIndex());
+        Log::d("PRUNE_DOWN %s@(%zu,%zu)\n", TOSTR(current.usig), currentPosition->getCreationIteration(), currentPosition->getPositionId());
         assert(currentPosition->hasAction(current.usig) || currentPosition->hasReduction(current.usig));
 
         // Visit all tree children and mark those that became impossible.
@@ -92,12 +92,12 @@ void RetroactivePruning::prune(const USignature& op, Position& position) {
                     Log::d("PRUNE %i pred left for %s@(%i,%i)\n",
                         below.getPredecessors().at(child).size()-1,
                         TOSTR(child),
-                        (int) below.getLayerIndex(),
-                        (int) below.getPositionIndex());
+                        (int) below.getCreationIteration(),
+                        (int) below.getPositionId());
                     below.getPredecessors().at(child).erase(current.usig);
                 }
             } else {
-                Log::d("PRUNE No expansions for %s @ (%i,%i)\n", TOSTR(current.usig), (int) below.getLayerIndex(), (int) below.getPositionIndex());
+                Log::d("PRUNE No expansions for %s @ (%i,%i)\n", TOSTR(current.usig), (int) below.getCreationIteration(), (int) below.getPositionId());
             }
         }
 
