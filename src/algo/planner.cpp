@@ -1,4 +1,3 @@
-
 #include <algorithm>
 #include <assert.h> 
 
@@ -6,6 +5,52 @@
 #include "util/log.h"
 #include "util/names.h"
 #include "sat/plan_optimizer.h"
+
+Planner::Planner(Parameters& params, HtnInstance& htn)
+        : _params(params),
+          _htn_instance(htn),
+          _tree_expander(_params, _htn_instance),
+          _root_position(_tree_expander.getRootPositionRef()),
+          _leaf_positions(_tree_expander.getLeafPositions()),
+          _analysis(_tree_expander.getAnalysis()),
+          _method_effects(_tree_expander.getMethodEffects()),
+          _encoding(_params, _htn_instance, _analysis, _root_position, _leaf_positions),
+          _pruning(std::make_unique<RetroactivePruning>(_encoding)),
+          _plan_writer(_htn_instance, _params),
+          _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
+          _optimal(_params.isNonzero("optimal")),
+          _separate_tasks(_params.isNonzero("separateTasks")
+                  && _htn_instance.getInitReduction().getSubtasks().size() > 1
+                  && _use_sibylsat_expansion
+                  && !_optimal),
+          _optimization_factor(_params.getFloatParam("of")) {
+    configure();
+}
+
+void Planner::configure() {
+    PreconditionInference::infer(_htn_instance, _method_effects,
+            PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
+    if (_htn_instance.getParams().isNonzero("mutex")) {
+        _htn_instance._sas_plus->cleanMutexGroupsWithPandaPiGrounderPreprocessingFacts(
+                _analysis.getGroundPosFacts());
+    }
+    if (_optimal) {
+        _tdg.emplace(_htn_instance);
+        _tree_expander.attachTDG(*_tdg);
+    }
+    _tree_expander.attachPruning(*_pruning);
+    if (_separate_tasks) {
+        _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn_instance);
+    }
+}
+
+SearchMode Planner::determineSearchMode() const {
+    return {
+        _use_sibylsat_expansion ? ExpansionMode::SIBYLSAT : ExpansionMode::BFS,
+        _optimal ? SolveMode::OPTIMAL : SolveMode::SATISFICING,
+        _separate_tasks
+    };
+}
 
 int Planner::findPlan() {
 
@@ -15,56 +60,98 @@ int Planner::findPlan() {
     // Build the initial search tree before entering the search loop.
     initializeSearchTree();
 
+    const SearchMode mode = determineSearchMode();
     const int maxIterations = _params.getIntParam("D");
-    bool solved = false;
 
-    if (_use_sibylsat_expansion) {
+    if (mode.expansion == ExpansionMode::SIBYLSAT) {
         // Only develop the leaf which contains the _top_method
         _sibylsat_nodes_to_develop.push_back(_leaf_positions[0]);
     }
 
-    // Main loop of the search. We keep expanding the search tree until we find a solution, or reach the maximum iteration limit
-    while (!solved) {
+    // Main loop of the search. We keep expanding the search tree until we find a solution,
+    // or reach the maximum iteration limit.
+    while (true) {
 
         iteration++;
         Log::i("Iteration %i.\n", iteration);
 
         if (maxIterations != 0 && iteration > maxIterations) {
             Log::e("Reached maximum iteration limit (%i). Stopping search.\n", maxIterations);
-            break;
+            return 1;
         }
 
-        if (_separate_tasks) {
+        if (mode.separateTasks) {
             _separate_tasks_scheduler->displayAdvancementBar();
         }
 
-        const std::vector<Position*>& leavesToExpand =
-                _use_sibylsat_expansion ? _sibylsat_nodes_to_develop : _leaf_positions;
+        // Grow the search tree and encode the new frontier.
+        expandAndEncode(mode);
 
-        // Grow the search tree by expanding the leaves selected for this iteration.
-        const TreeExpander::ExpansionResult expansion = expandLeaves(leavesToExpand);
-
-        // Encode the new frontier before querying the SAT solver on it.
-        encodeLeaves(expansion);
-
-        // Then check if this search tree contains a solution (or a globally optimal solution if the optimal flag is on).
-        solved = _optimal ? findGloballyOptimalSolutionInSearchTree() : findPrimitiveSolutionInSearchTree();
-        if (solved) {
-            break;
+        // Check if this search tree contains a solution.
+        if (solveCurrentTree(mode)) {
+            return outputSolution();
         }
 
-        // In SibylSat mode, a failed primitive solve is followed by an abstract
-        // plan extraction to decide which leaves should be expanded next.
-        if (!_optimal && _use_sibylsat_expansion && !findAbstractPlanInSearchTree()) {
-            break;
+        // Decide which leaves to expand next (or detect impossibility).
+        if (!selectNextLeavesToDevelop(mode)) {
+            Log::w("No success. Exiting.\n");
+            return 1;
         }
     }
+}
 
-    if (!solved) {
-        Log::w("No success. Exiting.\n");
-        return 1;
+void Planner::initializeSearchTree() {
+    // Create the initial search tree with only the root and the goal node as leaves.
+    _tree_expander.createInitialLeaves();
+
+    // Encode the root method
+    _encoding.encode(*_leaf_positions[0]);
+    // Encode the goal node
+    _encoding.encode(*_leaf_positions[1]);
+}
+
+void Planner::expandAndEncode(SearchMode mode) {
+    // Select the leaves to expand: in SibylSat mode only the leaves selected
+    // from the last abstract plan; in BFS mode every leaf of the frontier.
+    FlatHashSet<Position*> leavesToExpand;
+    if (mode.expansion == ExpansionMode::SIBYLSAT) {
+        leavesToExpand.insert(_sibylsat_nodes_to_develop.begin(), _sibylsat_nodes_to_develop.end());
+    } else {
+        leavesToExpand.insert(_leaf_positions.begin(), _leaf_positions.end());
     }
 
+    // Grow the search tree by expanding the selected leaves.
+    _tree_expander.expandLeaves(leavesToExpand);
+
+    // The separate-tasks boundary tells the encoding which carried leaves were
+    // already encoded in a previous call (so they must be skipped).
+    _encoding.setNewInitPos(_tree_expander.getExpansionStartIndex());
+
+    // Encode the new frontier before querying the SAT solver on it.
+    _encoding.encodeAllLeaves();
+}
+
+bool Planner::solveCurrentTree(SearchMode mode) {
+    return mode.solve == SolveMode::OPTIMAL
+            ? findGloballyOptimalSolutionInSearchTree()
+            : findPrimitiveSolutionInSearchTree();
+}
+
+bool Planner::selectNextLeavesToDevelop(SearchMode mode) {
+    if (mode.solve == SolveMode::OPTIMAL) {
+        // The optimal solve already filled _sibylsat_nodes_to_develop.
+        return true;
+    }
+    if (mode.expansion == ExpansionMode::SIBYLSAT) {
+        // A failed primitive solve is followed by an abstract plan extraction
+        // to decide which leaves should be expanded next.
+        return findAbstractPlanInSearchTree();
+    }
+    // BFS: all leaves are expanded, nothing to select.
+    return true;
+}
+
+int Planner::outputSolution() {
     const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
     Log::i("Found a solution at depth %i.\n", (int) currentDepth);
     if (_optimization_factor != 0) {
@@ -72,81 +159,25 @@ int Planner::findPlan() {
     }
 
     // Extract the plan from the SAT solver and output it.
-    Plan plan = _enc.extractPlan();
+    Plan plan = _encoding.extractPlan();
     _plan_writer.outputPlan(plan);
     printTreeStatistics();
     return 0;
 }
 
-TreeExpander::ExpansionResult Planner::expandLeaves(const std::vector<Position*>& leavesToExpand) {
-    return _tree_expander.expandLeaves(leavesToExpand);
-}
-
-void Planner::encodeLeaves(const TreeExpander::ExpansionResult& expansion) {
-    Statistics& stats = Statistics::getInstance();
-    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
-
-    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFacts().count());
-    Log::i("Encoding ...\n");
-    _enc.setNewInitPos(expansion.newInitPos);
-
-    stats.beginTiming(TimingStage::ENCODING);
-    if (expansion.expandAll) {
-        for (Position* leaf : _leaf_positions) {
-            Log::v("- Position (%i,%i)\n", currentDepth, leaf->getPositionIndex());
-            _enc.encode(*leaf);
-        }
-    } else {
-        Log::i("New leaf count: %zu\n", _leaf_positions.size());
-        for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
-            switch (expansion.leafEncodingActions[leafIndex]) {
-            case TreeExpander::LeafEncodingAction::NONE:
-                break;
-            case TreeExpander::LeafEncodingAction::FULL:
-                _enc.encode(*_leaf_positions[leafIndex]);
-                break;
-            case TreeExpander::LeafEncodingAction::NEW_RELEVANTS:
-                _enc.encodeNewRelevantsFacts(*_leaf_positions[leafIndex]);
-                break;
-            case TreeExpander::LeafEncodingAction::EFFECTS_AND_FRAME:
-                _enc.encodeOnlyEffsAndFrameAxioms(*_leaf_positions[leafIndex]);
-                break;
-            case TreeExpander::LeafEncodingAction::PROPAGATE_RELEVANTS:
-                _enc.propagateRelevantsFacts(*_leaf_positions[leafIndex]);
-                break;
-            }
-        }
-    }
-    stats.endTiming(TimingStage::ENCODING);
-
-    for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
-        _leaf_positions[leafIndex]->setLeftPosition(leafIndex > 0 ? _leaf_positions[leafIndex - 1] : nullptr);
-    }
-
-    if (!expansion.expandAll) {
-        for (Position* node : expansion.expandedNodes) {
-            Log::v("Freeing position %zu of depth %zu\n", node->getPositionIndex(), node->getLayerIndex());
-            node->clearFullPos();
-        }
-        for (Position* leaf : _leaf_positions) {
-            leaf->clearDecodings();
-        }
-    }
-}
-
 bool Planner::findGloballyOptimalSolutionInSearchTree() {
-    _enc.clearSoftLits();
+    _encoding.clearSoftLits();
     Log::i("Add weight for each operation of the current leaves\n");
     setSoftLitsForCurrentLeaves();
 
-    const int result = _enc.solve();
+    const int result = _encoding.solve();
     if (result != 10) {
         Log::e("No solution possible !\n");
         exit(1);
     }
 
-    const int bestAbstractObjectiveValue = _enc.getObjectiveValue();
-    collectLeavesToDevelopFromAbstractPlan(_enc.extractAbstractPlan());
+    const int bestAbstractObjectiveValue = _encoding.getObjectiveValue();
+    collectLeavesToDevelopFromAbstractPlan(_encoding.extractAbstractPlan());
     if (_sibylsat_nodes_to_develop.empty()) {
         Log::i("The plan is primitive\n");
         return true;
@@ -156,13 +187,13 @@ bool Planner::findGloballyOptimalSolutionInSearchTree() {
             _sibylsat_nodes_to_develop.size(), _leaf_positions.size());
     Log::i("Objective value of the best abstract plan: %d\n", bestAbstractObjectiveValue);
 
-    _enc.addAssumptionsPrimPlan();
-    const int primitiveResult = _enc.solve();
+    _encoding.addAssumptionsPrimPlan();
+    const int primitiveResult = _encoding.solve();
     if (primitiveResult != 10) {
         return false;
     }
 
-    const int bestPrimitiveObjectiveValue = _enc.getObjectiveValue();
+    const int bestPrimitiveObjectiveValue = _encoding.getObjectiveValue();
     Log::i("Found a primitive plan with objective value %d\n", bestPrimitiveObjectiveValue);
     if (bestPrimitiveObjectiveValue == bestAbstractObjectiveValue) {
         Log::i("The primitive plan is globally optimal\n");
@@ -176,21 +207,24 @@ bool Planner::findGloballyOptimalSolutionInSearchTree() {
 
 bool Planner::findPrimitiveSolutionInSearchTree() {
     if (_separate_tasks) {
-        _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
+        return solveWithSeparateTasks();
     }
 
+    _encoding.addAssumptionsPrimPlan();
+    return _encoding.solve() == 10;
+}
+
+bool Planner::solveWithSeparateTasks() {
+    _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_encoding);
+
     const int assumptionsUntil =
-            _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
-    _enc.addAssumptionsPrimPlan(/*permanent=*/false, /*assumptions_until=*/assumptionsUntil);
-    if (_enc.solve() != 10) {
+            _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size());
+    _encoding.addAssumptionsPrimPlan(/*permanent=*/false, /*assumptions_until=*/assumptionsUntil);
+    if (_encoding.solve() != 10) {
         return false;
     }
 
-    if (!_separate_tasks) {
-        return true;
-    }
-
-    if (_separate_tasks_scheduler->updateAfterSolved(_enc, _leaf_positions)) {
+    if (_separate_tasks_scheduler->updateAfterSolved(_encoding, _leaf_positions)) {
         Log::i("Solved the problem for all tasks\n");
         return true;
     }
@@ -215,12 +249,12 @@ bool Planner::findAbstractPlanInSearchTree() {
     Log::i("Failed to find a primitive solution... Trying to find an abstract plan...\n");
 
     if (_separate_tasks) {
-        _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_enc);
+        _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_encoding);
     }
 
-    bool foundAbstractPlan = _enc.solve() == 10;
+    bool foundAbstractPlan = _encoding.solve() == 10;
     if (!foundAbstractPlan && _separate_tasks) {
-        foundAbstractPlan = _separate_tasks_scheduler->handleAbstractPlanFailure(_enc, _leaf_positions.size());
+        foundAbstractPlan = _separate_tasks_scheduler->handleAbstractPlanFailure(_encoding, _leaf_positions.size());
     }
 
     if (!foundAbstractPlan) {
@@ -231,7 +265,7 @@ bool Planner::findAbstractPlanInSearchTree() {
     Log::i("Found an abstract plan\n");
     const int leafLimit =
             _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
-    collectLeavesToDevelopFromAbstractPlan(_enc.extractAbstractPlan(), leafLimit);
+    collectLeavesToDevelopFromAbstractPlan(_encoding.extractAbstractPlan(), leafLimit);
     Log::i("Number of leaves to develop: %zu\n", _sibylsat_nodes_to_develop.size());
     return true;
 }
@@ -246,7 +280,7 @@ void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>
         if (item.id == -1) {
             continue;
         }
-        if (_htn.isReduction(item.reduction)) {
+        if (_htn_instance.isReduction(item.reduction)) {
             Log::d("  Reduction %s is true at depth %i, leaf %zu\n", TOSTR(item.reduction), currentDepth, leafIndex);
             _sibylsat_nodes_to_develop.push_back(_leaf_positions[leafIndex]);
         }
@@ -254,7 +288,7 @@ void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>
 }
 
 void Planner::optimizeCurrentPlan() {
-    PlanOptimizer optimizer(_htn, _leaf_positions, _enc);
+    PlanOptimizer optimizer(_htn_instance, _leaf_positions, _encoding);
     Plan optimizedPlan;
     const int upperBound = _leaf_positions.empty() ? 0 : static_cast<int>(_leaf_positions.size()) - 1;
     Log::i("Optimize the current depth with plan length upper bound %d\n", upperBound);
@@ -262,7 +296,7 @@ void Planner::optimizeCurrentPlan() {
 }
 
 void Planner::setSoftLitsForCurrentLeaves() {
-    int name_id_prim = _htn.nameId("__PRIMITIVE___");
+    int name_id_prim = _htn_instance.nameId("__PRIMITIVE___");
     int name_id_blank = 1;
 
     for (size_t pos_idx = 0; pos_idx + 1 < _leaf_positions.size(); pos_idx++) {
@@ -274,7 +308,7 @@ void Planner::setSoftLitsForCurrentLeaves() {
             if (op._name_id == name_id_blank) continue;
 
             // If this is a repetition of a blank action, pass
-            if (_htn.isActionRepetition(op._name_id) && _htn.getActionFromRepetition(op._name_id).getNameId() == name_id_blank) continue;
+            if (_htn_instance.isActionRepetition(op._name_id) && _htn_instance.getActionFromRepetition(op._name_id).getNameId() == name_id_blank) continue;
 
             // If it is the __PRIM__ operator, pass
             if (op._name_id == name_id_prim) continue;
@@ -282,10 +316,10 @@ void Planner::setSoftLitsForCurrentLeaves() {
             int heuristicValue = 0;
 
             // If it is an action, set the weight to 1 since for now, we cannot indicate specific weight for actions in HDDL
-            if (_htn.isAction(op)) {
+            if (_htn_instance.isAction(op)) {
                 // If it is a macro action, then its heuristic value is the number of actions in the macro action
-                if (_htn.isMacroTask(op._name_id)) {
-                    heuristicValue = _htn.numActionsInMacro(op._name_id);
+                if (_htn_instance.isMacroTask(op._name_id)) {
+                    heuristicValue = _htn_instance.numActionsInMacro(op._name_id);
                 } else {
                     // Otherwise, it is 1
                     heuristicValue = 1;
@@ -299,7 +333,7 @@ void Planner::setSoftLitsForCurrentLeaves() {
             if (heuristicValue > 0) {
                 // printf("%d -%d 0\n", heuristicValue, aVar);
                 Log::d("Add soft lit for op %s (%d) with heuristic value %d\n", TOSTR(op), var, heuristicValue);
-                _enc.addSoftLit(var, heuristicValue);
+                _encoding.addSoftLit(var, heuristicValue);
             }
         }
     }

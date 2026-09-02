@@ -125,8 +125,16 @@ void OutgoingEffects::clear() {
     clearDecodings();
 }
 
-Position::Position() : _layer_idx(-1), _pos(-1), _offset(0) {}
-void Position::setPos(size_t layerIdx, size_t pos) {_layer_idx = layerIdx; _pos = pos;}
+// Starts at 1 so that id 0 is reserved for "no/default position" markers.
+size_t Position::_next_pos_id = 1;
+
+Position::Position() : _layer_idx(-1), _offset(0) {}
+void Position::setPos(size_t layerIdx, size_t pos) {
+    _layer_idx = layerIdx;
+    // _pos is a stable, globally unique id assigned in the constructor and
+    // never modified afterward (used for q-constant naming and logging).
+    (void) pos;
+}
 void Position::setParentPosition(Position* parent) {
     if (_parent_position == parent) return;
     assert(_parent_position == nullptr || _parent_position == parent);

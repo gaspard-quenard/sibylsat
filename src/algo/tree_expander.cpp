@@ -63,6 +63,11 @@ void TreeExpander::createInitialLeaves() {
     goalPosition->setParentPosition(_root_position);
 
     _leaf_positions = {rootReductionPosition, goalPosition};
+    for (size_t i = 0; i < _leaf_positions.size(); i++) {
+        _leaf_positions[i]->setFrontierIndex(i);
+        _leaf_positions[i]->setLeftPosition(i > 0 ? _leaf_positions[i - 1] : nullptr);
+        _leaf_positions[i]->setFreshInCurrentLayer(true);
+    }
 
     /***** DEPTH 0, POSITION 0 ******/
 
@@ -79,7 +84,7 @@ void TreeExpander::createInitialLeaves() {
     addPreconditionConstraints(*rootReductionPosition);
 
     incrementPosition(*rootReductionPosition);
-    computeAndApplyOutgoingEffects(*rootReductionPosition);
+    computeOutgoingEffects(*rootReductionPosition);
 
     /***** DEPTH 0, POSITION 1 ******/
 
@@ -102,111 +107,84 @@ void TreeExpander::printStatistics() const {
     Log::i("# dominated operations: %i\n", _domination_resolver.getNumDominatedOps());
 }
 
-TreeExpander::ExpansionResult TreeExpander::expandLeaves(const std::vector<Position*>& leavesToExpand) {
-    ExpansionResult result;
+void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
     // In BFS mode, leavesToExpand aliases _leaf_positions, so read it before moving the frontier.
-    FlatHashSet<Position*> leavesToExpandSet;
-    leavesToExpandSet.reserve(leavesToExpand.size());
-    for (Position* leaf : leavesToExpand) {
-        leavesToExpandSet.insert(leaf);
-    }
     std::vector<Position*> currentLeaves = std::move(_leaf_positions);
 
-    std::vector<size_t> expansionSizes(currentLeaves.size(), 1);
+    std::vector<size_t> expansionSizes(currentLeaves.size(), /*init_val=*/1);
     size_t nextLeafCount = 0;
-    size_t selectedLeafCount = 0;
     for (size_t leafIndex = 0; leafIndex < currentLeaves.size(); leafIndex++) {
-        if (leavesToExpandSet.count(currentLeaves[leafIndex])) {
+        if (leavesToExpand.count(currentLeaves[leafIndex])) {
             expansionSizes[leafIndex] = computeExpansionSize(*currentLeaves[leafIndex]);
-            selectedLeafCount++;
         }
         nextLeafCount += expansionSizes[leafIndex];
-    }
-    result.expandAll = selectedLeafCount == currentLeaves.size();
-
-    if (!result.expandAll) {
-        result.leafEncodingActions.reserve(nextLeafCount);
-        result.expandedNodes.reserve(selectedLeafCount);
     }
 
     _depth++;
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
+    // All leaves of the new frontier start as "not fresh"; expandLeaf marks
+    // newly created positions as fresh so the encoding can tell them apart.
+    for (Position* leaf : currentLeaves) {
+        leaf->setFreshInCurrentLayer(false);
+    }
+
     _stats.beginTiming(TimingStage::EXPANSION);
     _analysis.resetReachability();
 
     // Leaves before _expansion_start_index were already solved in a previous SAT call and
     // are carried into the new layer unchanged.
-    const size_t carriedPrefixSize = !result.expandAll ? _expansion_start_index : 0;
+    const size_t carriedPrefixSize = _expansion_start_index;
     if (carriedPrefixSize > 0) {
         Log::i("Carrying %zu already-solved leaf positions into the new layer\n", carriedPrefixSize);
-        result.newInitPos = carriedPrefixSize;
         for (size_t leafIndex = 0; leafIndex < carriedPrefixSize; leafIndex++) {
-            Position* carriedLeaf = currentLeaves[leafIndex];
-            carriedLeaf->setPos(_depth, _leaf_positions.size());
-            _leaf_positions.push_back(carriedLeaf);
-            result.leafEncodingActions.push_back(LeafEncodingAction::NONE);
+            carryLeaf(*currentLeaves[leafIndex]);
         }
     }
-
-    const size_t firstActiveLeaf = carriedPrefixSize;
-    bool needsEffectsAndFrame = false;
 
     Log::i("Instantiating ...\n");
 
-    for (size_t leafIndex = firstActiveLeaf; leafIndex < currentLeaves.size(); leafIndex++)  {
+    for (size_t leafIndex = carriedPrefixSize; leafIndex < currentLeaves.size(); leafIndex++)  {
         Position* currentLeaf = currentLeaves[leafIndex];
-        if (leavesToExpandSet.count(currentLeaf)) {
-            expandLeaf(*currentLeaf, expansionSizes[leafIndex], result);
-            needsEffectsAndFrame = true;
+        if (leavesToExpand.count(currentLeaf)) {
+            expandLeaf(*currentLeaf, expansionSizes[leafIndex]);
         } else {
-            const LeafEncodingAction encodingAction = leafIndex == firstActiveLeaf
-                    ? LeafEncodingAction::NEW_RELEVANTS
-                    : needsEffectsAndFrame
-                            ? LeafEncodingAction::EFFECTS_AND_FRAME
-                            : LeafEncodingAction::PROPAGATE_RELEVANTS;
-            carryLeaf(*currentLeaf, encodingAction, result);
-            needsEffectsAndFrame = false;
+            carryLeaf(*currentLeaf);
         }
     }
-    _stats.endTiming(TimingStage::EXPANSION);
-    return result;
-}
 
-void TreeExpander::expandLeaf(Position& parent, size_t expansionSize, ExpansionResult& result) {
-    if (!result.expandAll) {
-        result.expandedNodes.push_back(&parent);
+    // The ordering of the new frontier defines each leaf's frontier index.
+    // Keep carried leaves' previous-layer left neighbour until encoding is
+    // complete: it is needed as leftOfAbove by incremental frame axioms.
+    for (size_t i = 0; i < _leaf_positions.size(); i++) {
+        _leaf_positions[i]->setFrontierIndex(i);
     }
 
+    _stats.endTiming(TimingStage::EXPANSION);
+}
+
+void TreeExpander::expandLeaf(Position& parent, size_t expansionSize) {
     for (size_t childIndex = 0; childIndex < expansionSize; childIndex++) {
         Position* child = new Position();
+        child->setFreshInCurrentLayer(true);
         Position* left = _leaf_positions.empty() ? nullptr : _leaf_positions.back();
         const size_t childPosition = _leaf_positions.size();
         _leaf_positions.push_back(child);
         createNextPosition(*child, childPosition, &parent, left);
 
-        if (result.expandAll) {
-            Log::v("  Instantiation done. (r=%i a=%i qf=%i)\n",
-                    child->getReductions().size(),
-                    child->getActions().size(),
-                    child->getQFacts().size());
-        } else {
-            result.leafEncodingActions.push_back(LeafEncodingAction::FULL);
-        }
+        Log::v("  Instantiation done. (r=%i a=%i qf=%i)\n",
+                child->getReductions().size(),
+                child->getActions().size(),
+                child->getQFacts().size());
 
         incrementPosition(*child);
-        computeAndApplyOutgoingEffects(*child);
+        computeOutgoingEffects(*child);
     }
 }
 
-void TreeExpander::carryLeaf(
-        Position& leaf,
-        LeafEncodingAction encodingAction,
-        ExpansionResult& result) {
-    leaf.setPos(_depth, _leaf_positions.size());
+void TreeExpander::carryLeaf(Position& leaf) {
     _leaf_positions.push_back(&leaf);
-    result.leafEncodingActions.push_back(encodingAction);
     applyOutgoingEffects(leaf);
 }
 
@@ -234,11 +212,11 @@ void TreeExpander::createNextPositionFromParent(Position& newPos, Position& pare
     addPreconditionConstraints(newPos);
 }
 
-void TreeExpander::computeAndApplyOutgoingEffects(Position& position) {
+void TreeExpander::computeOutgoingEffects(Position& position) {
     OutgoingEffects& effects = position.getOutgoingEffects();
     effects.reset(_htn.getNumPositiveGroundFacts());
 
-    USigSet actionsToRemove;
+    USigSet operationsToRemove;
     const USigSet* ops[2] = {&position.getActions(), &position.getReductions()};
     bool isAction = true;
     for (const auto& set : ops) {
@@ -262,7 +240,7 @@ void TreeExpander::computeAndApplyOutgoingEffects(Position& position) {
                         repeatedAction ? EffectMode::DIRECT_NO_QFACT : EffectMode::DIRECT)) {
                     
                     Log::w("3_ Retroactively prune action %s due to impossible effect %s\n", TOSTR(aSig), TOSTR(effect));
-                    actionsToRemove.insert(aSig);
+                    operationsToRemove.insert(aSig);
                     break;
                 }
                 if (!isAction) {
@@ -274,7 +252,11 @@ void TreeExpander::computeAndApplyOutgoingEffects(Position& position) {
         isAction = false;
     }
 
-    for (const auto& aSig : actionsToRemove) {
+    pruneImpossibleOperations(position, operationsToRemove);
+}
+
+void TreeExpander::pruneImpossibleOperations(Position& position, const USigSet& operationsToRemove) {
+    for (const auto& aSig : operationsToRemove) {
         assert(_pruning != nullptr);
         _pruning->prune(aSig, position);
     }

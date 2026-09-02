@@ -14,17 +14,42 @@
 
 typedef std::pair<std::vector<PlanItem>, std::vector<PlanItem>> Plan;
 
+/**
+ * How the search tree is grown each iteration.
+ */
+enum class ExpansionMode {
+    BFS,      // Expand every leaf of the current layer.
+    SIBYLSAT  // Expand only the leaves selected from the last abstract plan.
+};
+
+/**
+ * What kind of solution the SAT solver is asked for.
+ */
+enum class SolveMode {
+    SATISFICING,  // Any primitive plan.
+    OPTIMAL       // A primitive plan whose cost matches the best abstract plan.
+};
+
+/**
+ * The orthogonal search options that determine the planner's behaviour.
+ */
+struct SearchMode {
+    ExpansionMode expansion;
+    SolveMode solve;
+    bool separateTasks;
+};
+
 class Planner {
 
 private:
     Parameters& _params;
-    HtnInstance& _htn;
+    HtnInstance& _htn_instance;
     TreeExpander _tree_expander;
     Position*& _root_position;
     std::vector<Position*>& _leaf_positions;
     FactAnalysis& _analysis;
     MethodEffectAnalysis& _method_effects;
-    Encoding _enc;
+    Encoding _encoding;
     std::unique_ptr<RetroactivePruning> _pruning;
     PlanWriter _plan_writer;
 
@@ -41,37 +66,7 @@ private:
     float _optimization_factor;
 
 public:
-    Planner(Parameters& params, HtnInstance& htn)
-            : _params(params),
-              _htn(htn),
-              _tree_expander(_params, _htn),
-              _root_position(_tree_expander.getRootPositionRef()),
-              _leaf_positions(_tree_expander.getLeafPositions()),
-              _analysis(_tree_expander.getAnalysis()),
-              _method_effects(_tree_expander.getMethodEffects()),
-              _enc(_params, _htn, _analysis, _root_position, _leaf_positions),
-              _pruning(std::make_unique<RetroactivePruning>(_enc)),
-              _plan_writer(_htn, _params),
-              _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
-              _optimal(_params.isNonzero("optimal")),
-              _separate_tasks(_params.isNonzero("separateTasks")
-                      && _htn.getInitReduction().getSubtasks().size() > 1
-                      && _use_sibylsat_expansion
-                      && !_optimal),
-              _optimization_factor(_params.getFloatParam("of")) {
-        PreconditionInference::infer(_htn, _method_effects, PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
-        if (_htn.getParams().isNonzero("mutex")) {
-            _htn._sas_plus->cleanMutexGroupsWithPandaPiGrounderPreprocessingFacts(_analysis.getGroundPosFacts());
-        }
-        if (_optimal) {
-            _tdg.emplace(_htn);
-            _tree_expander.attachTDG(*_tdg);
-        }
-        _tree_expander.attachPruning(*_pruning);
-        if (_separate_tasks) {
-            _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn);
-        }
-    }
+    Planner(Parameters& params, HtnInstance& htn);
     int findPlan();
     void optimizeCurrentPlan();
 
@@ -80,27 +75,46 @@ public:
     }
 
 private:
-    void initializeSearchTree() {
-        // Create the initial search tree with only the root and the goal node as leaves.
-        _tree_expander.createInitialLeaves();
+    /**
+     * Build the initial search tree (root + goal leaves) and encode it.
+     */
+    void initializeSearchTree();
 
-        // Encode the root method
-        _enc.encode(*_leaf_positions[0]);
-        // Encode the goal node
-        _enc.encode(*_leaf_positions[1]);
-    }
+    /**
+     * Derive the search mode from the command-line parameters.
+     */
+    SearchMode determineSearchMode() const;
+
+    /**
+     * Configure the planner components that depend on the search mode
+     * (TDG, pruning, separate-tasks scheduler, mutex cleanup).
+     */
+    void configure();
 
     void printTreeStatistics() const { _tree_expander.printStatistics(); }
 
     /**
-     * Expand the given leaves in the search tree.
+     * Grow the search tree and encode the new frontier, according to the
+     * expansion mode (BFS expands all leaves, SibylSat only the selected ones).
      */
-    TreeExpander::ExpansionResult expandLeaves(const std::vector<Position*>& leavesToExpand);
+    void expandAndEncode(SearchMode mode);
 
     /**
-     * Encode the new leaves into a SAT formula after an expansion step.
+     * Ask the SAT solver for a solution of the current search tree.
+     * Returns true if a solution was found.
      */
-    void encodeLeaves(const TreeExpander::ExpansionResult& expansion);
+    bool solveCurrentTree(SearchMode mode);
+
+    /**
+     * After a failed solve, decide which leaves to expand next.
+     * Returns false if the problem is proven impossible.
+     */
+    bool selectNextLeavesToDevelop(SearchMode mode);
+
+    /**
+     * Extract, optimize and output the found plan.
+     */
+    int outputSolution();
 
     /**
      * Launch two SAT calls:
@@ -120,6 +134,12 @@ private:
      * Return true if a primitive plan is found, false otherwise.
      */
     bool findPrimitiveSolutionInSearchTree();
+
+    /**
+     * Solve the current search tree incrementally, task by task, using the
+     * separate-tasks scheduler. Returns true if all initial tasks are solved.
+     */
+    bool solveWithSeparateTasks();
 
     /**
      * Launch a SAT call on the search tree for any abstract plan and select the leaves whose

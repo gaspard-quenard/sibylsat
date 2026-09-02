@@ -38,15 +38,6 @@ private:
     size_t _num_instantiated_reductions = 0;
 
 public:
-    enum class LeafEncodingAction { NONE, FULL, NEW_RELEVANTS, EFFECTS_AND_FRAME, PROPAGATE_RELEVANTS };
-
-    struct ExpansionResult {
-        bool expandAll = false;
-        size_t newInitPos = 0;
-        std::vector<LeafEncodingAction> leafEncodingActions;
-        std::vector<Position*> expandedNodes;
-    };
-
     TreeExpander(Parameters& params, HtnInstance& htn);
 
     void attachPruning(RetroactivePruning& pruning) { _pruning = &pruning; }
@@ -55,9 +46,17 @@ public:
     // Set the index from which the next expandLeaves call should start expanding.
     // Leaves before this index are carried over as-is (already solved by the scheduler).
     void setExpansionBoundary(size_t boundary) { _expansion_start_index = boundary; }
+    // The number of leaves carried over from the previous layer (the separate-tasks prefix).
+    size_t getExpansionStartIndex() const { return _expansion_start_index; }
 
     void createInitialLeaves();
-    ExpansionResult expandLeaves(const std::vector<Position*>& leavesToExpand);
+    /**
+     * Grow the search tree by expanding the given leaves. The new frontier is
+     * stored in _leaf_positions (each leaf gets a fresh frontier index and a
+     * cached left neighbour). The fact analysis is updated with the outgoing
+     * effects of every leaf in the new frontier.
+     */
+    void expandLeaves(const FlatHashSet<Position*>& leavesToExpand);
     void printStatistics() const;
     Position*& getRootPositionRef() { return _root_position; }
     std::vector<Position*>& getLeafPositions() { return _leaf_positions; }
@@ -72,12 +71,13 @@ private:
     void incrementPosition(const Position& pos);
     bool isPotentiallyApplicable(const HtnOp& op);
     size_t computeExpansionSize(const Position& position) const;
-    void expandLeaf(Position& parent, size_t expansionSize, ExpansionResult& result);
-    void carryLeaf(Position& leaf, LeafEncodingAction encodingAction, ExpansionResult& result);
+    void expandLeaf(Position& parent, size_t expansionSize);
+    void carryLeaf(Position& leaf);
 
     void createNextPosition(Position& newPos, size_t pos, Position* parent, Position* left);
     void createNextPositionFromParent(Position& newPos, Position& parent);
-    void computeAndApplyOutgoingEffects(Position& position);
+    void computeOutgoingEffects(Position& position);
+    void pruneImpossibleOperations(Position& position, const USigSet& operationsToRemove);
     void applyOutgoingEffects(const Position& position);
 
     void addPreconditionConstraints(Position& pos);

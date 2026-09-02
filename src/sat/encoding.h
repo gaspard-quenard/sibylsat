@@ -1,4 +1,3 @@
-
 #ifndef DOMPASCH_TREE_REXX_ENCODING_H
 #define DOMPASCH_TREE_REXX_ENCODING_H
 
@@ -63,6 +62,13 @@ public:
             _mutex_predicates(_params.isNonzero("mutex")) {}
 
     void encode(Position& pos);
+    /**
+     * Encode the whole current frontier. Freshly expanded leaves are fully
+     * encoded; carried leaves (from a previous layer) get their effects and
+     * frame axioms encoded incrementally. Leaves in the separate-tasks prefix
+     * (frontier index < _new_init_pos) are skipped as they were already encoded.
+     */
+    void encodeAllLeaves();
     void addAssumptionsPrimPlan(bool permanent = false, int assumptions_until = -1);
     void addUnitConstraint(int lit);
     
@@ -132,7 +138,13 @@ private:
         bool hasDecodings(const USignature& fact, bool negated) const;
         const USigSet& getDecodings(const USignature& fact, bool negated) const;
     };
-    enum class EncodingContext { CurrentLeaf, CarriedLeaf, CarriedLeafReuseSelf };
+    // How a leaf is positioned relative to the previous layer, which determines
+    // which facts/effects can be reused vs. must be re-encoded.
+    enum class EncodingContext {
+        FreshLeaf,              // A newly expanded leaf (new Position object).
+        CarriedLeaf,            // A leaf carried over from the previous layer.
+        CarriedLeafReuseSelf    // A carried leaf that reuses its own fact variables.
+    };
 
     Position* getLeftPosition(const Position& pos) const;
     Position* getAbovePosition(const Position& pos) const;
@@ -148,6 +160,11 @@ private:
     void encodeInitialRelevantFacts(Position& pos, bool rememberForPropagation);
     void encodeFactVariables(Position& pos, const EncodingEnvironment& env);
     void encodeFrameAxioms(Position& pos, Position& left, const EncodingEnvironment& env, bool onlyForNewRelevantsFacts = false);
+    bool encodeFrameAxiomForFact(
+            Position& newPos, Position& left, const EncodingEnvironment& env,
+            const USignature& fact, int oldFactVar,
+            bool nonprimFactSupport, bool hasPrimitiveOps, int prevVarPrim,
+            bool skipRedundantFrameAxioms, USigSet& positiveFacts);
     void encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int opVar, const IntPairTree& tree);
     void encodeOperationConstraints(Position& pos);
     void encodeSubstitutionVars(const USignature& opSig, int opVar, int qconst);

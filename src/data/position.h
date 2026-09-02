@@ -61,13 +61,29 @@ public:
 
 struct Position {
 private:
-    size_t _layer_idx;
-    size_t _pos;
+    // Stable identifiers assigned once at creation. _layer_idx is the depth at
+    // which the position was created; _pos is a globally unique monotonic id
+    // (used for q-constant naming and logging only -- never a frontier index).
+    size_t _layer_idx = -1;
+    size_t _pos = _next_pos_id++;
     size_t _offset = 0;
 
     Position* _parent_position = nullptr;
     std::vector<Position*> _children_positions;
-    Position* _left_position = nullptr;
+    Position* _left_position = nullptr;  // Cached previous leaf (set per layer).
+
+    // Per-layer ordering of this leaf within the current frontier.
+    // Unlike _pos (a stable unique id), this is re-assigned each layer and
+    // used by the encoding to know "which leaf is the Nth leaf of the layer".
+    size_t _frontier_index = -1;
+
+    // True if this position was newly created by the last expandLeaves call.
+    // Carried leaves (re-used from a previous layer) are false. Lets the
+    // encoding decide between full and incremental encoding without a result struct.
+    bool _fresh_in_current_layer = false;
+
+    // Running counter for globally unique position ids.
+    static size_t _next_pos_id;
 
     USigSet _actions;
     USigSet _reductions;
@@ -165,6 +181,10 @@ public:
 
     size_t getLayerIndex() const;
     size_t getPositionIndex() const;
+    size_t getFrontierIndex() const { return _frontier_index; }
+    void setFrontierIndex(size_t idx) { _frontier_index = idx; }
+    bool isFreshInCurrentLayer() const { return _fresh_in_current_layer; }
+    void setFreshInCurrentLayer(bool fresh) { _fresh_in_current_layer = fresh; }
     size_t getOffset() const;
     void clearAtPastPosition();
     void clearAtPastLayer();

@@ -9,11 +9,11 @@
 #include "util/log.h"
 
 Position* Encoding::getLeftPosition(const Position& pos) const {
-    size_t positionIndex = pos.getPositionIndex();
-    if (positionIndex == 0 || positionIndex > _leaf_positions.size()) {
+    size_t frontierIndex = pos.getFrontierIndex();
+    if (frontierIndex == 0 || frontierIndex >= _leaf_positions.size()) {
         return nullptr;
     }
-    return _leaf_positions[positionIndex - 1];
+    return _leaf_positions[frontierIndex - 1];
 }
 
 Position* Encoding::getAbovePosition(const Position& pos) const {
@@ -69,8 +69,8 @@ Encoding::QFactView Encoding::buildQFactView(const Position& position, const Pos
     QFactView view;
     view.add(position);
     if (left != nullptr
-            && position.getPositionIndex() != 0
-            && position.getPositionIndex() != _new_init_pos) {
+            && position.getFrontierIndex() != 0
+            && position.getFrontierIndex() != _new_init_pos) {
         view.add(left->getOutgoingEffects());
     }
     return view;
@@ -111,7 +111,7 @@ Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, Encoding
     env.left = getLeftPosition(pos);
     env.above = getAbovePosition(pos);
     switch (context) {
-    case EncodingContext::CurrentLeaf:
+    case EncodingContext::FreshLeaf:
         env.leftOfAbove = env.above != nullptr ? env.above->getLeftPosition() : nullptr;
         env.reusedFacts = pos.getOffset() == 0 ? env.above : nullptr;
         break;
@@ -127,8 +127,92 @@ Encoding::EncodingEnvironment Encoding::buildEnvironment(Position& pos, Encoding
     return env;
 }
 
+void Encoding::encodeAllLeaves() {
+    Statistics& stats = Statistics::getInstance();
+    const size_t currentDepth = _leaf_positions.front()->getLayerIndex();
+
+    Log::i("Collected %i relevant facts at this depth\n", _analysis.getRelevantFacts().count());
+    Log::i("Encoding ...\n");
+
+    // Determine whether the whole frontier consists of freshly expanded leaves
+    // (BFS expansion) or contains carried leaves (partial SibylSat expansion).
+    bool expandedAllLeaves = true;
+    for (Position* leaf : _leaf_positions) {
+        if (!leaf->isFreshInCurrentLayer()) {
+            expandedAllLeaves = false;
+            break;
+        }
+    }
+
+    stats.beginTiming(TimingStage::ENCODING);
+    if (expandedAllLeaves) {
+        // BFS: every leaf of the new frontier is fresh and gets fully encoded.
+        for (Position* leaf : _leaf_positions) {
+            Log::v("- Position (%i,%i)\n", currentDepth, leaf->getFrontierIndex());
+            encode(*leaf);
+        }
+    } else {
+        // Partial expansion: fresh leaves are fully encoded; carried leaves are
+        // encoded incrementally (effects + frame axioms / relevant-fact propagation),
+        // and the separate-tasks prefix is skipped as it was already encoded.
+        bool previousLeafWasExpanded = false;
+        Log::i("New leaf count: %zu\n", _leaf_positions.size());
+        for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
+            Position* leaf = _leaf_positions[leafIndex];
+            if (leafIndex < _new_init_pos) {
+                // Separate-tasks prefix: already encoded in a previous call.
+                continue;
+            }
+            if (leaf->isFreshInCurrentLayer()) {
+                encode(*leaf);
+                previousLeafWasExpanded = true;
+            } else if (leafIndex == _new_init_pos) {
+                // First carried leaf after the prefix: (re-)collect its relevant facts.
+                encodeNewRelevantsFacts(*leaf);
+                previousLeafWasExpanded = false;
+            } else if (previousLeafWasExpanded) {
+                encodeOnlyEffsAndFrameAxioms(*leaf);
+                previousLeafWasExpanded = false;
+            } else {
+                propagateRelevantsFacts(*leaf);
+                previousLeafWasExpanded = false;
+            }
+        }
+    }
+    stats.endTiming(TimingStage::ENCODING);
+
+    // Incremental encoding above needs a carried leaf's left neighbour from
+    // the previous frontier. Only replace it with the current-frontier
+    // neighbour once all leaves have been encoded.
+    for (size_t leafIndex = 0; leafIndex < _leaf_positions.size(); leafIndex++) {
+        _leaf_positions[leafIndex]->setLeftPosition(
+                leafIndex > 0 ? _leaf_positions[leafIndex - 1] : nullptr);
+    }
+
+    // Free per-layer data that is no longer needed now that encoding is done.
+    // In partial mode the "old" leaves that were expanded became internal tree
+    // nodes, and the carried leaves do not need their decoding information anymore.
+    if (!expandedAllLeaves) {
+        FlatHashSet<Position*> expandedOldLeaves;
+        for (Position* leaf : _leaf_positions) {
+            if (!leaf->isFreshInCurrentLayer()) continue;
+            Position* parent = leaf->getParentPosition();
+            if (parent != nullptr && parent != _root_position && !expandedOldLeaves.count(parent)) {
+                expandedOldLeaves.insert(parent);
+            }
+        }
+        for (Position* node : expandedOldLeaves) {
+            Log::v("Freeing position %zu of depth %zu\n", node->getPositionIndex(), node->getLayerIndex());
+            node->clearFullPos();
+        }
+        for (Position* leaf : _leaf_positions) {
+            leaf->clearDecodings();
+        }
+    }
+}
+
 void Encoding::encode(Position& newPos) {
-    Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::CurrentLeaf);
+    Encoding::EncodingEnvironment env = buildEnvironment(newPos, EncodingContext::FreshLeaf);
 
     _stats.beginPosition();
     
@@ -148,7 +232,7 @@ void Encoding::encode(Position& newPos) {
     encodeQFactSemantics(newPos, env);
 
     // Effects of "old" actions to the left
-    if (newPos.getPositionIndex() != 0 && newPos.getPositionIndex() != _new_init_pos && env.left != nullptr) {
+    if (newPos.getFrontierIndex() != 0 && newPos.getFrontierIndex() != _new_init_pos && env.left != nullptr) {
         // Encode frame axioms for the left position
         encodeActionEffects(newPos, *env.left);
     }
@@ -254,7 +338,7 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
         }
     }
 
-    if (newPos.getPositionIndex() == 0 || newPos.getPositionIndex() == _new_init_pos) {
+    if (newPos.getFrontierIndex() == 0 || newPos.getFrontierIndex() == _new_init_pos) {
         _new_relevants_facts_to_encode.clear();
         encodeInitialRelevantFacts(newPos, _use_sibylsat_expansion);
     } else {
@@ -295,36 +379,23 @@ void Encoding::encodeFactVariables(Position& newPos, const Encoding::EncodingEnv
 }
 
 void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encoding::EncodingEnvironment& env, bool onlyForNewRelevantsFacts) {
-    using SupportsId = const NodeHashMap<int, USigSet>;
-
     _stats.begin(STAGE_DIRECTFRAMEAXIOMS);
 
-    bool nonprimFactSupport = _params.isNonzero("nps") || _use_sibylsat_expansion;
-    bool hasPrimitiveOps = left.hasPrimitiveOps() || _use_sibylsat_expansion;
-    int prevVarPrim = _vars.getVarPrimitiveOrZero(left);
+    const bool nonprimFactSupport = _params.isNonzero("nps") || _use_sibylsat_expansion;
+    const bool hasPrimitiveOps = left.hasPrimitiveOps() || _use_sibylsat_expansion;
+    const int prevVarPrim = _vars.getVarPrimitiveOrZero(left);
 
     // Check if frame axioms can be skipped because
     // the above position had a superset of operations
     Position nullPos;
     Position* leftOfAbove = env.leftOfAbove != nullptr ? env.leftOfAbove : &nullPos;
-    bool skipRedundantFrameAxioms = _params.isNonzero("srfa") && env.reusedFacts != nullptr
+    const bool skipRedundantFrameAxioms = _params.isNonzero("srfa") && env.reusedFacts != nullptr
         && !left.hasNonprimitiveOps() && !leftOfAbove->hasNonprimitiveOps()
         && left.getActions().size()+left.getReductions().size()
             <= leftOfAbove->getActions().size()+leftOfAbove->getReductions().size();
 
-    OutgoingEffects& effects = left.getOutgoingEffects();
-    const SupportsId* supp[2] = {
-        &effects.getSupports(/*negated=*/true),
-        &effects.getSupports(/*negated=*/false)
-    };
-    IndirectFactSupportMapId* iSupp[2] = {
-        &effects.getIndirectSupports(/*negated=*/true),
-        &effects.getIndirectSupports(/*negated=*/false)
-    };
-
     // If mutex param is used, prevent incompatible facts from being true at the same time
     USigSet positiveFacts;
-    // positiveFacts.reserve(left.getVariableTable(VarType::FACT).size());
     positiveFacts.reserve(onlyForNewRelevantsFacts ? _new_relevants_facts_to_encode.size() : left.getVariableTable(VarType::FACT).size());
 
     if (onlyForNewRelevantsFacts) {
@@ -342,113 +413,11 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encodin
     for ([[maybe_unused]] const auto& [fact, var] : onlyForNewRelevantsFacts ? _new_relevants_facts_to_encode : left.getVariableTable(VarType::FACT)) {
         if (_htn.hasQConstants(fact)) continue;
 
-        int factId = _htn.getGroundFactId(fact, true);
-        if (factId < 0) {
-            Log::e("factId: %i, fact: %s, var: %i\n", factId, TOSTR(fact), var);
-            exit(1);
-        }
-        int oldFactVars[2] = {-var, var};
-        const USigSet* dir[2] = {nullptr, nullptr};
-        IndirectFactSupportMapEntry* indir[2] = {nullptr, nullptr};
-
-        // Retrieve direct and indirect support for this fact
-        bool reuse = true;
-        for (int i = 0; i < 2; i++) {
-            if (!supp[i]->empty()) { // Direct support
-                auto it = supp[i]->find(factId);
-                if (it != supp[i]->end()) {
-                    dir[i] = &(it->second);
-                    reuse = false;
-                } 
-            }
-            if (!iSupp[i]->empty()) { // Indirect support
-                auto it = iSupp[i]->find(factId);
-                if (it != iSupp[i]->end()) {
-                    indir[i] = &(it->second);
-                    reuse = false;
-                } 
-            }
-        }
-
-        int factVar = newPos.getVariableOrZero(VarType::FACT, fact);
-
-        // Decide on the fact variable to use (reuse or encode)
-        if (factVar == 0) {
-            if (reuse) {
-                // No support for this fact -- variable can be reused from left
-                factVar = var;
-                newPos.setVariable(VarType::FACT, fact, var);
-            } else {
-                // There is some support for this fact -- need to encode new var
-                int v = _vars.encodeVariable(VarType::FACT, newPos, fact);
-                _new_fact_vars.insert(v);
-                factVar = v;
-            }
-        }
-
-        skipped++;
-        // Skip frame axiom encoding if nothing can change
-        if (var == factVar) continue; 
-        // Skip frame axioms if they were already encoded
-        if (skipRedundantFrameAxioms && env.reusedFacts->hasVariable(VarType::FACT, fact)) continue;
-        // No primitive ops at this position: No need for encoding frame axioms
-        if (!hasPrimitiveOps) continue;
-        skipped--;
-
-        // Encode general frame axioms for this fact
-        int i = -1;
-        for (int sign = -1; sign <= 1; sign += 2) {
-            i++;
-            std::vector<int> cls;
-            // Fact change:
-            if (oldFactVars[i] != 0) cls.push_back(oldFactVars[i]);
-            cls.push_back(-sign*factVar);
-            if (dir[i] != nullptr || indir[i] != nullptr) {
-                std::vector<int> headerLits = cls;
-                // Non-primitiveness wildcard
-                if (!nonprimFactSupport) {
-                    if (_implicit_primitiveness) {
-                        for (int var : _nonprimitive_ops) cls.push_back(var);
-                    } else if (prevVarPrim != 0) cls.push_back(-prevVarPrim);
-                }
-
-                if (_mutex_predicates && (sign == 1) && (_htn._sas_plus != nullptr && _htn._sas_plus->isInMutexGroup(fact))) {
-                    positiveFacts.insert(fact);
-                }
-
-                // INDIRECT support
-                if (indir[i] != nullptr) {                    
-                    for (auto& [op, tree] : *indir[i]) {
-                        // Skip if the operation is already a DIRECT support for the fact
-                        if (dir[i] != nullptr && dir[i]->count(op)) continue;
-
-                        tree.pruneRedundantPaths();
-
-                        // Encode substitutions enabling indirect support for this fact
-                        int opVar = left.getVariableOrZero(VarType::OP, op);
-                        USignature virtOp(_htn.getRepetitionNameOfAction(op._name_id), op._args);
-                        int virtOpVar = left.getVariableOrZero(VarType::OP, virtOp);
-                        if (opVar != 0) {
-                            cls.push_back(opVar);
-                            encodeIndirectFrameAxioms(headerLits, opVar, tree);
-                        }
-                        if (virtOpVar != 0) {
-                            cls.push_back(virtOpVar);
-                            encodeIndirectFrameAxioms(headerLits, virtOpVar, tree);
-                        }
-                    }
-                }
-                // DIRECT support
-                if (dir[i] != nullptr) for (const USignature& opSig : *dir[i]) {
-                    int opVar = left.getVariableOrZero(VarType::OP, opSig);
-                    if (opVar != 0) cls.push_back(opVar);
-                    USignature virt = opSig.renamed(_htn.getRepetitionNameOfAction(opSig._name_id));
-                    int virtOpVar = left.getVariableOrZero(VarType::OP, virt);
-                    if (virtOpVar != 0) cls.push_back(virtOpVar);
-                }
-            }
-            _sat.addClause(cls);
-        }
+        const bool encoded = encodeFrameAxiomForFact(
+                newPos, left, env, fact, var,
+                nonprimFactSupport, hasPrimitiveOps, prevVarPrim,
+                skipRedundantFrameAxioms, positiveFacts);
+        if (!encoded) skipped++;
     }
     _stats.end(STAGE_DIRECTFRAMEAXIOMS);
 
@@ -459,6 +428,132 @@ void Encoding::encodeFrameAxioms(Position& newPos, Position& left, const Encodin
         encodeMutexPredicates(newPos, env, positiveFacts);
         // _stats.endTiming(TimingStage::ENCODING_MUTEXES);
     }
+}
+
+bool Encoding::encodeFrameAxiomForFact(
+        Position& newPos, Position& left, const Encoding::EncodingEnvironment& env,
+        const USignature& fact, int oldFactVar,
+        bool nonprimFactSupport, bool hasPrimitiveOps, int prevVarPrim,
+        bool skipRedundantFrameAxioms, USigSet& positiveFacts) {
+    using SupportsId = const NodeHashMap<int, USigSet>;
+
+    const int factId = _htn.getGroundFactId(fact, true);
+    if (factId < 0) {
+        Log::e("factId: %i, fact: %s, var: %i\n", factId, TOSTR(fact), oldFactVar);
+        exit(1);
+    }
+
+    OutgoingEffects& effects = left.getOutgoingEffects();
+    const SupportsId* supp[2] = {
+        &effects.getSupports(/*negated=*/true),
+        &effects.getSupports(/*negated=*/false)
+    };
+    IndirectFactSupportMapId* iSupp[2] = {
+        &effects.getIndirectSupports(/*negated=*/true),
+        &effects.getIndirectSupports(/*negated=*/false)
+    };
+
+    int oldFactVars[2] = {-oldFactVar, oldFactVar};
+    const USigSet* dir[2] = {nullptr, nullptr};
+    IndirectFactSupportMapEntry* indir[2] = {nullptr, nullptr};
+
+    // Retrieve direct and indirect support for this fact
+    bool reuse = true;
+    for (int i = 0; i < 2; i++) {
+        if (!supp[i]->empty()) { // Direct support
+            auto it = supp[i]->find(factId);
+            if (it != supp[i]->end()) {
+                dir[i] = &(it->second);
+                reuse = false;
+            }
+        }
+        if (!iSupp[i]->empty()) { // Indirect support
+            auto it = iSupp[i]->find(factId);
+            if (it != iSupp[i]->end()) {
+                indir[i] = &(it->second);
+                reuse = false;
+            }
+        }
+    }
+
+    int factVar = newPos.getVariableOrZero(VarType::FACT, fact);
+
+    // Decide on the fact variable to use (reuse or encode)
+    if (factVar == 0) {
+        if (reuse) {
+            // No support for this fact -- variable can be reused from left
+            factVar = oldFactVar;
+            newPos.setVariable(VarType::FACT, fact, oldFactVar);
+        } else {
+            // There is some support for this fact -- need to encode new var
+            int v = _vars.encodeVariable(VarType::FACT, newPos, fact);
+            _new_fact_vars.insert(v);
+            factVar = v;
+        }
+    }
+
+    // Skip frame axiom encoding if nothing can change
+    if (oldFactVar == factVar) return true;
+    // Skip frame axioms if they were already encoded
+    if (skipRedundantFrameAxioms && env.reusedFacts->hasVariable(VarType::FACT, fact)) return true;
+    // No primitive ops at this position: No need for encoding frame axioms
+    if (!hasPrimitiveOps) return true;
+
+    // Encode general frame axioms for this fact
+    int i = -1;
+    for (int sign = -1; sign <= 1; sign += 2) {
+        i++;
+        std::vector<int> cls;
+        // Fact change:
+        if (oldFactVars[i] != 0) cls.push_back(oldFactVars[i]);
+        cls.push_back(-sign*factVar);
+        if (dir[i] != nullptr || indir[i] != nullptr) {
+            std::vector<int> headerLits = cls;
+            // Non-primitiveness wildcard
+            if (!nonprimFactSupport) {
+                if (_implicit_primitiveness) {
+                    for (int var : _nonprimitive_ops) cls.push_back(var);
+                } else if (prevVarPrim != 0) cls.push_back(-prevVarPrim);
+            }
+
+            if (_mutex_predicates && (sign == 1) && (_htn._sas_plus != nullptr && _htn._sas_plus->isInMutexGroup(fact))) {
+                positiveFacts.insert(fact);
+            }
+
+            // INDIRECT support
+            if (indir[i] != nullptr) {
+                for (auto& [op, tree] : *indir[i]) {
+                    // Skip if the operation is already a DIRECT support for the fact
+                    if (dir[i] != nullptr && dir[i]->count(op)) continue;
+
+                    tree.pruneRedundantPaths();
+
+                    // Encode substitutions enabling indirect support for this fact
+                    int opVar = left.getVariableOrZero(VarType::OP, op);
+                    USignature virtOp(_htn.getRepetitionNameOfAction(op._name_id), op._args);
+                    int virtOpVar = left.getVariableOrZero(VarType::OP, virtOp);
+                    if (opVar != 0) {
+                        cls.push_back(opVar);
+                        encodeIndirectFrameAxioms(headerLits, opVar, tree);
+                    }
+                    if (virtOpVar != 0) {
+                        cls.push_back(virtOpVar);
+                        encodeIndirectFrameAxioms(headerLits, virtOpVar, tree);
+                    }
+                }
+            }
+            // DIRECT support
+            if (dir[i] != nullptr) for (const USignature& opSig : *dir[i]) {
+                int opVar = left.getVariableOrZero(VarType::OP, opSig);
+                if (opVar != 0) cls.push_back(opVar);
+                USignature virt = opSig.renamed(_htn.getRepetitionNameOfAction(opSig._name_id));
+                int virtOpVar = left.getVariableOrZero(VarType::OP, virt);
+                if (virtOpVar != 0) cls.push_back(virtOpVar);
+            }
+        }
+        _sat.addClause(cls);
+    }
+    return false;
 }
 
 void Encoding::encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int opVar, const IntPairTree& tree) {
