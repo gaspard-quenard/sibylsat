@@ -86,12 +86,13 @@ private:
     void addGroundEffect(OutgoingEffects& effects, const USignature& opSig, BitVec facts, bool negated, EffectMode mode);
     bool addPseudoGroundEffect(OutgoingEffects& effects, Position& position, const USignature& op, const Signature& fact, EffectMode mode);
 
-    std::optional<Reduction> createValidReduction(Position& pos, const USignature& rSig, const USignature& task);
+    std::optional<USignature> instantiateAndRegisterReduction(Reduction reduction, const std::optional<USignature>& expectedTask, size_t originPositionId);
 
-    void propagateActions(Position& newPos, Position& parent);
-    void propagateReductions(Position& newPos, Position& parent);
-    std::vector<USignature> instantiateAllActionsOfTask(Position& pos, const USignature& task);
-    std::vector<USignature> instantiateAllReductionsOfTask(Position& pos, const USignature& task);
+    void propagateParentActions(Position& child, Position& parent);
+    void expandParentReductions(Position& child, Position& parent);
+    std::optional<USignature> instantiateAndRegisterAction(const USignature& actionSig, size_t originPositionId);
+    std::vector<USignature> instantiateActionsOfTask(const USignature& task, size_t originPositionId);
+    std::vector<USignature> instantiateReductionsOfTask(const USignature& task, size_t originPositionId);
     void addQConstantTypeConstraints(Position& pos, const USignature& op);
 };
 

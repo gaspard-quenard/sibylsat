@@ -278,24 +278,15 @@ void HtnInstance::primitivizeSimpleReductions() {
     }
 }
 
-int HtnInstance::nameId(const std::string& name, bool createQConstant, int layerIdx, int pos) {
-    int id = -1;
-    if (!_name_table.count(name)) {
-        if (createQConstant) {
-            id = std::numeric_limits<int>::max() - _q_constants_with_origin.size();
-            assert(layerIdx >= 0 && pos >= 0);
-            _q_constants_with_origin[id] = IntPair(layerIdx, pos);
-        } else {
-            id = _name_table_running_id++;
-            if (name[0] == '?') {
-                // variable
-                _var_ids.insert(id);
-            }
-        }
-        _name_table[name] = id;
-        _name_back_table[id] = name;
-    }
-    return id == -1 ? _name_table[name] : id;
+int HtnInstance::nameId(const std::string& name) {
+    auto existing = _name_table.find(name);
+    if (existing != _name_table.end()) return existing->second;
+
+    const int id = _name_table_running_id++;
+    if (name[0] == '?') _var_ids.insert(id);
+    _name_table[name] = id;
+    _name_back_table[id] = name;
+    return id;
 }
 
 std::string HtnInstance::toString(int id) const {
@@ -758,58 +749,48 @@ int HtnInstance::getActionNameFromRepetition(int vChildId) const {
     return it == _repeated_to_actual_action.end() ? -1 : it->second;
 }
 
-Action HtnInstance::replaceVariablesWithQConstants(const Action& a, const std::vector<FlatHashSet<int>>& opArgDomains, int layerIdx, int pos) {
-    std::vector<int> newArgs = replaceVariablesWithQConstants((const HtnOp&)a, opArgDomains, layerIdx, pos);
-    if (newArgs.size() == 1 && newArgs[0] == -1) {
-        // No valid substitution.
-        return a;
-    }
-    return toAction(a.getNameId(), newArgs);
-}
-Reduction HtnInstance::replaceVariablesWithQConstants(const Reduction& red, const std::vector<FlatHashSet<int>>& opArgDomains, int layerIdx, int pos) {
-    std::vector<int> newArgs = replaceVariablesWithQConstants((const HtnOp&)red, opArgDomains, layerIdx, pos);
-    if (newArgs.size() == 1 && newArgs[0] == -1) {
-        // No valid substitution.
-        return red;
-    }
-    return red.substituteRed(Substitution(red.getArguments(), newArgs));
+std::optional<Action> HtnInstance::instantiateWithQConstants(const Action& action, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId) {
+    auto instantiatedArgs = instantiateArgumentsWithQConstants(action, argumentDomains, originPositionId);
+    if (!instantiatedArgs) return std::nullopt;
+    return toAction(action.getNameId(), instantiatedArgs.value());
 }
 
-std::vector<int> HtnInstance::replaceVariablesWithQConstants(const HtnOp& op, 
-            const std::vector<FlatHashSet<int>>& domainPerVariable, int layerIdx, int pos) {
-    
-    if (op.getArguments().empty()) return std::vector<int>();
-    std::vector<int> vecFailure(1, -1);
+std::optional<Reduction> HtnInstance::instantiateWithQConstants(const Reduction& reduction, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId) {
+    auto instantiatedArgs = instantiateArgumentsWithQConstants(reduction, argumentDomains, originPositionId);
+    if (!instantiatedArgs) return std::nullopt;
+    return reduction.substituteRed(Substitution(reduction.getArguments(), instantiatedArgs.value()));
+}
 
-    std::vector<int> args = op.getArguments();
-    std::vector<int> varargIndices;
+std::optional<std::vector<int>> HtnInstance::instantiateArgumentsWithQConstants(const HtnOp& operation, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId) {
+    if (operation.getArguments().empty()) return std::vector<int>();
+    if (argumentDomains.size() != operation.getArguments().size()) return std::nullopt;
+
+    std::vector<int> args = operation.getArguments();
+    std::vector<size_t> variableArgumentIndices;
     for (size_t i = 0; i < args.size(); i++) {
-        const int& arg = args[i];
-        if (isVariable(arg)) varargIndices.push_back(i);
+        if (isVariable(args[i])) variableArgumentIndices.push_back(i);
     }
-    if (domainPerVariable.empty()) return vecFailure;
+
+    for (size_t argumentIndex : variableArgumentIndices) {
+        if (!argumentDomains[argumentIndex].empty()) continue;
+        Log::d("Empty domain for arg %s of %s\n", TOSTR(args[argumentIndex]), TOSTR(operation.getSignature()));
+        return std::nullopt;
+    }
 
     // Assemble new operator arguments
     FlatHashMap<int, int> numIntroducedQConstsPerType;
     NodeHashMap<int, std::vector<int>> domainsPerQConst;
-    for (int i : varargIndices) {
-        int vararg = args[i];
-        auto& domain = domainPerVariable[i];
-        if (domain.empty()) {
-            // No valid constants at this position! The op is impossible.
-            Log::d("Empty domain for arg %s of %s\n", TOSTR(vararg), TOSTR(op.getSignature()));
-            return vecFailure;
-        }
+    for (size_t argumentIndex : variableArgumentIndices) {
+        const auto& domain = argumentDomains[argumentIndex];
         if (domain.size() == 1) {
             // Only one valid constant here: Replace directly
-            int onlyArg = -1; for (int arg : domain) {onlyArg = arg; break;}
-            args[i] = onlyArg;
+            args[argumentIndex] = *domain.begin();
         } else {
             // Several valid constants here: Introduce q-constant
 
             // Assemble name
             int sortCounter = 0;
-            int primarySort = _signature_sorts_table[op.getSignature()._name_id][i];
+            int primarySort = _signature_sorts_table[operation.getSignature()._name_id][argumentIndex];
             auto it = numIntroducedQConstsPerType.find(primarySort);
             if (it == numIntroducedQConstsPerType.end()) {
                 numIntroducedQConstsPerType[primarySort] = 1;
@@ -820,35 +801,43 @@ std::vector<int> HtnInstance::replaceVariablesWithQConstants(const HtnOp& op,
             std::vector<int> domainVec(domain.begin(), domain.end());
             std::stringstream domainHash;
             domainHash << std::hex << USignatureHasher()(USignature(primarySort, domainVec));
-            std::string qConstName = "Q_" + std::to_string(layerIdx) + "," 
-                + std::to_string(pos) + "_" + _name_back_table[primarySort]
+            std::string qConstName = "Q_" + std::to_string(originPositionId)
+                + "_" + _name_back_table[primarySort]
                 + ":" + std::to_string(sortCounter) 
                 + "_" + domainHash.str()
-                + (_share_q_constants ? std::string() : "_#"+std::to_string(_q_constants_with_origin.size()));
+                + (_share_q_constants ? std::string() : "_#"+std::to_string(_q_constant_origin_position_ids.size()));
             
             // Initialize q-constant
-            args[i] = nameId(qConstName, /*createQConstant=*/true, layerIdx, pos);
-            initQConstantSorts(args[i], domain);
-            domainsPerQConst[args[i]] = std::move(domainVec);
-            assert(domain == getDomainOfQConstant(args[i]));
-            assert(getOriginOfQConstant(args[i]) == IntPair(layerIdx, pos));
-            /*
-            Log::d("QC %s : %s ~> %s ( ", TOSTR(op.getSignature()), TOSTR(vararg), TOSTR(args[i]), domain.size());
-            for (int c : domain) {
-                Log::log_notime(Log::V4_DEBUG, "%s ", TOSTR(c));
-            }
-            Log::log_notime(Log::V4_DEBUG, ")\n");
-            */
+            args[argumentIndex] = createQConstant(qConstName, domain, originPositionId);
+            domainsPerQConst[args[argumentIndex]] = std::move(domainVec);
         }
     }
 
     // Remember exact domain of each q constant for this operation
-    USignature newSig(op.getSignature()._name_id, args);
+    USignature newSig(operation.getSignature()._name_id, args);
     for (auto& [qconst, domain] : domainsPerQConst) {
         _q_const_to_op_domains[qconst][newSig] = std::move(domain);
     }
 
     return args;
+}
+
+int HtnInstance::createQConstant(const std::string& name, const FlatHashSet<int>& domain, size_t originPositionId) {
+    assert(originPositionId > 0);
+    auto existing = _name_table.find(name);
+    if (existing != _name_table.end()) {
+        const int id = existing->second;
+        assert(_q_constant_origin_position_ids.at(id) == originPositionId);
+        assert(getDomainOfQConstant(id) == domain);
+        return id;
+    }
+
+    const int id = std::numeric_limits<int>::max() - _q_constant_origin_position_ids.size();
+    _q_constant_origin_position_ids[id] = originPositionId;
+    _name_table[name] = id;
+    _name_back_table[id] = name;
+    initQConstantSorts(id, domain);
+    return id;
 }
 
 void HtnInstance::initQConstantSorts(int id, const FlatHashSet<int>& domain) {
@@ -1047,8 +1036,8 @@ const FlatHashSet<int>& HtnInstance::getDomainOfQConstant(int qconst) const {
     return _constants_by_sort.at(_primary_sort_of_q_constants.at(qconst));
 }
 
-const IntPair& HtnInstance::getOriginOfQConstant(int qconst) const {
-    return _q_constants_with_origin.at(qconst);
+size_t HtnInstance::getOriginPositionIdOfQConstant(int qconst) const {
+    return _q_constant_origin_position_ids.at(qconst);
 }
 
 std::vector<int> HtnInstance::popOperationDependentDomainOfQConstant(int qconst, const USignature& op) {

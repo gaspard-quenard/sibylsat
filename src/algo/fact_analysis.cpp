@@ -45,11 +45,10 @@ FactAnalysis::FactAnalysis(HtnInstance& htn)
     resetReachability();
 }
 
-std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnOp &op)
+std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgumentDomains(const HtnOp& operation)
 {
-
-    const std::vector<int> &args = op.getArguments();
-    const std::vector<int> &sorts = _htn.getSorts(op.getNameId());
+    const std::vector<int>& args = operation.getArguments();
+    const std::vector<int>& sorts = _htn.getSorts(operation.getNameId());
     std::vector<FlatHashSet<int>> domainPerVariable(args.size());
     std::vector<bool> occursInPreconditions(args.size(), false);
 
@@ -62,9 +61,8 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
 
     std::vector<PreconditionConstraint> constraints;
 
-    const SigSet *preSets[1] = {&op.getPreconditions()};
-    for (const auto &preSet : preSets)
-        for (const auto &preSig : *preSet)
+    // Extra preconditions validate candidates but do not restrict argument domains.
+    for (const auto& preSig : operation.getPreconditions())
         {
 
             // Find mapping from precond args to op args
@@ -108,7 +106,7 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
             std::vector<int> preSorts(preSig._usig._args.size());
             for (size_t i = 0; i < preSorts.size(); i++)
             {
-                preSorts[i] = sorts[opArgIndices[i]];
+                preSorts[i] = opArgIndices[i] >= 0 ? sorts[opArgIndices[i]] : _htn.getSorts(preSig._usig._name_id)[i];
             }
 
             // Check possible decodings of precondition
@@ -183,24 +181,22 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
             }
 
             if (any && !anyValid)
-                return std::vector<FlatHashSet<int>>();
+                return std::nullopt;
 
             if (!constraint.varIndices.empty())
                 constraints.push_back(std::move(constraint));
         }
 
     // Initialize domains from constraints
-    std::vector<bool> domainInitialized(args.size(), false);
     for (const auto &c : constraints)
     {
         if (c.tuples.empty())
-            return std::vector<FlatHashSet<int>>();
+            return std::nullopt;
         for (size_t pos = 0; pos < c.varIndices.size(); ++pos)
         {
             int varIdx = c.varIndices[pos];
             for (const auto &t : c.tuples)
                 domainPerVariable[varIdx].insert(t[pos]);
-            domainInitialized[varIdx] = true;
         }
     }
 
@@ -236,7 +232,7 @@ std::vector<FlatHashSet<int>> FactAnalysis::getReducedArgumentDomains(const HtnO
                 {
                     domainPerVariable[varIdx] = std::move(supported);
                     if (domainPerVariable[varIdx].empty())
-                        return std::vector<FlatHashSet<int>>();
+                        return std::nullopt;
                     changed = true;
                 }
             }

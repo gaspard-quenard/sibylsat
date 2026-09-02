@@ -3,6 +3,7 @@
 #define DOMPASCH_TREE_REXX_HTN_INSTANCE_H
 
 #include <assert.h>
+#include <optional>
 
 #include "data/action.h"
 #include "data/reduction.h"
@@ -55,7 +56,7 @@ private:
     // Set of equality predicate name IDs.
     FlatHashSet<int> _equality_predicates;
     // Set of all q-constant IDs.
-    FlatHashMap<int, IntPair> _q_constants_with_origin;
+    FlatHashMap<int, size_t> _q_constant_origin_position_ids;
 
     NodeHashMap<int, NodeHashMap<USignature, std::vector<int>, USignatureHasher>> _q_const_to_op_domains;  
 
@@ -178,7 +179,7 @@ public:
     const FlatHashSet<int>& getConstantsOfSort(int sort) const;
     const int getPrimarySortOfQConstant(int qconst) const;
     const FlatHashSet<int>& getSortsOfQConstant(int qconst);
-    const IntPair& getOriginOfQConstant(int qconst) const;
+    size_t getOriginPositionIdOfQConstant(int qconst) const;
     const FlatHashSet<int>& getDomainOfQConstant(int qconst) const;
     std::vector<int> popOperationDependentDomainOfQConstant(int qconst, const USignature& op);
 
@@ -188,15 +189,15 @@ public:
     ArgIterator decodeObjects(const USignature& qSig, std::vector<std::vector<int>> eligibleArgs);
     SampleArgIterator decodeObjects(const USignature& qSig, std::vector<std::vector<int>> eligibleArgs, size_t numSamples);
 
-    Action replaceVariablesWithQConstants(const Action& a, const std::vector<FlatHashSet<int>>& opArgDomains, int layerIdx, int pos);
-    Reduction replaceVariablesWithQConstants(const Reduction& red, const std::vector<FlatHashSet<int>>& opArgDomains, int layerIdx, int pos);
+    std::optional<Action> instantiateWithQConstants(const Action& action, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
+    std::optional<Reduction> instantiateWithQConstants(const Reduction& reduction, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
 
     USignature getNormalizedLifted(const USignature& opSig, std::vector<int>& placeholderArgs);
     
     USignature cutNonoriginalTaskArguments(const USignature& sig);
     const std::pair<int, int>& getReductionAndActionFromPrimitivization(int primitivizationName);
 
-    int nameId(const std::string& name, bool createQConstant = false, int layerIdx = -1, int pos = -1);
+    int nameId(const std::string& name);
     std::string toString(int id) const;
 
     inline bool isVariable(int c) const {
@@ -312,7 +313,7 @@ public:
     }
 
     inline size_t getNumberOfQConstants() const {
-        return _q_constants_with_origin.size();
+        return _q_constant_origin_position_ids.size();
     }
 
     std::vector<TypeConstraint> getQConstantTypeConstraints(const USignature& sig) {
@@ -463,7 +464,8 @@ private:
     Reduction& createReduction(method& method);
     Action& createAction(const task& task);
 
-    std::vector<int> replaceVariablesWithQConstants(const HtnOp& op, const std::vector<FlatHashSet<int>>& opArgDomains, int layerIdx, int pos);
+    std::optional<std::vector<int>> instantiateArgumentsWithQConstants(const HtnOp& operation, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
+    int createQConstant(const std::string& name, const FlatHashSet<int>& domain, size_t originPositionId);
     void initQConstantSorts(int id, const FlatHashSet<int>& domain);
 
     void loadMutexes();

@@ -2,6 +2,8 @@
 #ifndef DOMPASCH_LILOTANE_ANALYSIS_H
 #define DOMPASCH_LILOTANE_ANALYSIS_H
 
+#include <optional>
+
 #include "data/htn_instance.h"
 #include "util/bitvec.h"
 
@@ -61,7 +63,7 @@ public:
         _init_state_neg = neg;
     }
 
-    std::vector<FlatHashSet<int>> getReducedArgumentDomains(const HtnOp& op);
+    std::optional<std::vector<FlatHashSet<int>>> computeReachableArgumentDomains(const HtnOp& operation);
 
 
 
@@ -84,6 +86,10 @@ public:
     }
 
     bool isInitiallyReachable(const int predId, bool negated) const {
+        const USignature& fact = _htn.getGroundPositiveFact(predId);
+        if (_htn.isEqualityPredicate(fact._name_id)) {
+            return negated ? fact._args[0] != fact._args[1] : fact._args[0] == fact._args[1];
+        }
         if (negated) {
             return _init_state_neg.test(predId);
         }

@@ -23,7 +23,7 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
         bool isOtherQ = _htn.isQConstant(otherArg);
         if (!isQ && !isOtherQ) return res; // Different ground constants
 
-        if (isQ && isOtherQ && _htn.getOriginOfQConstant(arg) != _htn.getOriginOfQConstant(otherArg)) {
+        if (isQ && isOtherQ && _htn.getOriginPositionIdOfQConstant(arg) != _htn.getOriginPositionIdOfQConstant(otherArg)) {
             return res;
         }
         

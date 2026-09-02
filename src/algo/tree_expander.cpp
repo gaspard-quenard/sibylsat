@@ -68,15 +68,8 @@ void TreeExpander::createInitialLeaves() {
     /***** DEPTH 0, POSITION 0 ******/
 
     const Reduction& initReduction = _htn.getInitReduction();
-    if (isPotentiallyApplicable(initReduction)) {
-        USignature rSig = initReduction.getSignature();
-        auto rOpt = createValidReduction(*rootReductionPosition, rSig, USignature());
-        if (rOpt) {
-            auto& r = rOpt.value();
-            USignature sig = r.getSignature();
-            rootReductionPosition->addReduction(sig);
-        }
-    }
+    auto initReductionSig = instantiateAndRegisterReduction(initReduction, std::nullopt, rootReductionPosition->getPositionId());
+    if (initReductionSig) rootReductionPosition->addReduction(initReductionSig.value());
     addPreconditionConstraints(*rootReductionPosition);
 
     incrementPosition(*rootReductionPosition);
@@ -195,8 +188,8 @@ void TreeExpander::createNextPosition(Position& newPos, Position* expandedParent
 }
 
 void TreeExpander::createNextPositionFromParent(Position& newPos, Position& parent) {
-    propagateActions(newPos, parent);
-    propagateReductions(newPos, parent);
+    propagateParentActions(newPos, parent);
+    expandParentReductions(newPos, parent);
     addPreconditionConstraints(newPos);
 }
 
@@ -558,216 +551,217 @@ bool TreeExpander::addPseudoGroundEffect(
     return true;
 }
 
-void TreeExpander::propagateActions(Position& newPos, Position& parent) {
-    size_t offset = newPos.getOffset();
+void TreeExpander::propagateParentActions(Position& child, Position& parent) {
+    const size_t childOffset = child.getOffset();
     std::vector<USignature> actionsToPrune;
-    size_t numActionsBefore = parent.getActions().size();
-    for (const auto& aSig : parent.getActions()) {
-        const Action& a = _htn.getOpTable().getAction(aSig);
+    const size_t numParentActionsBeforePruning = parent.getActions().size();
+    for (const auto& actionSig : parent.getActions()) {
+        const Action& action = _htn.getOpTable().getAction(actionSig);
 
-        bool valid = _analysis.hasValidPreconditions(a.getPreconditions())
-                && _analysis.hasValidPreconditions(a.getExtraPreconditions());
+        const bool hasValidPreconditions =
+            _analysis.hasValidPreconditions(action.getPreconditions())
+            && _analysis.hasValidPreconditions(action.getExtraPreconditions());
 
-        if (!valid) {
-            Log::i("Retroactively prune action %s@(%i,%i): no children at offset %i\n",
-                TOSTR(aSig), parent.getCreationIteration(), parent.getPositionId(), offset);
-            actionsToPrune.push_back(aSig);
+        if (!hasValidPreconditions) {
+            Log::i("Retroactively prune action %s@(%zu,%zu): no children at offset %zu\n",
+                TOSTR(actionSig), parent.getCreationIteration(), parent.getPositionId(), childOffset);
+            actionsToPrune.push_back(actionSig);
         }
     }
 
-    for (const auto& aSig : actionsToPrune) {
+    for (const auto& actionSig : actionsToPrune) {
         assert(_pruning != nullptr);
-        _pruning->prune(aSig, parent);
+        _pruning->prune(actionSig, parent);
     }
-    assert(parent.getActions().size() == numActionsBefore - actionsToPrune.size()
-        || Log::e("%i != %i-%i\n", parent.getActions().size(), numActionsBefore, actionsToPrune.size()));
+    assert(parent.getActions().size() == numParentActionsBeforePruning - actionsToPrune.size()
+        || Log::e("%zu != %zu-%zu\n", parent.getActions().size(),
+            numParentActionsBeforePruning, actionsToPrune.size()));
 
-    for (const auto& aSig : parent.getActions()) {
-        if (offset < 1) {
-            assert(_htn.isFullyGround(aSig));
-            if (_params.isNonzero("aar") && !_htn.isActionRepetition(aSig._name_id)) {
-                USignature vChildSig = _htn.getRepetitionOfAction(aSig);
-                newPos.addAction(vChildSig);
-                newPos.addExpansion(aSig, vChildSig);
+    if (childOffset == 0) {
+        for (const auto& actionSig : parent.getActions()) {
+            assert(_htn.isFullyGround(actionSig));
+            if (_params.isNonzero("aar") && !_htn.isActionRepetition(actionSig._name_id)) {
+                USignature repetitionSig = _htn.getRepetitionOfAction(actionSig);
+                child.addAction(repetitionSig);
+                child.addExpansion(actionSig, repetitionSig);
             } else {
-                newPos.addAction(aSig);
-                newPos.addExpansion(aSig, aSig);
+                child.addAction(actionSig);
+                child.addExpansion(actionSig, actionSig);
             }
-        } else {
-            const USignature& blankSig = _htn.getBlankActionSig();
-            newPos.addAction(blankSig);
-            newPos.addExpansion(aSig, blankSig);
         }
+        return;
+    }
+
+    const USignature& blankActionSig = _htn.getBlankActionSig();
+    for (const auto& actionSig : parent.getActions()) {
+        child.addAction(blankActionSig);
+        child.addExpansion(actionSig, blankActionSig);
     }
 }
 
-void TreeExpander::propagateReductions(Position& newPos, Position& parent) {
-    size_t offset = newPos.getOffset();
-    NodeHashMap<USignature, USigSet, USignatureHasher> subtaskToParents;
-    NodeHashSet<USignature, USignatureHasher> reductionsWithChildren;
+void TreeExpander::expandParentReductions(Position& child, Position& parent) {
+    const size_t childOffset = child.getOffset();
+    const size_t originPositionId = child.getPositionId();
+    const USignature& blankActionSig = _htn.getBlankActionSig();
+    NodeHashMap<USignature, USigSet, USignatureHasher> parentReductionsBySubtask;
+    NodeHashSet<USignature, USignatureHasher> parentReductionsWithChild;
 
-    for (const auto& rSig : parent.getReductions()) {
+    for (const auto& parentReductionSig : parent.getReductions()) {
+        const Reduction& parentReduction = _htn.getOpTable().getReduction(parentReductionSig);
 
-        const Reduction r = _htn.getOpTable().getReduction(rSig);
-        
-        if (offset < r.getSubtasks().size()) {
-            const USignature& subtask = r.getSubtasks()[offset];
-            subtaskToParents[subtask].insert(rSig);
+        if (childOffset < parentReduction.getSubtasks().size()) {
+            const USignature& subtask = parentReduction.getSubtasks()[childOffset];
+            parentReductionsBySubtask[subtask].insert(parentReductionSig);
         } else {
-            reductionsWithChildren.insert(rSig);
-            const USignature& blankSig = _htn.getBlankActionSig();
-            newPos.addAction(blankSig);
-            newPos.addExpansion(rSig, blankSig);
+            // Pad reductions shorter than the expanded width with blank actions.
+            parentReductionsWithChild.insert(parentReductionSig);
+            child.addAction(blankActionSig);
+            child.addExpansion(parentReductionSig, blankActionSig);
         }
     }
 
-    for (const auto& [subtask, parents] : subtaskToParents) {
-        auto allActions = instantiateAllActionsOfTask(newPos, subtask);
+    // Instantiate each distinct subtask once, then link it to every parent reduction exposing it.
+    for (const auto& [subtask, parentReductionSigs] : parentReductionsBySubtask) {
+        const auto instantiatedActionSigs = instantiateActionsOfTask(subtask, originPositionId);
+        const auto instantiatedReductionSigs = instantiateReductionsOfTask(subtask, originPositionId);
 
-        for (const USignature& subRSig : instantiateAllReductionsOfTask(newPos, subtask)) {
+        for (const USignature& childReductionSig : instantiatedReductionSigs) {
+            assert(_htn.isReduction(childReductionSig));
+            const Reduction& childReduction = _htn.getOpTable().getReduction(childReductionSig);
+            assert(childReductionSig == childReduction.getSignature());
+            assert(_htn.isFullyGround(childReductionSig));
 
-            if (_htn.isAction(subRSig)) {
-                allActions.push_back(subRSig);
-                continue;
-            }
-
-            const Reduction& subR = _htn.getOpTable().getReduction(subRSig);
-            
-            assert(_htn.isReduction(subRSig) && subRSig == subR.getSignature() && _htn.isFullyGround(subRSig));
-
-            newPos.addReduction(subRSig);
+            child.addReduction(childReductionSig);
 
             if (_optimal) {
                 assert(_tdg != nullptr);
-                int heuristicValue = _tdg->getBestHeuristicValue(subRSig);
-                Log::d("Set the heuristic value of %s to %d\n", TOSTR(subRSig), heuristicValue);
-                newPos.setHeuristicValue(subRSig, heuristicValue);
+                const int heuristicValue = _tdg->getBestHeuristicValue(childReductionSig);
+                Log::d("Set the heuristic value of %s to %d\n", TOSTR(childReductionSig), heuristicValue);
+                child.setHeuristicValue(childReductionSig, heuristicValue);
             }
 
-            for (const auto& rSig : parents) {
-                reductionsWithChildren.insert(rSig);
-                newPos.addExpansion(rSig, subRSig);
+            for (const auto& parentReductionSig : parentReductionSigs) {
+                parentReductionsWithChild.insert(parentReductionSig);
+                child.addExpansion(parentReductionSig, childReductionSig);
             }
         }
 
-        for (const USignature& aSig : allActions) {
+        for (const USignature& childActionSig : instantiatedActionSigs) {
+            assert(_htn.isFullyGround(childActionSig));
+            child.addAction(childActionSig);
 
-            assert(_htn.isFullyGround(aSig));
-            newPos.addAction(aSig);
-
-            for (const auto& rSig : parents) {
-                reductionsWithChildren.insert(rSig);
-                newPos.addExpansion(rSig, aSig);
+            for (const auto& parentReductionSig : parentReductionSigs) {
+                parentReductionsWithChild.insert(parentReductionSig);
+                child.addExpansion(parentReductionSig, childActionSig);
             }
         }
     }
 
     std::vector<USignature> reductionsWithNoChildren;
-    for (const auto& rSig : parent.getReductions()) {
-        if (!reductionsWithChildren.count(rSig)) {
-            reductionsWithNoChildren.push_back(rSig);
+    for (const auto& parentReductionSig : parent.getReductions()) {
+        if (!parentReductionsWithChild.count(parentReductionSig)) {
+            reductionsWithNoChildren.push_back(parentReductionSig);
         }
     }
 
-    for (const auto& rSig : reductionsWithNoChildren) {
-        Log::i("Retroactively prune reduction %s@(%i,%i): no children at offset %i\n", 
-                    TOSTR(rSig), parent.getCreationIteration(), parent.getPositionId(), offset);
+    for (const auto& parentReductionSig : reductionsWithNoChildren) {
+        Log::i("Retroactively prune reduction %s@(%zu,%zu): no children at offset %zu\n",
+            TOSTR(parentReductionSig), parent.getCreationIteration(),
+            parent.getPositionId(), childOffset);
         assert(_pruning != nullptr);
-        _pruning->prune(rSig, parent);
+        _pruning->prune(parentReductionSig, parent);
     }
 }
 
-std::vector<USignature> TreeExpander::instantiateAllActionsOfTask(Position& pos, const USignature& task) {
-    std::vector<USignature> result;
-
-    if (!_htn.isAction(task)) return result;
-
-    Action action = _htn.toAction(task._name_id, task._args);
-    if (!isPotentiallyApplicable(action)) return result;
+std::optional<USignature> TreeExpander::instantiateAndRegisterAction(const USignature& actionSig, size_t originPositionId) {
+    Action action = _htn.toAction(actionSig._name_id, actionSig._args);
+    if (!isPotentiallyApplicable(action)) return std::nullopt;
 
     const USignature originalSig = action.getSignature();
-    action = _htn.replaceVariablesWithQConstants(
-        action,
-        _analysis.getReducedArgumentDomains(action),
-        pos.getCreationIteration(),
-        pos.getPositionId());
+    auto argumentDomains = _analysis.computeReachableArgumentDomains(action);
+    if (!argumentDomains) return std::nullopt;
+    auto instantiatedAction = _htn.instantiateWithQConstants(action, argumentDomains.value(), originPositionId);
+    if (!instantiatedAction) return std::nullopt;
+    action = std::move(instantiatedAction.value());
 
     action.removeInconsistentEffects();
 
-    if (!_htn.isFullyGround(action.getSignature())) return result;
-    if (!_htn.hasConsistentlyTypedArgs(originalSig)) return result;
-    if (!_analysis.hasValidPreconditions(action.getPreconditions())) {
-        return result;
-    }
-    if (!_analysis.hasValidPreconditions(action.getExtraPreconditions())) {
+    assert(_htn.isFullyGround(action.getSignature()));
+    if (!_htn.isFullyGround(action.getSignature())) return std::nullopt;
+    if (!_htn.hasConsistentlyTypedArgs(originalSig)) return std::nullopt;
+    if (!_analysis.hasValidPreconditions(action.getPreconditions())) return std::nullopt;
+    if (!_analysis.hasValidPreconditions(action.getExtraPreconditions())) return std::nullopt;
+
+    _htn.getOpTable().addAction(action);
+    return action.getSignature();
+}
+
+std::vector<USignature> TreeExpander::instantiateActionsOfTask(const USignature& task, size_t originPositionId) {
+    std::vector<USignature> result;
+
+    if (_htn.isAction(task)) {
+        auto actionSig = instantiateAndRegisterAction(task, originPositionId);
+        if (actionSig) result.push_back(std::move(actionSig.value()));
         return result;
     }
 
-    _htn.getOpTable().addAction(action);
-    result.push_back(action.getSignature());
+    if (!_htn.hasReductions(task._name_id)) return result;
+
+    // An abstract task may have actions created from primitivizable methods.
+    for (int reductionId : _htn.getReductionIdsOfTaskId(task._name_id)) {
+        if (!_htn.isReductionPrimitivizable(reductionId)) continue;
+
+        const Reduction& reduction = _htn.getReductionTemplate(reductionId);
+        const Action& primitivizedAction = _htn.getReductionPrimitivization(reductionId);
+
+        auto substitution = Substitution::fromArgumentMapping(reduction.getTaskArguments(), task._args);
+        if (!substitution) continue;
+
+        const USignature primitivizedActionSig = primitivizedAction.getSignature().substitute(substitution.value());
+        auto actionSig = instantiateAndRegisterAction(primitivizedActionSig, originPositionId);
+        if (actionSig) result.push_back(std::move(actionSig.value()));
+    }
     return result;
 }
 
-std::vector<USignature> TreeExpander::instantiateAllReductionsOfTask(Position& pos, const USignature& task) {
+std::vector<USignature> TreeExpander::instantiateReductionsOfTask(const USignature& task, size_t originPositionId) {
     std::vector<USignature> result;
 
     if (!_htn.hasReductions(task._name_id)) return result;
 
-    for (int redId : _htn.getReductionIdsOfTaskId(task._name_id)) {
-        Reduction r = _htn.getReductionTemplate(redId);
+    for (int reductionId : _htn.getReductionIdsOfTaskId(task._name_id)) {
+        if (_htn.isReductionPrimitivizable(reductionId)) continue;
 
-        if (_htn.isReductionPrimitivizable(redId)) {
-            const Action& a = _htn.getReductionPrimitivization(redId);
+        const Reduction& reduction = _htn.getReductionTemplate(reductionId);
 
-            std::vector<Substitution> subs = Substitution::getAll(r.getTaskArguments(), task._args);
-            for (const Substitution& s : subs) {
-                USignature primSig = a.getSignature().substitute(s);
-                for (const auto& sig : instantiateAllActionsOfTask(pos, primSig)) {
-                    result.push_back(sig);
-                }
-            }
-            continue;
-        }
+        auto substitution = Substitution::fromArgumentMapping(reduction.getTaskArguments(), task._args);
+        if (!substitution) continue;
 
-        std::vector<Substitution> subs = Substitution::getAll(r.getTaskArguments(), task._args);
-        for (const Substitution& s : subs) {
-            for (const auto& entry : s) assert(entry.second != 0);
-
-            Reduction rSub = r.substituteRed(s);
-            USignature origSig = rSub.getSignature();
-            if (!_htn.hasConsistentlyTypedArgs(origSig)) continue;
-            if (!isPotentiallyApplicable(rSub)) continue;
-
-            auto rOpt = createValidReduction(pos, rSub.getSignature(), task);
-            if (rOpt) result.push_back(rOpt.value().getSignature());
-        }
+        Reduction substitutedReduction = reduction.substituteRed(substitution.value());
+        auto instantiatedReductionSig = instantiateAndRegisterReduction(std::move(substitutedReduction), task, originPositionId);
+        if (instantiatedReductionSig) result.push_back(instantiatedReductionSig.value());
     }
     return result;
 }
 
-std::optional<Reduction> TreeExpander::createValidReduction(Position& pos, const USignature& sig, const USignature& task) {
-    std::optional<Reduction> rOpt;
+std::optional<USignature> TreeExpander::instantiateAndRegisterReduction(Reduction reduction, const std::optional<USignature>& expectedTask, size_t originPositionId) {
+    if (!_htn.hasConsistentlyTypedArgs(reduction.getSignature())) return std::nullopt;
+    if (!isPotentiallyApplicable(reduction)) return std::nullopt;
 
-    Reduction red = _htn.toReduction(sig._name_id, sig._args);
-    auto domains = _analysis.getReducedArgumentDomains(red);
-    red = _htn.replaceVariablesWithQConstants(red, domains, pos.getCreationIteration(), pos.getPositionId());
+    auto argumentDomains = _analysis.computeReachableArgumentDomains(reduction);
+    if (!argumentDomains) return std::nullopt;
+    auto instantiatedReduction = _htn.instantiateWithQConstants(reduction, argumentDomains.value(), originPositionId);
+    if (!instantiatedReduction) return std::nullopt;
+    reduction = std::move(instantiatedReduction.value());
 
-    bool isValid = true;
-    if (task._name_id >= 0 && red.getTaskSignature() != task) isValid = false;
-    else if (!_htn.isFullyGround(red.getSignature())) isValid = false;
-    else if (!_htn.hasConsistentlyTypedArgs(red.getSignature())) isValid = false;
-    else if (!_analysis.hasValidPreconditions(red.getPreconditions())) {
-        isValid = false;
-    }
-    else if (!_analysis.hasValidPreconditions(red.getExtraPreconditions())) {
-        isValid = false;
-    }
+    if (expectedTask && reduction.getTaskSignature() != expectedTask.value()) return std::nullopt;
+    assert(_htn.isFullyGround(reduction.getSignature()));
+    if (!_htn.isFullyGround(reduction.getSignature())) return std::nullopt;
+    if (!_analysis.hasValidPreconditions(reduction.getPreconditions())) return std::nullopt;
+    if (!_analysis.hasValidPreconditions(reduction.getExtraPreconditions())) return std::nullopt;
 
-    if (isValid) {
-        _htn.getOpTable().addReduction(red);
-        rOpt.emplace(red);
-    }
-    return rOpt;
+    _htn.getOpTable().addReduction(reduction);
+    return reduction.getSignature();
 }
 
 void TreeExpander::addQConstantTypeConstraints(Position& pos, const USignature& op) {
