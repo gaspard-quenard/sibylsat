@@ -71,7 +71,7 @@ private:
     void expandLeaf(Position& parent, size_t expansionSize);
     void carryLeaf(Position& leaf);
 
-    void createNextPosition(Position& newPos, Position* parent, Position* left);
+    void createNextPosition(Position& newPos, Position* expandedParent, Position* left);
     void createNextPositionFromParent(Position& newPos, Position& parent);
     void computeOutgoingEffects(Position& position);
     void pruneImpossibleOperations(Position& position, const USigSet& operationsToRemove);

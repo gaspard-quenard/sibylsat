@@ -116,8 +116,7 @@ private:
 public:
 
     Position();
-    void setCreationIteration(size_t iteration);
-    void setParentPosition(Position* parent);
+    Position(size_t creationIteration, Position* parentPosition);
     Position* getParentPosition() const { return _parent_position; }
     const std::vector<Position*>& getChildrenPositions() const { return _children_positions; }
     void setLeftPosition(Position* left) { _left_position = left; }

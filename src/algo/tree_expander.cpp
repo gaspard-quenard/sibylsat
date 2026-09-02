@@ -52,15 +52,11 @@ void TreeExpander::createInitialLeaves() {
     _expansion_iteration = 0;
 
     _root_position = new Position();
-    _root_position->setCreationIteration(-1);
 
-    Position* rootReductionPosition = new Position();
-    rootReductionPosition->setCreationIteration(_expansion_iteration);
-    rootReductionPosition->setParentPosition(_root_position);
+    Position* rootReductionPosition = new Position(_expansion_iteration, _root_position);
     rootReductionPosition->setLeftPosition(nullptr);
 
-    Position* goalPosition = new Position();
-    goalPosition->setParentPosition(_root_position);
+    Position* goalPosition = new Position(_expansion_iteration, _root_position);
 
     _leaf_positions = {rootReductionPosition, goalPosition};
     for (size_t i = 0; i < _leaf_positions.size(); i++) {
@@ -88,7 +84,7 @@ void TreeExpander::createInitialLeaves() {
 
     /***** DEPTH 0, POSITION 1 ******/
 
-    createNextPosition(*goalPosition, /*parent=*/nullptr, rootReductionPosition);
+    createNextPosition(*goalPosition, nullptr, rootReductionPosition);
 
     Action goalAction = _htn.getGoalAction();
     USignature goalSig = goalAction.getSignature();
@@ -153,9 +149,6 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
         }
     }
 
-    // The ordering of the new frontier defines each leaf's frontier index.
-    // Keep carried leaves' previous-layer left neighbour until encoding is
-    // complete: it is needed as leftOfAbove by incremental frame axioms.
     for (size_t i = 0; i < _leaf_positions.size(); i++) {
         _leaf_positions[i]->setFrontierIndex(i);
     }
@@ -165,7 +158,7 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
 
 void TreeExpander::expandLeaf(Position& parent, size_t expansionSize) {
     for (size_t childIndex = 0; childIndex < expansionSize; childIndex++) {
-        Position* child = new Position();
+        Position* child = new Position(_expansion_iteration, &parent);
         child->setCreatedInLastExpansion(true);
         Position* left = _leaf_positions.empty() ? nullptr : _leaf_positions.back();
         _leaf_positions.push_back(child);
@@ -186,16 +179,13 @@ void TreeExpander::carryLeaf(Position& leaf) {
     applyOutgoingEffects(leaf);
 }
 
-void TreeExpander::createNextPosition(Position& newPos, Position* parent, Position* left) {
-    newPos.setCreationIteration(_expansion_iteration);
-    if (parent != nullptr) {
-        newPos.setParentPosition(parent);
-    }
+void TreeExpander::createNextPosition(Position& newPos, Position* expandedParent, Position* left) {
     newPos.setLeftPosition(left);
     newPos.getOutgoingEffects().reset(_htn.getNumPositiveGroundFacts());
 
-    if (parent != nullptr) {
-        createNextPositionFromParent(newPos, *parent);
+    if (expandedParent != nullptr) {
+        assert(newPos.getParentPosition() == expandedParent);
+        createNextPositionFromParent(newPos, *expandedParent);
     }
 
     if (_params.isNonzero("edo")) {

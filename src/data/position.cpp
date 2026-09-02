@@ -1,8 +1,6 @@
 
 #include "position.h"
 
-#include <algorithm>
-
 #include "sat/variable_domain.h"
 #include "util/log.h"
 
@@ -129,25 +127,11 @@ void OutgoingEffects::clear() {
 size_t Position::_next_position_id = 1;
 
 Position::Position() : _creation_iteration(-1), _offset(0) {}
-void Position::setCreationIteration(size_t iteration) {
-    _creation_iteration = iteration;
-}
-void Position::setParentPosition(Position* parent) {
-    if (_parent_position == parent) return;
-    assert(_parent_position == nullptr || _parent_position == parent);
-    _parent_position = parent;
-    if (parent == nullptr) {
-        _offset = 0;
-        return;
-    }
-
-    auto& siblings = parent->_children_positions;
-    auto it = std::find(siblings.begin(), siblings.end(), this);
-    if (it == siblings.end()) {
-        _offset = siblings.size();
-        siblings.push_back(this);
-    } else {
-        _offset = std::distance(siblings.begin(), it);
+Position::Position(size_t creationIteration, Position* parentPosition)
+    : _creation_iteration(creationIteration), _parent_position(parentPosition), _offset(0) {
+    if (parentPosition != nullptr) {
+        _offset = parentPosition->_children_positions.size();
+        parentPosition->_children_positions.push_back(this);
     }
 }
 
