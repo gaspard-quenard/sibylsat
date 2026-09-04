@@ -1,5 +1,6 @@
 #include "algo/method_effect_analysis.h"
 
+#include <cassert>
 #include <ranges>
 
 #include "util/log.h"
@@ -8,51 +9,36 @@
 MethodEffectAnalysis::MethodEffectAnalysis(HtnInstance& htn, FactAnalysis& facts)
         : _htn(htn),
           _facts(facts),
-          _traversal(htn),
-          _empty_ground_effects(htn.getNumPositiveGroundFacts(), false) {
+          _traversal(htn) {
     for (const auto& [methodId, method] : _htn.getReductionTemplates()) {
         (void) methodId;
-        computeEffects(method);
+        computePossibleEffects(method);
     }
 }
 
-SigSet MethodEffectAnalysis::getEffects(const USignature& operation) const {
-    if (_htn.isAction(operation)) {
-        if (_htn.getOpTable().hasAction(operation)) {
-            return _htn.getOpTable().getAction(operation).getEffects();
-        }
-        return _htn.toAction(operation._name_id, operation._args).getEffects();
-    }
-
-    const SigSet& effects = _effects.at(operation._name_id);
-    const std::vector<int> placeholders = makePlaceholders(operation._args.size());
-    return substituteEffects(effects, Substitution(placeholders, operation._args));
+SigSet MethodEffectAnalysis::getPossibleEffects(const USignature& method) const {
+    assert(_htn.isReduction(method));
+    const SigSet& effects = _possible_effects.at(method._name_id);
+    const std::vector<int> placeholders = makePlaceholders(method._args.size());
+    return substituteEffects(effects, Substitution(placeholders, method._args));
 }
 
-const BitVec& MethodEffectAnalysis::getGroundEffects(const USignature& operation, bool negated) const {
-    if (_htn.isAction(operation)) {
-        return _empty_ground_effects;
-    }
+const BitVec& MethodEffectAnalysis::getArgumentIndependentGroundEffects(const USignature& method, bool negated) const {
+    assert(_htn.isReduction(method));
     return negated
-            ? _ground_negative_effects.at(operation._name_id)
-            : _ground_positive_effects.at(operation._name_id);
+            ? _possible_ground_negative_effects.at(method._name_id)
+            : _possible_ground_positive_effects.at(method._name_id);
 }
 
-SigSet MethodEffectAnalysis::instantiateEffects(const USignature& operation) {
-    if (_htn.isAction(operation)) {
-        if (_htn.getOpTable().hasAction(operation)) {
-            return _htn.getOpTable().getAction(operation).getEffects();
-        }
-        return _htn.toAction(operation._name_id, operation._args).getEffects();
-    }
-
+SigSet MethodEffectAnalysis::instantiateArgumentDependentEffects(const USignature& method) {
+    assert(_htn.isReduction(method));
     SigSet result;
-    const int methodId = operation._name_id;
+    const int methodId = method._name_id;
     const std::vector<int> methodSorts = _htn.getSorts(methodId);
-    const std::vector<int> placeholders = makePlaceholders(operation._args.size());
-    const Substitution instantiateMethod(placeholders, operation._args);
+    const std::vector<int> placeholders = makePlaceholders(method._args.size());
+    const Substitution instantiateMethod(placeholders, method._args);
 
-    for (const Signature& liftedEffect : _effects.at(methodId)) {
+    for (const Signature& liftedEffect : _possible_effects.at(methodId)) {
         if (!hasMethodArgument(liftedEffect)) {
             continue;
         }
@@ -76,12 +62,12 @@ SigSet MethodEffectAnalysis::instantiateEffects(const USignature& operation) {
     return result;
 }
 
-void MethodEffectAnalysis::computeEffects(const Reduction& method) {
+void MethodEffectAnalysis::computePossibleEffects(const Reduction& method) {
     const std::vector<int> placeholders = makePlaceholders(method.getArguments().size());
     const USignature canonicalMethod = method.getSignature().substitute(
             Substitution(method.getArguments(), placeholders));
 
-    SigSet effects = collectEffects(canonicalMethod);
+    SigSet effects = collectPossibleEffects(canonicalMethod);
     removeCoveredEffects(effects);
 
     Log::d("Possible effects for %s:\n", TOSTR(method.getSignature()));
@@ -89,11 +75,11 @@ void MethodEffectAnalysis::computeEffects(const Reduction& method) {
         Log::d("  %s\n", TOSTR(effect));
     }
 
-    _effects[method.getNameId()] = std::move(effects);
-    computeGroundEffects(method);
+    _possible_effects[method.getNameId()] = std::move(effects);
+    computePossibleGroundEffects(method);
 }
 
-SigSet MethodEffectAnalysis::collectEffects(const USignature& method) {
+SigSet MethodEffectAnalysis::collectPossibleEffects(const USignature& method) {
     SigSet effects;
     _traversal.traverse(
             method,
@@ -175,28 +161,28 @@ bool MethodEffectAnalysis::isCoveredBy(
     return true;
 }
 
-void MethodEffectAnalysis::computeGroundEffects(const Reduction& method) {
+void MethodEffectAnalysis::computePossibleGroundEffects(const Reduction& method) {
     const int methodId = method.getNameId();
-    _ground_positive_effects[methodId] = BitVec(_htn.getNumPositiveGroundFacts());
-    _ground_negative_effects[methodId] = BitVec(_htn.getNumPositiveGroundFacts());
+    _possible_ground_positive_effects[methodId] = BitVec(_htn.getNumPositiveGroundFacts());
+    _possible_ground_negative_effects[methodId] = BitVec(_htn.getNumPositiveGroundFacts());
 
-    for (const Signature& effect : _effects.at(methodId)) {
+    for (const Signature& effect : _possible_effects.at(methodId)) {
         if (hasMethodArgument(effect)) {
             continue;
         }
 
         const std::vector<int> effectSorts = _htn.getSortsParamsFromSigForFA(effect._usig);
-        addGroundEffect(methodId, effect, effectSorts);
+        addPossibleGroundEffect(methodId, effect, effectSorts);
     }
 }
 
-void MethodEffectAnalysis::addGroundEffect(
+void MethodEffectAnalysis::addPossibleGroundEffect(
         int methodId,
         const Signature& effect,
         const std::vector<int>& effectSorts) {
     BitVec& groundEffects = effect._negated
-            ? _ground_negative_effects.at(methodId)
-            : _ground_positive_effects.at(methodId);
+            ? _possible_ground_negative_effects.at(methodId)
+            : _possible_ground_positive_effects.at(methodId);
 
     if (_htn.isFullyGround(effect._usig)) {
         const int factId = _htn.getGroundFactId(effect._usig, effect._negated);
@@ -209,7 +195,7 @@ void MethodEffectAnalysis::addGroundEffect(
     const std::vector<int>& sorts = effectSorts.empty()
             ? _htn.getSorts(effect._usig._name_id)
             : effectSorts;
-    groundEffects.or_with(_htn.getMatchingGroundFactIds(effect._usig, effect._negated, sorts));
+    groundEffects.or_with(_htn.findMatchingGroundFactIds(effect._usig, effect._negated, sorts));
 }
 
 bool MethodEffectAnalysis::hasMethodArgument(const Signature& effect) const {
@@ -233,10 +219,8 @@ bool MethodEffectAnalysis::hasValidGrounding(
         }
     }
 
-    const std::vector<std::vector<int>> eligibleArgs = hasPlaceholder
-            ? _htn.getEligibleArgs(effect, effectSorts)
-            : _htn.getEligibleArgs(effect);
-    for (const USignature& grounding : _htn.decodeObjects(effect, eligibleArgs)) {
+    const std::vector<int> restrictiveSorts = hasPlaceholder ? effectSorts : std::vector<int>();
+    for (const USignature& grounding : _htn.enumerateCandidateDecodings(effect, restrictiveSorts)) {
         if (_facts.isInGroundFacts(grounding, negated)) {
             return true;
         }

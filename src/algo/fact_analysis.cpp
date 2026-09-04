@@ -141,7 +141,7 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
                 }
                 else
                 {
-                    for (const auto &decUSig : _htn.decodeObjects(preSig._usig, _htn.getEligibleArgs(preSig._usig, preSorts)))
+                    for (const auto &decUSig : _htn.enumerateCandidateDecodings(preSig._usig, preSorts))
                     {
                         any = true;
                         bool equality_correct = preSig._negated ? decUSig._args[0] != decUSig._args[1] : decUSig._args[0] == decUSig._args[1];
@@ -163,7 +163,7 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
                 }
                 else
                 {
-                    BitVec result = _htn.getMatchingGroundFactIds(preSig._usig, preSig._negated, preSorts);
+                    BitVec result = _htn.findMatchingGroundFactIds(preSig._usig, preSig._negated, preSorts);
                     for (std::size_t pred_idx : result)
                     {
                         any = true;

@@ -109,11 +109,19 @@ private:
                 intersectPreconditions(summary.preconditions, childInference.preconditions);
             }
 
-            const SigSet childEffects = _method_effects.getEffects(normalizedChild);
-            summary.effects.insert(childEffects.begin(), childEffects.end());
+            const SigSet possibleChildEffects = getPossibleChildEffects(normalizedChild);
+            summary.effects.insert(possibleChildEffects.begin(), possibleChildEffects.end());
         }
 
         return summary;
+    }
+
+    SigSet getPossibleChildEffects(const USignature& child) {
+        if (_htn.isAction(child)) {
+            const Action action = _htn.toAction(child._name_id, child._args);
+            return action.getEffects();
+        }
+        return _method_effects.getPossibleEffects(child);
     }
 
     USignature makeCanonicalSignature(const USignature& sig) {

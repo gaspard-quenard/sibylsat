@@ -1,5 +1,5 @@
 #include <algorithm>
-#include <assert.h>
+#include <cassert>
 
 #include "tree_expander.h"
 #include "util/log.h"
@@ -16,16 +16,16 @@ TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn)
           _optimal(_params.isNonzero("optimal")) {}
 
 size_t TreeExpander::getNumRetroactivePrunings() const {
-    return _pruning == nullptr ? 0 : _pruning->getNumRetroactivePunings();
+    return _pruning == nullptr ? 0 : _pruning->getNumRetroactivePrunings();
 }
 
 size_t TreeExpander::getNumRetroactivelyPrunedOps() const {
     return _pruning == nullptr ? 0 : _pruning->getNumRetroactivelyPrunedOps();
 }
 
-void TreeExpander::incrementPosition(const Position& pos) {
-    _num_instantiated_actions += pos.getActions().size();
-    _num_instantiated_reductions += pos.getReductions().size();
+void TreeExpander::recordInstantiatedPosition(const Position& position) {
+    _num_instantiated_actions += position.getActions().size();
+    _num_instantiated_reductions += position.getReductions().size();
     _num_instantiated_positions++;
 }
 
@@ -46,16 +46,13 @@ size_t TreeExpander::computeExpansionSize(const Position& position) const {
 }
 
 void TreeExpander::createInitialLeaves() {
-
-    const int initSize = 2;
-    Log::i("Creating initial leaves of size %i\n", initSize);
+    constexpr size_t initialLeafCount = 2;
+    Log::i("Creating initial leaves of size %zu\n", initialLeafCount);
     _expansion_iteration = 0;
 
     _root_position = new Position();
 
     Position* rootReductionPosition = new Position(_expansion_iteration, _root_position);
-    rootReductionPosition->setLeftPosition(nullptr);
-
     Position* goalPosition = new Position(_expansion_iteration, _root_position);
 
     _leaf_positions = {rootReductionPosition, goalPosition};
@@ -65,43 +62,42 @@ void TreeExpander::createInitialLeaves() {
         _leaf_positions[i]->setCreatedInLastExpansion(true);
     }
 
-    /***** DEPTH 0, POSITION 0 ******/
-
     const Reduction& initReduction = _htn.getInitReduction();
     auto initReductionSig = instantiateAndRegisterReduction(initReduction, std::nullopt, rootReductionPosition->getPositionId());
     if (initReductionSig) rootReductionPosition->addReduction(initReductionSig.value());
-    addPreconditionConstraints(*rootReductionPosition);
+    preparePreconditionEncoding(*rootReductionPosition);
 
-    incrementPosition(*rootReductionPosition);
+    recordInstantiatedPosition(*rootReductionPosition);
     computeOutgoingEffects(*rootReductionPosition);
+    addOutgoingEffectsToReachability(*rootReductionPosition);
 
-    /***** DEPTH 0, POSITION 1 ******/
+    // The artificial goal has no effects, but the encoding reads its outgoing bit vectors.
+    goalPosition->getOutgoingEffects().reset(_htn.getNumPositiveGroundFacts());
 
-    createNextPosition(*goalPosition, nullptr, rootReductionPosition);
-
-    Action goalAction = _htn.getGoalAction();
-    USignature goalSig = goalAction.getSignature();
+    const USignature goalSig = _htn.getGoalAction().getSignature();
     goalPosition->addAction(goalSig);
-    addPreconditionConstraints(*goalPosition);
+    preparePreconditionEncoding(*goalPosition);
 }
 
 void TreeExpander::printStatistics() const {
     Log::i("# expansion iterations: %zu\n", _expansion_iteration + 1);
-    Log::i("# instantiated positions: %i\n", _num_instantiated_positions);
-    Log::i("# instantiated actions: %i\n", _num_instantiated_actions);
-    Log::i("# instantiated reductions: %i\n", _num_instantiated_reductions);
-    Log::i("# introduced pseudo-constants: %i\n", _htn.getNumberOfQConstants());
-    Log::i("# retroactive prunings: %i\n", getNumRetroactivePrunings());
-    Log::i("# retroactively pruned operations: %i\n", getNumRetroactivelyPrunedOps());
-    Log::i("# dominated operations: %i\n", _domination_resolver.getNumDominatedOps());
+    Log::i("# instantiated positions: %zu\n", _num_instantiated_positions);
+    Log::i("# instantiated actions: %zu\n", _num_instantiated_actions);
+    Log::i("# instantiated reductions: %zu\n", _num_instantiated_reductions);
+    Log::i("# introduced pseudo-constants: %zu\n", _htn.getNumberOfQConstants());
+    Log::i("# retroactive prunings: %zu\n", getNumRetroactivePrunings());
+    Log::i("# retroactively pruned operations: %zu\n", getNumRetroactivelyPrunedOps());
+    Log::i("# dominated operations: %zu\n", _domination_resolver.getNumDominatedOps());
 }
 
 void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
     std::vector<Position*> currentLeaves = std::move(_leaf_positions);
+    const size_t carriedPrefixSize = _active_frontier_start;
+    assert(carriedPrefixSize <= currentLeaves.size());
 
     std::vector<size_t> expansionSizes(currentLeaves.size(), /*init_val=*/1);
-    size_t nextLeafCount = 0;
-    for (size_t leafIndex = 0; leafIndex < currentLeaves.size(); leafIndex++) {
+    size_t nextLeafCount = carriedPrefixSize;
+    for (size_t leafIndex = carriedPrefixSize; leafIndex < currentLeaves.size(); leafIndex++) {
         if (leavesToExpand.count(currentLeaves[leafIndex])) {
             expansionSizes[leafIndex] = computeExpansionSize(*currentLeaves[leafIndex]);
         }
@@ -112,8 +108,7 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
-    // Mark positions carried from the previous frontier before creating the
-    // replacement frontier.
+    // Positions from the previous frontier are not new in this expansion.
     for (Position* leaf : currentLeaves) {
         leaf->setCreatedInLastExpansion(false);
     }
@@ -123,7 +118,6 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
 
     // Leaves before _active_frontier_start were already solved in a previous SAT call and
     // are carried into the new frontier unchanged.
-    const size_t carriedPrefixSize = _active_frontier_start;
     if (carriedPrefixSize > 0) {
         Log::i("Carrying %zu already-solved leaf positions into the new frontier\n", carriedPrefixSize);
         for (size_t leafIndex = 0; leafIndex < carriedPrefixSize; leafIndex++) {
@@ -155,404 +149,394 @@ void TreeExpander::expandLeaf(Position& parent, size_t expansionSize) {
         child->setCreatedInLastExpansion(true);
         Position* left = _leaf_positions.empty() ? nullptr : _leaf_positions.back();
         _leaf_positions.push_back(child);
-        createNextPosition(*child, &parent, left);
+        child->setLeftPosition(left);
+        populateChildFromParent(*child, parent);
 
-        Log::v("  Instantiation done. (r=%i a=%i qf=%i)\n",
+        if (_params.isNonzero("edo")) {
+            _domination_resolver.eliminateDominatedOperations(*child);
+        }
+
+        Log::v("  Instantiation done. (r=%zu a=%zu qf=%zu)\n",
                 child->getReductions().size(),
                 child->getActions().size(),
                 child->getQFacts().size());
 
-        incrementPosition(*child);
+        recordInstantiatedPosition(*child);
         computeOutgoingEffects(*child);
+        addOutgoingEffectsToReachability(*child);
     }
 }
 
 void TreeExpander::carryLeaf(Position& leaf) {
     _leaf_positions.push_back(&leaf);
-    applyOutgoingEffects(leaf);
+    addOutgoingEffectsToReachability(leaf);
 }
 
-void TreeExpander::createNextPosition(Position& newPos, Position* expandedParent, Position* left) {
-    newPos.setLeftPosition(left);
-    newPos.getOutgoingEffects().reset(_htn.getNumPositiveGroundFacts());
-
-    if (expandedParent != nullptr) {
-        assert(newPos.getParentPosition() == expandedParent);
-        createNextPositionFromParent(newPos, *expandedParent);
-    }
-
-    if (_params.isNonzero("edo")) {
-        _domination_resolver.eliminateDominatedOperations(newPos);
-    }
-
-}
-
-void TreeExpander::createNextPositionFromParent(Position& newPos, Position& parent) {
-    propagateParentActions(newPos, parent);
-    expandParentReductions(newPos, parent);
-    addPreconditionConstraints(newPos);
+void TreeExpander::populateChildFromParent(Position& child, Position& parent) {
+    assert(child.getParentPosition() == &parent);
+    propagateParentActions(child, parent);
+    expandParentReductions(child, parent);
+    preparePreconditionEncoding(child);
 }
 
 void TreeExpander::computeOutgoingEffects(Position& position) {
     OutgoingEffects& effects = position.getOutgoingEffects();
     effects.reset(_htn.getNumPositiveGroundFacts());
 
-    USigSet operationsToRemove;
-    const USigSet* ops[2] = {&position.getActions(), &position.getReductions()};
-    bool isAction = true;
-    for (const auto& set : ops) {
-        for (const auto& aSig : *set) {
-
-            bool repeatedAction = isAction && _htn.isActionRepetition(aSig._name_id);
-
-            BitVec groundEffPos = _method_effects.getGroundEffects(aSig, /*negated=*/false);
-            BitVec groundEffNeg = _method_effects.getGroundEffects(aSig, /*negated=*/true);
-            const SigSet instantiatedEffects = _method_effects.instantiateEffects(aSig);
-
-            addGroundEffect(effects, aSig, groundEffPos, /*negated=*/false, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
-            addGroundEffect(effects, aSig, groundEffNeg, /*negated=*/true, isAction ? EffectMode::DIRECT : EffectMode::INDIRECT);
-
-            for (const Signature& effect : instantiatedEffects) {
-                if (isAction && !addPseudoGroundEffect(
-                        effects,
-                        position,
-                        repeatedAction ? aSig.renamed(_htn.getActionNameFromRepetition(aSig._name_id)) : aSig, 
-                        effect,
-                        repeatedAction ? EffectMode::DIRECT_NO_QFACT : EffectMode::DIRECT)) {
-                    
-                    Log::w("3_ Retroactively prune action %s due to impossible effect %s\n", TOSTR(aSig), TOSTR(effect));
-                    operationsToRemove.insert(aSig);
-                    break;
-                }
-                if (!isAction) {
-                    addPseudoGroundEffect(effects, position, aSig, effect, EffectMode::INDIRECT);
-                }
-            }
-
-        }
-        isAction = false;
+    USigSet actionsToPrune;
+    for (const USignature& actionSig : position.getActions()) {
+        if (!addActionOutgoingEffects(effects, position, actionSig)) actionsToPrune.insert(actionSig);
+    }
+    for (const USignature& reductionSig : position.getReductions()) {
+        addReductionOutgoingEffects(effects, position, reductionSig);
     }
 
-    pruneImpossibleOperations(position, operationsToRemove);
+    pruneImpossibleActions(position, actionsToPrune);
 }
 
-void TreeExpander::pruneImpossibleOperations(Position& position, const USigSet& operationsToRemove) {
-    for (const auto& aSig : operationsToRemove) {
+bool TreeExpander::addActionOutgoingEffects(OutgoingEffects& effects, Position& position, const USignature& actionSig) {
+    const SigSet& actionEffects = _htn.getOpTable().getAction(actionSig).getEffects();
+
+    const bool repeatedAction = _htn.isActionRepetition(actionSig._name_id);
+    const USignature effectOwnerSig = repeatedAction ? actionSig.renamed(_htn.getActionNameFromRepetition(actionSig._name_id)) : actionSig;
+    const EffectMode mode = repeatedAction ? EffectMode::REPEATED_ACTION_EFFECT : EffectMode::ACTION_EFFECT;
+    for (const Signature& effect : actionEffects) {
+        if (addInstantiatedEffect(effects, position, effectOwnerSig, effect, mode)) continue;
+
+        Log::w("Retroactively prune action %s due to impossible effect %s\n", TOSTR(actionSig), TOSTR(effect));
+        return false;
+    }
+    return true;
+}
+
+void TreeExpander::addReductionOutgoingEffects(OutgoingEffects& effects, Position& position, const USignature& reductionSig) {
+    const BitVec& argumentIndependentPositiveEffects = _method_effects.getArgumentIndependentGroundEffects(reductionSig, /*negated=*/false);
+    const BitVec& argumentIndependentNegativeEffects = _method_effects.getArgumentIndependentGroundEffects(reductionSig, /*negated=*/true);
+    const SigSet argumentDependentEffects = _method_effects.instantiateArgumentDependentEffects(reductionSig);
+
+    addGroundEffect(effects, reductionSig, argumentIndependentPositiveEffects, /*negated=*/false, EffectMode::POSSIBLE_METHOD_EFFECT);
+    addGroundEffect(effects, reductionSig, argumentIndependentNegativeEffects, /*negated=*/true, EffectMode::POSSIBLE_METHOD_EFFECT);
+    for (const Signature& effect : argumentDependentEffects) {
+        addInstantiatedEffect(effects, position, reductionSig, effect, EffectMode::POSSIBLE_METHOD_EFFECT);
+    }
+}
+
+void TreeExpander::pruneImpossibleActions(Position& position, const USigSet& actionsToPrune) {
+    for (const USignature& actionSig : actionsToPrune) {
         assert(_pruning != nullptr);
-        _pruning->prune(aSig, position);
+        _pruning->prune(actionSig, position);
     }
 }
 
-void TreeExpander::applyOutgoingEffects(const Position& position) {
+void TreeExpander::addOutgoingEffectsToReachability(const Position& position) {
     const OutgoingEffects& effects = position.getOutgoingEffects();
     _analysis.addMultipleReachableFacts(effects.getFactChanges(/*negated=*/false), /*negated=*/false);
     _analysis.addMultipleReachableFacts(effects.getFactChanges(/*negated=*/true), /*negated=*/true);
 }
 
-void TreeExpander::addPreconditionConstraints(Position& pos) {
-    for (const auto& aSig : pos.getActions()) {
-        const Action& a = _htn.getOpTable().getAction(aSig);
-        bool isRepetition = _htn.isActionRepetition(aSig._name_id);
-        addPreconditionsAndConstraints(pos, aSig, a.getPreconditions(), isRepetition);
+void TreeExpander::preparePreconditionEncoding(Position& position) {
+    for (const USignature& actionSig : position.getActions()) {
+        const Action& action = _htn.getOpTable().getAction(actionSig);
+        prepareOperationPreconditions(position, action, _htn.isActionRepetition(actionSig._name_id));
     }
-    for (const auto& rSig : pos.getReductions()) {
-        addPreconditionsAndConstraints(pos, rSig, _htn.getOpTable().getReduction(rSig).getPreconditions(), /*isRepetition=*/false);
+    for (const USignature& reductionSig : position.getReductions()) {
+        const Reduction& reduction = _htn.getOpTable().getReduction(reductionSig);
+        prepareOperationPreconditions(position, reduction, /*isRepeatedAction=*/false);
     }
 }
 
-void TreeExpander::addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isRepetition) {
-    USignature constrOp = isRepetition ? USignature(_htn.getActionNameFromRepetition(op._name_id), op._args) : op;
+/**
+ * Prepares the information needed to encode an operation's preconditions.
+ * Ground preconditions identify dynamic facts that need SAT variables, while
+ * Q-constant preconditions also contribute allowed or forbidden substitutions.
+ */
+void TreeExpander::prepareOperationPreconditions(Position& position, const HtnOp& operation, bool isRepeatedAction) {
+    const USignature operationSig = operation.getSignature();
+    // Repetition effects are decoded using the original action signature.
+    const USignature constraintOwnerSig = isRepeatedAction
+        ? operationSig.renamed(_htn.getActionNameFromRepetition(operationSig._name_id))
+        : operationSig;
 
-    for (const Signature& fact : preconditions) {
-        auto cOpt = addPrecondition(pos, op, fact, !isRepetition);
-        if (cOpt) pos.addSubstitutionConstraint(constrOp, std::move(cOpt.value()));
+    for (const Signature& precondition : operation.getPreconditions()) {
+        auto constraint = analyzePrecondition(position, operationSig, precondition, !isRepeatedAction);
+        if (constraint) position.addSubstitutionConstraint(constraintOwnerSig, std::move(*constraint));
     }
-    if (!isRepetition) addQConstantTypeConstraints(pos, op);
+    if (!isRepeatedAction) addQConstantTypeConstraints(position, operationSig);
+    mergeCompatibleConstraints(position, constraintOwnerSig);
+}
 
-    if (!pos.getSubstitutionConstraints().count(op)) return;
+void TreeExpander::mergeCompatibleConstraints(Position& position, const USignature& operationSig) {
+    auto constraintsIt = position.getSubstitutionConstraints().find(operationSig);
+    if (constraintsIt == position.getSubstitutionConstraints().end()) return;
 
-    auto& constraints = pos.getSubstitutionConstraints().at(op);
+    auto& constraints = constraintsIt->second;
     for (size_t i = 0; i < constraints.size(); i++) {
-        for (size_t j = i+1; j < constraints.size(); j++) {
-            auto& iTree = constraints[i];
-            auto& jTree = constraints[j];
-            if (iTree.canMerge(jTree)) {
-                iTree.merge(std::move(jTree));
-                if (j+1 < constraints.size()) {
-                    constraints[j] = std::move(constraints.back());
-                }
-                constraints.erase(constraints.begin()+constraints.size()-1);
-                j--;
+        for (size_t j = i + 1; j < constraints.size();) {
+            if (!constraints[i].canMerge(constraints[j])) {
+                j++;
+                continue;
             }
+            constraints[i].merge(std::move(constraints[j]));
+            if (j + 1 < constraints.size()) constraints[j] = std::move(constraints.back());
+            constraints.pop_back();
         }
     }
 }
 
-std::optional<SubstitutionConstraint> TreeExpander::addPrecondition(Position& pos, const USignature& op, const Signature& fact, bool addQFact) {
-
-    const USignature& factAbs = fact.getUnsigned();
-
-    if (!_htn.hasQConstants(factAbs)) {
-        
-         if (_htn.isEqualityPredicate(factAbs._name_id)) {
-            bool equality_is_correct = fact._negated ? factAbs._args[0] != factAbs._args[1] : factAbs._args[0] == factAbs._args[1];
-            assert(equality_is_correct || Log::e("Precondition %s not reachable!\n", TOSTR(fact)));
-            if (equality_is_correct && !fact._negated) {
-                int predId = _htn.getGroundFactId(factAbs, fact._negated);
-                _analysis.addRelevantFact(predId);
-            }
-            return std::optional<SubstitutionConstraint>();
-         }
-
-        int predId = _htn.getGroundFactId(factAbs, fact._negated);
-        if (predId < 0) {
-            Log::e("Precondition %s not reachable!\n", TOSTR(fact));
-            return std::optional<SubstitutionConstraint>();
-        }
-        assert(_analysis.isReachable(predId, fact._negated) || Log::e("Precondition %s not reachable!\n", TOSTR(fact)));
-
-        if (_analysis.isReachable(predId, !fact._negated)) {
-            _analysis.addRelevantFact(predId);
-        }
-        return std::optional<SubstitutionConstraint>();
-    }
-    
-    std::vector<int> sorts = _htn.getOpSortsForCondition(factAbs, op);
-    std::vector<int> sortedArgIndices = SubstitutionConstraint::getSortedSubstitutedArgIndices(_htn, factAbs._args, sorts);
-    std::vector<int> involvedQConsts(sortedArgIndices.size());
-    for (size_t i = 0; i < sortedArgIndices.size(); i++) involvedQConsts[i] = factAbs._args[sortedArgIndices[i]];
-    SubstitutionConstraint c(involvedQConsts);
-
-    bool staticallyResolvable = true;
-    FlatHashSet<int> relevantsPredIds;
-    
-    auto eligibleArgs = _htn.getEligibleArgs(factAbs, sorts);
-
-    auto polarity = SubstitutionConstraint::UNDECIDED;
-    if (_htn.isEqualityPredicate(factAbs._name_id)) {
-        if (!_htn.hasQConstants(factAbs)) return std::optional<SubstitutionConstraint>();
-
-        for (const USignature& decFactAbs : _htn.decodeObjects(factAbs, eligibleArgs)) {
-            bool is_true = fact._negated ? decFactAbs._args[0] != decFactAbs._args[1] : decFactAbs._args[0] == decFactAbs._args[1];
-            if (is_true) {
-                if (polarity != SubstitutionConstraint::NO_INVALID) {
-                    c.addValid(SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices));
-                }
-            } else {
-                if (polarity != SubstitutionConstraint::ANY_VALID) {
-                    c.addInvalid(SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices));
-                }
-            }
-        }
-        c.fixPolarity();
-        return std::optional<SubstitutionConstraint>(std::move(c));
-    } 
-    else if (_htn.isStaticPredicate(factAbs._name_id)) {
-        BitVec result = _htn.getMatchingGroundFactIds(factAbs, /*negated=*/false, sorts);
-        c.fixPolarity(fact._negated ? SubstitutionConstraint::NO_INVALID : SubstitutionConstraint::ANY_VALID);
-        for (int predId: result) {
-            const USignature& decFactAbs = _htn.getGroundPositiveFact(predId);
-
-            if (fact._negated) {
-                c.addInvalid(SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices));
-            }
-            else {
-                c.addValid(SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices));
-            }
-        }
-        return std::optional<SubstitutionConstraint>(std::move(c));
+std::optional<SubstitutionConstraint> TreeExpander::analyzePrecondition(Position& position, const USignature& operationSig, const Signature& precondition, bool registerDynamicQFact) {
+    const USignature& unsignedPrecondition = precondition.getUnsigned();
+    if (!_htn.hasQConstants(unsignedPrecondition)) {
+        analyzeGroundPrecondition(precondition);
+        return std::nullopt;
     }
 
+    const std::vector<int> sorts = _htn.getConditionSortsFromOperation(unsignedPrecondition, operationSig);
+    const std::vector<int> qArgumentIndices = SubstitutionConstraint::getQArgumentIndicesByDomainSize(_htn, unsignedPrecondition._args, sorts);
 
-    size_t totalSize = 1; for (auto& args : eligibleArgs) totalSize *= args.size();
-    size_t sampleSize = 25;
-    bool doSample = totalSize > 2*sampleSize;
-    if (doSample) {
-        size_t valids = 0;
-        for (const USignature& decFactAbs : _htn.decodeObjects(factAbs, eligibleArgs, sampleSize)) {
-            int predId = _htn.getGroundFactId(decFactAbs, fact._negated);
-
-            if (predId >=0 && _analysis.isReachable(predId, fact._negated)) valids++;
-        }
-        polarity = valids < sampleSize/2 ? SubstitutionConstraint::ANY_VALID : SubstitutionConstraint::NO_INVALID;
-        c.fixPolarity(polarity);
+    if (_htn.isEqualityPredicate(unsignedPrecondition._name_id)) {
+        return buildEqualityPreconditionConstraint(precondition, sorts, qArgumentIndices);
     }
-
-    for (const USignature& decFactAbs : _htn.decodeObjects(factAbs, eligibleArgs)) {
-        int predId = _htn.getGroundFactId(decFactAbs, fact._negated);
-
-        if (predId >= 0 && _analysis.isReachable(predId, fact._negated)) {
-            if (polarity != SubstitutionConstraint::NO_INVALID) {
-                c.addValid(SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices));
-            }
-        } else {
-            if (polarity != SubstitutionConstraint::ANY_VALID) {
-                c.addInvalid(SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices));
-            }
-            continue;
-        }
-
-        if (_analysis.isInvariant(predId, fact._negated)) {
-            continue;
-        }
-
-        staticallyResolvable = false;
-        relevantsPredIds.insert(predId);
+    if (_htn.isStaticPredicate(unsignedPrecondition._name_id)) {
+        return buildStaticPreconditionConstraint(precondition, sorts, qArgumentIndices);
     }
-
-    if (!staticallyResolvable) {
-        if (addQFact) pos.addQFact(factAbs);
-        for (const int& predId : relevantsPredIds) {
-            const USignature& decFactAbs = _htn.getGroundPositiveFact(predId);
-            if (addQFact) pos.addQFactDecoding(factAbs, decFactAbs, fact._negated);
-            _analysis.addRelevantFact(predId);
-        }
-    }
-    if (!doSample) c.fixPolarity();
-    return std::optional<SubstitutionConstraint>(std::move(c));
+    const std::vector<std::vector<int>> eligibleArguments = _htn.getCandidateArgumentDomains(unsignedPrecondition, sorts);
+    return buildFluentPreconditionConstraint(position, precondition, eligibleArguments, qArgumentIndices, registerDynamicQFact);
 }
 
+void TreeExpander::analyzeGroundPrecondition(const Signature& precondition) {
+    const USignature& fact = precondition.getUnsigned();
+    if (_htn.isEqualityPredicate(fact._name_id)) {
+        const bool holds = precondition._negated ? fact._args[0] != fact._args[1] : fact._args[0] == fact._args[1];
+        assert(holds || Log::e("Precondition %s not reachable!\n", TOSTR(precondition)));
+        if (holds && !precondition._negated) {
+            const int factId = _htn.getGroundFactId(fact, /*negated=*/false);
+            _analysis.addRelevantFact(factId);
+        }
+        return;
+    }
 
-void TreeExpander::addGroundEffect(OutgoingEffects& outgoing, const USignature& opSig, BitVec effects, bool negated, EffectMode mode)
-{
+    const int factId = _htn.getGroundFactId(fact, precondition._negated);
+    if (factId < 0) {
+        Log::e("Precondition %s not reachable!\n", TOSTR(precondition));
+        return;
+    }
+    assert(_analysis.isReachable(factId, precondition._negated) || Log::e("Precondition %s not reachable!\n", TOSTR(precondition)));
+    // A fact needs a SAT variable only when both truth values remain reachable.
+    if (_analysis.isReachable(factId, !precondition._negated)) _analysis.addRelevantFact(factId);
+}
+
+SubstitutionConstraint TreeExpander::buildEqualityPreconditionConstraint(const Signature& precondition, const std::vector<int>& sorts, const std::vector<int>& qArgumentIndices) {
+    const USignature& fact = precondition.getUnsigned();
+    SubstitutionConstraint constraint(collectQConstants(fact, qArgumentIndices));
+
+    // Equality needs every candidate assignment because equality facts are not fully grounded in the fact table.
+    for (const USignature& decoding : _htn.enumerateCandidateDecodings(fact, sorts)) {
+        const bool holds = precondition._negated ? decoding._args[0] != decoding._args[1] : decoding._args[0] == decoding._args[1];
+        const auto path = SubstitutionConstraint::toAssignmentPath(fact._args, decoding._args, qArgumentIndices);
+        if (holds) constraint.allow(path);
+        else constraint.forbid(path);
+    }
+    constraint.chooseRepresentation();
+    return constraint;
+}
+
+SubstitutionConstraint TreeExpander::buildStaticPreconditionConstraint(const Signature& precondition, const std::vector<int>& sorts, const std::vector<int>& qArgumentIndices) {
+    const USignature& fact = precondition.getUnsigned();
+    SubstitutionConstraint constraint(collectQConstants(fact, qArgumentIndices));
+    constraint.chooseRepresentation(precondition._negated ? SubstitutionConstraint::FORBIDDEN_ASSIGNMENTS : SubstitutionConstraint::ALLOWED_ASSIGNMENTS);
+
+    // Static predicates only need facts present in the indexed ground-fact table.
+    const BitVec matchingPositiveFacts = _htn.findMatchingGroundFactIds(fact, /*negated=*/false, sorts);
+    for (int factId : matchingPositiveFacts) {
+        const USignature& decoding = _htn.getGroundPositiveFact(factId);
+        const auto path = SubstitutionConstraint::toAssignmentPath(fact._args, decoding._args, qArgumentIndices);
+        if (precondition._negated) constraint.forbid(path);
+        else constraint.allow(path);
+    }
+    return constraint;
+}
+
+SubstitutionConstraint TreeExpander::buildFluentPreconditionConstraint(Position& position, const Signature& precondition, const std::vector<std::vector<int>>& eligibleArguments, const std::vector<int>& qArgumentIndices, bool registerDynamicQFact) {
+    const USignature& fact = precondition.getUnsigned();
+    SubstitutionConstraint constraint(collectQConstants(fact, qArgumentIndices));
+    FlatHashSet<int> stateDependentFactIds;
+
+    size_t numDecodings = 1;
+    for (const auto& arguments : eligibleArguments) numDecodings *= arguments.size();
+
+    // Sampling selects the smaller allowed/forbidden representation. Every decoding is still examined below.
+    constexpr size_t sampleSize = 25;
+    const bool chooseRepresentationFromSample = numDecodings > 2 * sampleSize;
+    auto representation = SubstitutionConstraint::UNDECIDED;
+    if (chooseRepresentationFromSample) {
+        size_t numReachableSamples = 0;
+        for (const USignature& decoding : _htn.sampleCandidateDecodings(fact, eligibleArguments, sampleSize)) {
+            const int factId = _htn.getGroundFactId(decoding, precondition._negated);
+            if (factId >= 0 && _analysis.isReachable(factId, precondition._negated)) numReachableSamples++;
+        }
+        representation = numReachableSamples < sampleSize / 2 ? SubstitutionConstraint::ALLOWED_ASSIGNMENTS : SubstitutionConstraint::FORBIDDEN_ASSIGNMENTS;
+        constraint.chooseRepresentation(representation);
+    }
+
+    // Reachability determines valid substitutions. Non-invariant decodings also need SAT fact variables.
+    for (const USignature& decoding : _htn.enumerateCandidateDecodings(fact, eligibleArguments)) {
+        const int factId = _htn.getGroundFactId(decoding, precondition._negated);
+        const bool reachable = factId >= 0 && _analysis.isReachable(factId, precondition._negated);
+        const auto path = SubstitutionConstraint::toAssignmentPath(fact._args, decoding._args, qArgumentIndices);
+
+        if (!reachable) {
+            if (representation != SubstitutionConstraint::ALLOWED_ASSIGNMENTS) constraint.forbid(path);
+            continue;
+        }
+        if (representation != SubstitutionConstraint::FORBIDDEN_ASSIGNMENTS) constraint.allow(path);
+        if (!_analysis.isInvariant(factId, precondition._negated)) stateDependentFactIds.insert(factId);
+    }
+
+    if (!stateDependentFactIds.empty()) {
+        if (registerDynamicQFact) position.addQFact(fact);
+        for (int factId : stateDependentFactIds) {
+            const USignature& decoding = _htn.getGroundPositiveFact(factId);
+            if (registerDynamicQFact) position.addQFactDecoding(fact, decoding, precondition._negated);
+            _analysis.addRelevantFact(factId);
+        }
+    }
+    if (!chooseRepresentationFromSample) constraint.chooseRepresentation();
+    return constraint;
+}
+
+std::vector<int> TreeExpander::collectQConstants(const USignature& fact, const std::vector<int>& qArgumentIndices) const {
+    std::vector<int> qConstants;
+    qConstants.reserve(qArgumentIndices.size());
+    for (int argumentIndex : qArgumentIndices) qConstants.push_back(fact._args[argumentIndex]);
+    return qConstants;
+}
+
+void TreeExpander::addGroundEffect(OutgoingEffects& outgoing, const USignature& opSig, BitVec effects, bool negated, EffectMode mode) {
     if (effects.count() == 0) return;
 
     _analysis.removeInvariantGroundFacts(effects, negated);
-    if (mode != INDIRECT) {
+    if (mode != EffectMode::POSSIBLE_METHOD_EFFECT) {
         _analysis.addMultipleRelevantFacts(effects);
     }
 
     outgoing.addFactChanges(effects, negated);
-    _analysis.addMultipleReachableFacts(effects, negated);
 
-    for (int predId: effects) {
+    for (int factId : effects) {
         if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
-            outgoing.addSupport(predId, negated, opSig);
+            outgoing.addSupport(factId, negated, opSig);
         } else {
-            outgoing.touchSupport(predId, negated);
+            outgoing.touchSupport(factId, negated);
         }
-    }   
+    }
 }
 
+void TreeExpander::addGroundEffect(OutgoingEffects& outgoing, const USignature& opSig, int factId, bool negated, EffectMode mode) {
+    if (_analysis.isInvariant(factId, negated)) return;
 
-bool TreeExpander::addGroundEffect(OutgoingEffects& outgoing, const USignature& opSig, int predId, bool negated, EffectMode mode) {
-    if (_analysis.isInvariant(predId, negated)) return true;
-
-    if (mode != INDIRECT) {
-        _analysis.addRelevantFact(predId);
+    if (mode != EffectMode::POSSIBLE_METHOD_EFFECT) {
+        _analysis.addRelevantFact(factId);
     }
 
     if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
-        outgoing.addSupport(predId, negated, opSig);
+        outgoing.addSupport(factId, negated, opSig);
     } else {
-        outgoing.touchSupport(predId, negated);
+        outgoing.touchSupport(factId, negated);
     }
-    outgoing.addFactChange(predId, negated);
-    
-    _analysis.addReachableFact(predId, negated);
+    outgoing.addFactChange(factId, negated);
+}
+
+bool TreeExpander::isEffectDecodingAllowed(const std::vector<IntPair>& assignmentPath, const std::vector<const SubstitutionConstraint*>& sameQConstantConstraints, const std::vector<const SubstitutionConstraint*>& relatedConstraints) const {
+    for (const SubstitutionConstraint* constraint : sameQConstantConstraints) {
+        if (!constraint->isValid(assignmentPath, /*sameReference=*/true)) return false;
+    }
+    for (const SubstitutionConstraint* constraint : relatedConstraints) {
+        if (!constraint->isValid(assignmentPath, /*sameReference=*/false)) return false;
+    }
     return true;
 }
 
+bool TreeExpander::hasNegativeEffectOnPredicate(const USignature& actionSig, int predicateId) const {
+    const SigSet& actionEffects = _htn.getOpTable().getAction(actionSig).getEffects();
+    for (const Signature& actionEffect : actionEffects) {
+        if (actionEffect._negated && actionEffect._usig._name_id == predicateId) return true;
+    }
+    return false;
+}
 
-bool TreeExpander::addPseudoGroundEffect(
-        OutgoingEffects& outgoing,
-        Position& position,
-        const USignature& opSig,
-        const Signature& fact,
-        EffectMode mode) {
-    USignature factAbs = fact.getUnsigned();
-    bool isQFact = _htn.hasQConstants(factAbs);
-
-    if (!isQFact) {
-        int predId = _htn.getGroundFactId(factAbs, fact._negated);
-        if (predId == -1) return false;
-        return addGroundEffect(outgoing, opSig, predId, fact._negated, mode);
+bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& position, const USignature& opSig, const Signature& effect, EffectMode mode) {
+    const USignature& unsignedEffect = effect.getUnsigned();
+    if (!_htn.hasQConstants(unsignedEffect)) {
+        const int factId = _htn.getGroundFactId(unsignedEffect, effect._negated);
+        if (factId < 0) return false;
+        addGroundEffect(outgoing, opSig, factId, effect._negated, mode);
+        return true;
     }
 
-    std::vector<int> sorts = _htn.getOpSortsForCondition(factAbs, opSig);
-    std::vector<int> sortedArgIndices = SubstitutionConstraint::getSortedSubstitutedArgIndices(_htn, factAbs._args, sorts);
-    const bool isConstrained = position.getSubstitutionConstraints().count(opSig);
-    
-    std::vector<int> involvedQConsts(sortedArgIndices.size());
-    for (size_t i = 0; i < sortedArgIndices.size(); i++) involvedQConsts[i] = factAbs._args[sortedArgIndices[i]];
-    std::vector<SubstitutionConstraint*> fittingConstrs, otherConstrs;
-    if (isConstrained) {
-        for (auto& c : position.getSubstitutionConstraints().at(opSig)) {
-            if (c.getInvolvedQConstants() == involvedQConsts) fittingConstrs.push_back(&c);
-            else if (c.getPolarity() == SubstitutionConstraint::NO_INVALID || c.involvesSupersetOf(involvedQConsts)) {
-                otherConstrs.push_back(&c);
-            }
-        }
-    }
-    
-    bool anyGood = false;
-    bool staticallyResolvable = true;
-    bool existNegativeEffWhichCanConflitWithPosEff = false;
-    if (!fact._negated && (_htn.isAction(opSig) || (_use_sibylsat_expansion && mode == DIRECT))) {
-        const SigSet& effects = _htn.isAction(opSig) ? _htn.getOpTable().getAction(opSig).getEffects() : _htn.getOpTable().getReduction(opSig).getEffects();
-        for (const Signature& negFact : effects) {
-            if (negFact._negated && negFact._usig._name_id == fact._usig._name_id) {
-                existNegativeEffWhichCanConflitWithPosEff = true;
-                break;
+    const std::vector<int> effectSorts = _htn.getConditionSortsFromOperation(unsignedEffect, opSig);
+    const std::vector<int> qArgumentIndices = SubstitutionConstraint::getQArgumentIndicesByDomainSize(_htn, unsignedEffect._args, effectSorts);
+    const std::vector<int> effectQConstants = collectQConstants(unsignedEffect, qArgumentIndices);
+
+    std::vector<const SubstitutionConstraint*> sameQConstantConstraints;
+    std::vector<const SubstitutionConstraint*> relatedConstraints;
+    const auto constraintsIt = position.getSubstitutionConstraints().find(opSig);
+    if (constraintsIt != position.getSubstitutionConstraints().end()) {
+        for (const SubstitutionConstraint& constraint : constraintsIt->second) {
+            if (constraint.getQConstants() == effectQConstants) {
+                sameQConstantConstraints.push_back(&constraint);
+            } else if (constraint.getRepresentation() == SubstitutionConstraint::FORBIDDEN_ASSIGNMENTS || constraint.involvesSupersetOf(effectQConstants)) {
+                relatedConstraints.push_back(&constraint);
             }
         }
     }
-    bool isPositiveEffOfAction = (_htn.isAction(opSig) || (_use_sibylsat_expansion && mode == DIRECT)) && !fact._negated;
 
-    BitVec result = _htn.getMatchingGroundFactIds(factAbs, fact._negated, sorts);
-    for (int predId: result) {
-        const USignature& decFactAbs = _htn.getGroundPositiveFact(predId);
-        auto path = SubstitutionConstraint::decodingToPath(factAbs._args, decFactAbs._args, sortedArgIndices);
+    const bool isPositiveActionEffect = _htn.isAction(opSig) && !effect._negated;
+    const bool hasConflictingNegativeEffect = isPositiveActionEffect && hasNegativeEffectOnPredicate(opSig, effect._usig._name_id);
+    bool hasValidDecoding = false;
+    bool requiresQFactEncoding = false;
 
-        if (isConstrained) {
-            bool isValid = true;
-            for (const auto& c : fittingConstrs) {
-                if (!c->isValid(path, /*sameReference=*/true)) {
-                    isValid = false;
-                    break;
-                }
-            }
-            if (isValid) for (const auto& c : otherConstrs) {
-                if (!c->isValid(path, /*sameReference=*/false)) {
-                    isValid = false;
-                    break;
-                }
-            }
-            if (!isValid) continue;
+    const BitVec matchingFactIds = _htn.findMatchingGroundFactIds(unsignedEffect, effect._negated, effectSorts);
+    for (int factId : matchingFactIds) {
+        const USignature& decoding = _htn.getGroundPositiveFact(factId);
+        const std::vector<IntPair> assignmentPath = SubstitutionConstraint::toAssignmentPath(unsignedEffect._args, decoding._args, qArgumentIndices);
+        if (!isEffectDecodingAllowed(assignmentPath, sameQConstantConstraints, relatedConstraints)) continue;
+
+        hasValidDecoding = true;
+        if (_analysis.isInvariant(factId, effect._negated)) {
+            // A positive invariant still needs encoding if this action can also delete the predicate.
+            if (!isPositiveActionEffect || !hasConflictingNegativeEffect || requiresQFactEncoding) continue;
+            Log::d("Eff: %c %s of %s holds trivially but must be added for correct encoding\n", effect._negated ? '-' : '+', TOSTR(decoding), TOSTR(opSig));
         }
 
-        anyGood = true;
-        if (_analysis.isInvariant(predId, fact._negated)) {
-
-            if (isPositiveEffOfAction && existNegativeEffWhichCanConflitWithPosEff && staticallyResolvable) {
-                Log::d("Eff: %c %s of %s hold trivially but must be added for correct encoding\n", fact._negated ? '-' : '+', TOSTR(decFactAbs), TOSTR(opSig));
-            } else {
-                continue;
-            }
-        }
-
-        _analysis.addReachableFact(predId, /*negated=*/fact._negated);
         if (_nonprimitive_support || _htn.isAction(opSig) || _use_sibylsat_expansion) {
-            outgoing.addIndirectSupport(predId, fact._negated, opSig, path);
+            outgoing.addIndirectSupport(factId, effect._negated, opSig, assignmentPath);
         } else {
-            outgoing.touchSupport(predId, fact._negated);
+            outgoing.touchSupport(factId, effect._negated);
         }
-        outgoing.addFactChange(predId, fact._negated);
-        if (mode != INDIRECT) {
-            if (mode == DIRECT) outgoing.addQFactDecoding(factAbs, decFactAbs, fact._negated);
-            _analysis.addRelevantFact(predId);
+        outgoing.addFactChange(factId, effect._negated);
+        if (mode != EffectMode::POSSIBLE_METHOD_EFFECT) {
+            if (mode == EffectMode::ACTION_EFFECT) outgoing.addQFactDecoding(unsignedEffect, decoding, effect._negated);
+            _analysis.addRelevantFact(factId);
         }
-        staticallyResolvable = false;
+        requiresQFactEncoding = true;
     }
-    if (!anyGood) return false;
 
-    if (!staticallyResolvable && mode == DIRECT) outgoing.addQFact(factAbs);
-    
+    if (!hasValidDecoding) return false;
+    if (requiresQFactEncoding && mode == EffectMode::ACTION_EFFECT) outgoing.addQFact(unsignedEffect);
     return true;
 }
 
 void TreeExpander::propagateParentActions(Position& child, Position& parent) {
     const size_t childOffset = child.getOffset();
+    if (childOffset > 0) {
+        const USignature& blankActionSig = _htn.getBlankActionSig();
+        if (!parent.getActions().empty()) child.addAction(blankActionSig);
+
+        for (const auto& actionSig : parent.getActions()) {
+            child.addExpansion(actionSig, blankActionSig);
+        }
+        return;
+    }
+
     std::vector<USignature> actionsToPrune;
     const size_t numParentActionsBeforePruning = parent.getActions().size();
     for (const auto& actionSig : parent.getActions()) {
@@ -577,25 +561,16 @@ void TreeExpander::propagateParentActions(Position& child, Position& parent) {
         || Log::e("%zu != %zu-%zu\n", parent.getActions().size(),
             numParentActionsBeforePruning, actionsToPrune.size()));
 
-    if (childOffset == 0) {
-        for (const auto& actionSig : parent.getActions()) {
-            assert(_htn.isFullyGround(actionSig));
-            if (_params.isNonzero("aar") && !_htn.isActionRepetition(actionSig._name_id)) {
-                USignature repetitionSig = _htn.getRepetitionOfAction(actionSig);
-                child.addAction(repetitionSig);
-                child.addExpansion(actionSig, repetitionSig);
-            } else {
-                child.addAction(actionSig);
-                child.addExpansion(actionSig, actionSig);
-            }
-        }
-        return;
-    }
-
-    const USignature& blankActionSig = _htn.getBlankActionSig();
     for (const auto& actionSig : parent.getActions()) {
-        child.addAction(blankActionSig);
-        child.addExpansion(actionSig, blankActionSig);
+        assert(_htn.isFullyGround(actionSig));
+        if (_params.isNonzero("aar") && !_htn.isActionRepetition(actionSig._name_id)) {
+            USignature repetitionSig = _htn.getRepetitionOfAction(actionSig);
+            child.addAction(repetitionSig);
+            child.addExpansion(actionSig, repetitionSig);
+        } else {
+            child.addAction(actionSig);
+            child.addExpansion(actionSig, actionSig);
+        }
     }
 }
 
@@ -604,7 +579,7 @@ void TreeExpander::expandParentReductions(Position& child, Position& parent) {
     const size_t originPositionId = child.getPositionId();
     const USignature& blankActionSig = _htn.getBlankActionSig();
     NodeHashMap<USignature, USigSet, USignatureHasher> parentReductionsBySubtask;
-    NodeHashSet<USignature, USignatureHasher> parentReductionsWithChild;
+    std::vector<USignature> reductionsWithNoChildren;
 
     for (const auto& parentReductionSig : parent.getReductions()) {
         const Reduction& parentReduction = _htn.getOpTable().getReduction(parentReductionSig);
@@ -614,7 +589,6 @@ void TreeExpander::expandParentReductions(Position& child, Position& parent) {
             parentReductionsBySubtask[subtask].insert(parentReductionSig);
         } else {
             // Pad reductions shorter than the expanded width with blank actions.
-            parentReductionsWithChild.insert(parentReductionSig);
             child.addAction(blankActionSig);
             child.addExpansion(parentReductionSig, blankActionSig);
         }
@@ -624,6 +598,11 @@ void TreeExpander::expandParentReductions(Position& child, Position& parent) {
     for (const auto& [subtask, parentReductionSigs] : parentReductionsBySubtask) {
         const auto instantiatedActionSigs = instantiateActionsOfTask(subtask, originPositionId);
         const auto instantiatedReductionSigs = instantiateReductionsOfTask(subtask, originPositionId);
+
+        if (instantiatedActionSigs.empty() && instantiatedReductionSigs.empty()) {
+            reductionsWithNoChildren.insert(reductionsWithNoChildren.end(), parentReductionSigs.begin(), parentReductionSigs.end());
+            continue;
+        }
 
         for (const USignature& childReductionSig : instantiatedReductionSigs) {
             assert(_htn.isReduction(childReductionSig));
@@ -641,7 +620,6 @@ void TreeExpander::expandParentReductions(Position& child, Position& parent) {
             }
 
             for (const auto& parentReductionSig : parentReductionSigs) {
-                parentReductionsWithChild.insert(parentReductionSig);
                 child.addExpansion(parentReductionSig, childReductionSig);
             }
         }
@@ -651,16 +629,8 @@ void TreeExpander::expandParentReductions(Position& child, Position& parent) {
             child.addAction(childActionSig);
 
             for (const auto& parentReductionSig : parentReductionSigs) {
-                parentReductionsWithChild.insert(parentReductionSig);
                 child.addExpansion(parentReductionSig, childActionSig);
             }
-        }
-    }
-
-    std::vector<USignature> reductionsWithNoChildren;
-    for (const auto& parentReductionSig : parent.getReductions()) {
-        if (!parentReductionsWithChild.count(parentReductionSig)) {
-            reductionsWithNoChildren.push_back(parentReductionSig);
         }
     }
 
@@ -707,7 +677,7 @@ std::vector<USignature> TreeExpander::instantiateActionsOfTask(const USignature&
 
     if (!_htn.hasReductions(task._name_id)) return result;
 
-    // An abstract task may have actions created from primitivizable methods.
+    // An abstract task may have actions created from primitivizable methods that accomplish the task.
     for (int reductionId : _htn.getReductionIdsOfTaskId(task._name_id)) {
         if (!_htn.isReductionPrimitivizable(reductionId)) continue;
 
@@ -764,9 +734,9 @@ std::optional<USignature> TreeExpander::instantiateAndRegisterReduction(Reductio
     return reduction.getSignature();
 }
 
-void TreeExpander::addQConstantTypeConstraints(Position& pos, const USignature& op) {
-    std::vector<TypeConstraint> cs = _htn.getQConstantTypeConstraints(op);
-    for (const TypeConstraint& c : cs) {
-        pos.addQConstantTypeConstraint(op, c);
+void TreeExpander::addQConstantTypeConstraints(Position& position, const USignature& operationSig) {
+    const std::vector<TypeConstraint> constraints = _htn.getQConstantTypeConstraints(operationSig);
+    for (const TypeConstraint& constraint : constraints) {
+        position.addQConstantTypeConstraint(operationSig, constraint);
     }
 }

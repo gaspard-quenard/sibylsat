@@ -148,7 +148,7 @@ public:
             // Q-Fact:
             bool any = false;
             if (_htn.hasQConstants(sig)) {
-                for (const auto& decSig : _htn.decodeObjects(sig, _htn.getEligibleArgs(sig))) {
+                for (const auto& decSig : _htn.enumerateCandidateDecodings(sig)) {
                     any = negated ? decSig._args[0] != decSig._args[1] : decSig._args[0] == decSig._args[1];
                     if (any) break;
                 }
@@ -164,7 +164,7 @@ public:
             return predId >= 0 && isReachable(predId, negated);
         }
         // Q-Fact:
-        BitVec result = _htn.getMatchingGroundFactIds(sig, negated, _htn.getSorts(sig._name_id));
+        BitVec result = _htn.findMatchingGroundFactIds(sig, negated, _htn.getSorts(sig._name_id));
         // for (size_t predId : result) {
             // Log::i("Sig %s can be grounded to %s\n", TOSTR(sig), TOSTR(_htn.getGroundPositiveFact(predId)));
         // }

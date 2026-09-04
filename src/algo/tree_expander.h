@@ -65,26 +65,40 @@ public:
     size_t getNumRetroactivelyPrunedOps() const;
 
 private:
-    void incrementPosition(const Position& pos);
+    void recordInstantiatedPosition(const Position& position);
     bool isPotentiallyApplicable(const HtnOp& op);
     size_t computeExpansionSize(const Position& position) const;
     void expandLeaf(Position& parent, size_t expansionSize);
     void carryLeaf(Position& leaf);
 
-    void createNextPosition(Position& newPos, Position* expandedParent, Position* left);
-    void createNextPositionFromParent(Position& newPos, Position& parent);
+    void populateChildFromParent(Position& child, Position& parent);
     void computeOutgoingEffects(Position& position);
-    void pruneImpossibleOperations(Position& position, const USigSet& operationsToRemove);
-    void applyOutgoingEffects(const Position& position);
+    bool addActionOutgoingEffects(OutgoingEffects& effects, Position& position, const USignature& actionSig);
+    void addReductionOutgoingEffects(OutgoingEffects& effects, Position& position, const USignature& reductionSig);
+    void pruneImpossibleActions(Position& position, const USigSet& actionsToPrune);
+    void addOutgoingEffectsToReachability(const Position& position);
 
-    void addPreconditionConstraints(Position& pos);
-    void addPreconditionsAndConstraints(Position& pos, const USignature& op, const SigSet& preconditions, bool isActionRepetition);
-    std::optional<SubstitutionConstraint> addPrecondition(Position& pos, const USignature& op, const Signature& fact, bool addQFact = true);
+    void preparePreconditionEncoding(Position& position);
+    void prepareOperationPreconditions(Position& position, const HtnOp& operation, bool isRepeatedAction);
+    std::optional<SubstitutionConstraint> analyzePrecondition(Position& position, const USignature& operationSig, const Signature& precondition, bool registerDynamicQFact);
+    void analyzeGroundPrecondition(const Signature& precondition);
+    SubstitutionConstraint buildEqualityPreconditionConstraint(const Signature& precondition, const std::vector<int>& sorts, const std::vector<int>& qArgumentIndices);
+    SubstitutionConstraint buildStaticPreconditionConstraint(const Signature& precondition, const std::vector<int>& sorts, const std::vector<int>& qArgumentIndices);
+    SubstitutionConstraint buildFluentPreconditionConstraint(Position& position, const Signature& precondition, const std::vector<std::vector<int>>& eligibleArguments, const std::vector<int>& qArgumentIndices, bool registerDynamicQFact);
+    std::vector<int> collectQConstants(const USignature& fact, const std::vector<int>& qArgumentIndices) const;
+    void mergeCompatibleConstraints(Position& position, const USignature& operationSig);
 
-    enum EffectMode { INDIRECT, DIRECT, DIRECT_NO_QFACT };
-    bool addGroundEffect(OutgoingEffects& effects, const USignature& opSig, int predId, bool negated, EffectMode mode);
+    enum class EffectMode { POSSIBLE_METHOD_EFFECT, ACTION_EFFECT, REPEATED_ACTION_EFFECT };
+    void addGroundEffect(OutgoingEffects& effects, const USignature& opSig, int factId, bool negated, EffectMode mode);
     void addGroundEffect(OutgoingEffects& effects, const USignature& opSig, BitVec facts, bool negated, EffectMode mode);
-    bool addPseudoGroundEffect(OutgoingEffects& effects, Position& position, const USignature& op, const Signature& fact, EffectMode mode);
+    /**
+     * Grounds an effect containing Q-constants, filters its decodings through
+     * the operation's substitution constraints, and registers the remaining
+     * decodings. Returns false when no valid ground decoding exists.
+     */
+    bool addInstantiatedEffect(OutgoingEffects& effects, Position& position, const USignature& opSig, const Signature& effect, EffectMode mode);
+    bool isEffectDecodingAllowed(const std::vector<IntPair>& assignmentPath, const std::vector<const SubstitutionConstraint*>& sameQConstantConstraints, const std::vector<const SubstitutionConstraint*>& relatedConstraints) const;
+    bool hasNegativeEffectOnPredicate(const USignature& actionSig, int predicateId) const;
 
     std::optional<USignature> instantiateAndRegisterReduction(Reduction reduction, const std::optional<USignature>& expectedTask, size_t originPositionId);
 
@@ -93,7 +107,7 @@ private:
     std::optional<USignature> instantiateAndRegisterAction(const USignature& actionSig, size_t originPositionId);
     std::vector<USignature> instantiateActionsOfTask(const USignature& task, size_t originPositionId);
     std::vector<USignature> instantiateReductionsOfTask(const USignature& task, size_t originPositionId);
-    void addQConstantTypeConstraints(Position& pos, const USignature& op);
+    void addQConstantTypeConstraints(Position& position, const USignature& operationSig);
 };
 
 #endif

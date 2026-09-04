@@ -873,8 +873,7 @@ void HtnInstance::initQConstantSorts(int id, const FlatHashSet<int>& domain) {
 
 const std::vector<USignature> SIGVEC_EMPTY; 
 
-std::vector<std::vector<int>> HtnInstance::getEligibleArgs(const USignature& qSig, 
-        const std::vector<int>& restrictiveSorts) {
+std::vector<std::vector<int>> HtnInstance::getCandidateArgumentDomains(const USignature& qSig, const std::vector<int>& restrictiveSorts) {
 
     std::vector<std::vector<int>> eligibleArgs;
 
@@ -910,12 +909,20 @@ std::vector<std::vector<int>> HtnInstance::getEligibleArgs(const USignature& qSi
     return eligibleArgs;
 }
 
-ArgIterator HtnInstance::decodeObjects(const USignature& qSig, std::vector<std::vector<int>> eligibleArgs) {
-    return ArgIterator(qSig._name_id, std::move(eligibleArgs));
+ArgIterator HtnInstance::enumerateCandidateDecodings(const USignature& signature, const std::vector<int>& restrictiveSorts) {
+    return enumerateCandidateDecodings(signature, getCandidateArgumentDomains(signature, restrictiveSorts));
 }
 
-SampleArgIterator HtnInstance::decodeObjects(const USignature& qSig, std::vector<std::vector<int>> eligibleArgs, size_t numSamples) {
-    return SampleArgIterator(qSig._name_id, std::move(eligibleArgs), numSamples);
+ArgIterator HtnInstance::enumerateCandidateDecodings(const USignature& signature, std::vector<std::vector<int>> candidateDomains) {
+    return ArgIterator(signature._name_id, std::move(candidateDomains));
+}
+
+SampleArgIterator HtnInstance::sampleCandidateDecodings(const USignature& signature, const std::vector<int>& restrictiveSorts, size_t numSamples) {
+    return sampleCandidateDecodings(signature, getCandidateArgumentDomains(signature, restrictiveSorts), numSamples);
+}
+
+SampleArgIterator HtnInstance::sampleCandidateDecodings(const USignature& signature, std::vector<std::vector<int>> candidateDomains, size_t numSamples) {
+    return SampleArgIterator(signature._name_id, std::move(candidateDomains), numSamples);
 }
 
 const std::vector<int>& HtnInstance::getSorts(int nameId) const {
@@ -1017,19 +1024,19 @@ const FlatHashSet<int>& HtnInstance::getSortsOfQConstant(int qconst) {
     return _sorts_of_q_constants[qconst];
 }
 
-std::vector<int> HtnInstance::getOpSortsForCondition(const USignature& sig, const USignature& op) {
-    std::vector<int> sigSorts(sig._args.size());
-    const auto& opSorts = _signature_sorts_table[op._name_id];
-    for (size_t sigIdx = 0; sigIdx < sigSorts.size(); sigIdx++) {
-        for (size_t opIdx = 0; opIdx < op._args.size(); opIdx++) {
-            if (sig._args[sigIdx] == op._args[opIdx]) {
+std::vector<int> HtnInstance::getConditionSortsFromOperation(const USignature& condition, const USignature& operation) {
+    std::vector<int> conditionSorts(condition._args.size());
+    const auto& operationSorts = _signature_sorts_table[operation._name_id];
+    for (size_t conditionIndex = 0; conditionIndex < conditionSorts.size(); conditionIndex++) {
+        for (size_t operationIndex = 0; operationIndex < operation._args.size(); operationIndex++) {
+            if (condition._args[conditionIndex] == operation._args[operationIndex]) {
                 // Found
-                sigSorts[sigIdx] = opSorts[opIdx];
+                conditionSorts[conditionIndex] = operationSorts[operationIndex];
                 break;
             }
         }
     }
-    return sigSorts;
+    return conditionSorts;
 }
 
 const FlatHashSet<int>& HtnInstance::getDomainOfQConstant(int qconst) const {
@@ -1679,7 +1686,7 @@ HtnInstance::~HtnInstance() {
     delete &_p;
 }
 
-BitVec HtnInstance::getMatchingGroundFactIds(const USignature& sig, bool negated, const std::vector<int>& sortsInput)
+BitVec HtnInstance::findMatchingGroundFactIds(const USignature& sig, bool negated, const std::vector<int>& sortsInput)
 {
     std::vector<int> sorts = sortsInput.empty() ? getSorts(sig._name_id) : sortsInput;
     std::vector<int> restrictiveSorts(sig._args.size(), -1);

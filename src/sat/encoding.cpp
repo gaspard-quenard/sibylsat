@@ -889,22 +889,16 @@ void Encoding::encodeQConstraints(Position& newPos) {
         if (it == newPos.getSubstitutionConstraints().end()) continue;
         
         for (const auto& c : it->second) {
-            auto f = c.getEncoding();
-            auto polarity = c.getPolarity();
-            for (const auto& cls : f) {
-                //std::string out = (polarity == SubstitutionConstraint::ANY_VALID ? "+" : "-") + std::string("SUBSTITUTION ") 
-                //        + Names::to_string(opSig) + " ";
+            const auto clauses = c.getEncoding();
+            const auto representation = c.getRepresentation();
+            for (const auto& clause : clauses) {
                 _sat.appendClause(-_vars.getVariable(VarType::OP, newPos, opSig));
-                for (const auto& [qArg, decArg] : cls) {
-                    bool negated = qArg < 0;
-                    //out += (negated ? "-" : "+")
-                    //        + Names::to_string(involvedQConsts[idx]) + "/" + Names::to_string(std::abs(lit)) + " ";
-                    _sat.appendClause((polarity == SubstitutionConstraint::NO_INVALID ? -1 : (negated ? -1 : 1)) 
+                for (const auto& [qArg, decArg] : clause) {
+                    const bool negated = qArg < 0;
+                    _sat.appendClause((representation == SubstitutionConstraint::FORBIDDEN_ASSIGNMENTS ? -1 : (negated ? -1 : 1))
                             * _vars.varSubstitution(std::abs(qArg), decArg));
                 }
                 _sat.endClause();
-                //out += "\n";
-                //Log::d(out.c_str());
             }
         }
     }

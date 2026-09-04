@@ -21,7 +21,7 @@ public:
 
     void prune(const USignature& op, Position& position);
 
-    size_t getNumRetroactivePunings() const {return _num_retroactive_prunings;}
+    size_t getNumRetroactivePrunings() const {return _num_retroactive_prunings;}
     size_t getNumRetroactivelyPrunedOps() const {return _num_retroactively_pruned_ops;}
 };
 

@@ -435,7 +435,7 @@ int TDG::getBestHeuristicValue(const USignature& usig) {
     }
 
     std::vector<int> sorts = _htn.getSorts(usig._name_id);
-    std::vector<std::vector<int>> eligibleArgs = _htn.getEligibleArgs(usig, sorts);
+    std::vector<std::vector<int>> eligibleArgs = _htn.getCandidateArgumentDomains(usig, sorts);
     // Print the eligible args
     // Log::i("Eligible args for %s:\n", TOSTR(u));
     // for (const std::vector<int>& args : eligibleArgs) {
@@ -499,7 +499,7 @@ std::vector<USignature> TDG::getAllGrounding(const USignature& u) {
     }
 
     std::vector<int> sorts = _htn.getSorts(u._name_id);
-    std::vector<std::vector<int>> eligibleArgs = _htn.getEligibleArgs(u, sorts);
+    std::vector<std::vector<int>> eligibleArgs = _htn.getCandidateArgumentDomains(u, sorts);
 
     // Construct all the grounding from the eligible args
     for (const auto& [key, value]: _vertices) {

@@ -11,118 +11,113 @@ typedef LiteralTree<IntPair, IntPairHasher> IntPairTree;
 class SubstitutionConstraint {
 
 public:
-    enum Polarity {UNDECIDED, ANY_VALID, NO_INVALID};
+    enum Representation {UNDECIDED, ALLOWED_ASSIGNMENTS, FORBIDDEN_ASSIGNMENTS};
 
 private:
-    std::vector<int> _involved_q_consts;
-    IntPairTree _valid_substitutions;
-    IntPairTree _invalid_substitutions;
-    Polarity _polarity = UNDECIDED;
+    std::vector<int> _q_constants;
+    IntPairTree _allowed_assignments;
+    IntPairTree _forbidden_assignments;
+    Representation _representation = UNDECIDED;
 
 public:
-    SubstitutionConstraint(const std::vector<int>& involvedQConsts) : _involved_q_consts(involvedQConsts) {}
-    SubstitutionConstraint(std::vector<int>&& involvedQConsts) : _involved_q_consts(std::move(involvedQConsts)) {}
+    SubstitutionConstraint(const std::vector<int>& qConstants) : _q_constants(qConstants) {}
+    SubstitutionConstraint(std::vector<int>&& qConstants) : _q_constants(std::move(qConstants)) {}
     SubstitutionConstraint(const SubstitutionConstraint& other) : 
-        _involved_q_consts(other._involved_q_consts), 
-        _valid_substitutions(other._valid_substitutions),
-        _invalid_substitutions(other._invalid_substitutions),
-        _polarity(other._polarity) {}
+        _q_constants(other._q_constants),
+        _allowed_assignments(other._allowed_assignments),
+        _forbidden_assignments(other._forbidden_assignments),
+        _representation(other._representation) {}
     SubstitutionConstraint(SubstitutionConstraint&& other) : 
-        _involved_q_consts(other._involved_q_consts), 
-        _valid_substitutions(std::move(other._valid_substitutions)),
-        _invalid_substitutions(std::move(other._invalid_substitutions)),
-        _polarity(other._polarity) {}
+        _q_constants(std::move(other._q_constants)),
+        _allowed_assignments(std::move(other._allowed_assignments)),
+        _forbidden_assignments(std::move(other._forbidden_assignments)),
+        _representation(other._representation) {}
 
     SubstitutionConstraint& operator=(const SubstitutionConstraint& other) {
-        _involved_q_consts = other._involved_q_consts;
-        _valid_substitutions = other._valid_substitutions;
-        _invalid_substitutions = other._invalid_substitutions;
-        _polarity = other._polarity;
+        _q_constants = other._q_constants;
+        _allowed_assignments = other._allowed_assignments;
+        _forbidden_assignments = other._forbidden_assignments;
+        _representation = other._representation;
         return *this;
     }
 
-    void addValid(const std::vector<IntPair>& vals) {
-        _valid_substitutions.insert(vals);
+    void allow(const std::vector<IntPair>& assignment) {
+        _allowed_assignments.insert(assignment);
     }
 
-    void addInvalid(const std::vector<IntPair>& vals) {
-        _invalid_substitutions.insert(vals);
+    void forbid(const std::vector<IntPair>& assignment) {
+        _forbidden_assignments.insert(assignment);
     }
 
-    void fixPolarity(Polarity polarity = UNDECIDED) {
-        size_t negSize = _invalid_substitutions.getSizeOfNegationEncoding();
-        size_t posSize = _valid_substitutions.getSizeOfEncoding();
-        if (polarity == ANY_VALID || (polarity == UNDECIDED && negSize > posSize)) {
-            // More invalids
-            _invalid_substitutions = IntPairTree();
-            _polarity = ANY_VALID;
+    void chooseRepresentation(Representation representation = UNDECIDED) {
+        const size_t forbiddenEncodingSize = _forbidden_assignments.getSizeOfNegationEncoding();
+        const size_t allowedEncodingSize = _allowed_assignments.getSizeOfEncoding();
+        if (representation == ALLOWED_ASSIGNMENTS || (representation == UNDECIDED && forbiddenEncodingSize > allowedEncodingSize)) {
+            _forbidden_assignments = IntPairTree();
+            _representation = ALLOWED_ASSIGNMENTS;
         } else {
-            // More valids
-            _valid_substitutions = IntPairTree();
-            _polarity = NO_INVALID;
+            _allowed_assignments = IntPairTree();
+            _representation = FORBIDDEN_ASSIGNMENTS;
         }
     }
 
-    bool involvesSupersetOf(const std::vector<int>& involvedQConsts) const {
+    bool involvesSupersetOf(const std::vector<int>& qConstants) const {
         // Every q-constant in the query must also be in the involved q-constants
         // (in the same order), otherwise no meaningful check can be done
         size_t j = 0;
-        for (size_t i = 0; i < involvedQConsts.size(); i++) {
-            while (j < _involved_q_consts.size() && _involved_q_consts[j] != involvedQConsts[i])
+        for (size_t i = 0; i < qConstants.size(); i++) {
+            while (j < _q_constants.size() && _q_constants[j] != qConstants[i])
                 j++;
-            if (j == _involved_q_consts.size()) return false;
+            if (j == _q_constants.size()) return false;
         }
         return true;
     }
 
     bool isValid(const std::vector<IntPair>& sub, bool sameReference) const {
-        if (_polarity == ANY_VALID) {
+        if (_representation == ALLOWED_ASSIGNMENTS) {
             // Same involved q-constants: Can perform exact (in)validity check
-            return sameReference ? _valid_substitutions.contains(sub) : _valid_substitutions.subsumes(sub);
+            return sameReference ? _allowed_assignments.contains(sub) : _allowed_assignments.subsumes(sub);
         } else {
-            return sameReference ? !_invalid_substitutions.contains(sub) : !_invalid_substitutions.hasPathSubsumedBy(sub);
+            return sameReference ? !_forbidden_assignments.contains(sub) : !_forbidden_assignments.hasPathSubsumedBy(sub);
         }
     }
 
     bool canMerge(const SubstitutionConstraint& other) const {
-        if (_polarity != other._polarity) return false;
-        if (_polarity == UNDECIDED) return false;
-        // Must have same _involved_q_consts
-        return _involved_q_consts == other._involved_q_consts;
+        if (_representation != other._representation) return false;
+        if (_representation == UNDECIDED) return false;
+        return _q_constants == other._q_constants;
     }
 
     void merge(SubstitutionConstraint&& other) {
-        if (_polarity == ANY_VALID) {
-            // intersect paths of both literal trees
-            _valid_substitutions.intersect(std::move(other._valid_substitutions));
+        if (_representation == ALLOWED_ASSIGNMENTS) {
+            _allowed_assignments.intersect(std::move(other._allowed_assignments));
         }
-        if (_polarity == NO_INVALID) {
-            // unite paths of both literal trees
-            _invalid_substitutions.merge(std::move(other._invalid_substitutions));
+        if (_representation == FORBIDDEN_ASSIGNMENTS) {
+            _forbidden_assignments.merge(std::move(other._forbidden_assignments));
         }
     }
 
-    std::vector<std::vector<IntPair>> getEncoding(Polarity p = UNDECIDED) const {
-        if (p == ANY_VALID) return _valid_substitutions.encode();
-        if (p == NO_INVALID) return _invalid_substitutions.encodeNegation();
-        if (_polarity == ANY_VALID) return _valid_substitutions.encode();
-        return _invalid_substitutions.encodeNegation();
+    std::vector<std::vector<IntPair>> getEncoding(Representation representation = UNDECIDED) const {
+        if (representation == ALLOWED_ASSIGNMENTS) return _allowed_assignments.encode();
+        if (representation == FORBIDDEN_ASSIGNMENTS) return _forbidden_assignments.encodeNegation();
+        if (_representation == ALLOWED_ASSIGNMENTS) return _allowed_assignments.encode();
+        return _forbidden_assignments.encodeNegation();
     }
 
     size_t getEncodedSize() const {
-        return _valid_substitutions.getSizeOfEncoding() + _invalid_substitutions.getSizeOfNegationEncoding();
+        return _allowed_assignments.getSizeOfEncoding() + _forbidden_assignments.getSizeOfNegationEncoding();
     }
 
-    Polarity getPolarity() const {return _polarity;}
+    Representation getRepresentation() const {return _representation;}
 
-    const std::vector<int>& getInvolvedQConstants() const {return _involved_q_consts;}
+    const std::vector<int>& getQConstants() const {return _q_constants;}
 
-    static std::vector<int> getSortedSubstitutedArgIndices(HtnInstance& htn, const std::vector<int>& qargs, const std::vector<int>& sorts) {
+    static std::vector<int> getQArgumentIndicesByDomainSize(HtnInstance& htn, const std::vector<int>& arguments, const std::vector<int>& sorts) {
 
         // Collect indices of arguments which will be substituted
         std::vector<int> argIndices;
-        for (size_t i = 0; i < qargs.size(); i++) {
-            if (htn.isQConstant(qargs[i])) argIndices.push_back(i);
+        for (size_t i = 0; i < arguments.size(); i++) {
+            if (htn.isQConstant(arguments[i])) argIndices.push_back(i);
         }
 
         // Sort argument indices by the potential size of their domain
@@ -131,14 +126,13 @@ public:
         return argIndices;
     }
 
-    static std::vector<IntPair> decodingToPath(const std::vector<int>& qArgs, const std::vector<int>& decArgs, const std::vector<int>& sortedIndices) {
+    static std::vector<IntPair> toAssignmentPath(const std::vector<int>& qArguments, const std::vector<int>& decodedArguments, const std::vector<int>& qArgumentIndices) {
         
         // Write argument substitutions into the result in correct order
         std::vector<IntPair> path;
-        path.reserve(sortedIndices.size());
-        for (size_t x = 0; x < sortedIndices.size(); x++) {
-            size_t argIdx = sortedIndices[x];
-            path.emplace_back(IntPair(qArgs[argIdx], decArgs[argIdx]));
+        path.reserve(qArgumentIndices.size());
+        for (int argumentIndex : qArgumentIndices) {
+            path.emplace_back(qArguments[argumentIndex], decodedArguments[argumentIndex]);
         }
         return path;
     }

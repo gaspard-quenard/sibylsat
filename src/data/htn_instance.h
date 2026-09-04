@@ -183,11 +183,25 @@ public:
     const FlatHashSet<int>& getDomainOfQConstant(int qconst) const;
     std::vector<int> popOperationDependentDomainOfQConstant(int qconst, const USignature& op);
 
-    std::vector<int> getOpSortsForCondition(const USignature& sig, const USignature& op);
+    /**
+     * Returns one sort per condition argument, derived from the corresponding
+     * argument in the operation.
+     *
+     * Example: operation (?x:A, ?y:B), condition p(?y, ?x) -> {B, A}.
+     * Sort entries for fixed constants are not used during decoding.
+     */
+    std::vector<int> getConditionSortsFromOperation(const USignature& condition, const USignature& operation);
 
-    std::vector<std::vector<int>> getEligibleArgs(const USignature& qFact, const std::vector<int>& restrictiveSorts = std::vector<int>());
-    ArgIterator decodeObjects(const USignature& qSig, std::vector<std::vector<int>> eligibleArgs);
-    SampleArgIterator decodeObjects(const USignature& qSig, std::vector<std::vector<int>> eligibleArgs, size_t numSamples);
+    /** Returns the candidate constants for every argument of a signature. */
+    std::vector<std::vector<int>> getCandidateArgumentDomains(const USignature& signature, const std::vector<int>& restrictiveSorts = {});
+    /** Enumerates every candidate decoding, including signatures absent from the ground-fact table. */
+    ArgIterator enumerateCandidateDecodings(const USignature& signature, const std::vector<int>& restrictiveSorts = {});
+    /** Enumerates candidates from domains already computed by the caller. */
+    ArgIterator enumerateCandidateDecodings(const USignature& signature, std::vector<std::vector<int>> candidateDomains);
+    /** Samples candidate decodings derived from the supplied argument sorts. */
+    SampleArgIterator sampleCandidateDecodings(const USignature& signature, const std::vector<int>& restrictiveSorts, size_t numSamples);
+    /** Samples candidates from domains already computed by the caller. */
+    SampleArgIterator sampleCandidateDecodings(const USignature& signature, std::vector<std::vector<int>> candidateDomains, size_t numSamples);
 
     std::optional<Action> instantiateWithQConstants(const Action& action, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
     std::optional<Reduction> instantiateWithQConstants(const Reduction& reduction, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
@@ -437,7 +451,8 @@ public:
         assert(idx >= 0 && idx < _ground_pos_facts.size() || Log::e("Index out of bounds: %i, size: %zu\n", idx, _ground_pos_facts.size()));
         return _ground_pos_facts[idx];
     }
-    BitVec getMatchingGroundFactIds(const USignature& sig, bool negated, const std::vector<int>& sorts_per_args = {});
+    /** Finds only matching signatures already present in the indexed ground-fact table. */
+    BitVec findMatchingGroundFactIds(const USignature& signature, bool negated, const std::vector<int>& argumentSorts = {});
 
 private:
 
