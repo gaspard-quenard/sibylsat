@@ -1,97 +1,48 @@
-
-#ifndef DOMPASCH_LILOTANE_VARIABLE_PROVIDER_H
-#define DOMPASCH_LILOTANE_VARIABLE_PROVIDER_H
+#ifndef SIBYLSAT_VARIABLE_PROVIDER_H
+#define SIBYLSAT_VARIABLE_PROVIDER_H
 
 #include "data/htn_instance.h"
 #include "data/position.h"
-#include "util/params.h"
+#include "sat/variable_allocator.h"
 
+/**
+ * Maps planning concepts to their SAT variables.
+ *
+ * VariableAllocator owns the numeric ID sequence; this class owns the semantic
+ * lookup tables that make repeated requests return the same variable.
+ */
 class VariableProvider {
-
 private:
     HtnInstance& _htn;
-    NodeHashMap<USignature, int, USignatureHasher> _substitution_variables;
-    USignature _sig_primitive;
-    USignature _sig_substitution;
-    int _substitute_name_id;
-    FlatHashMap<std::pair<int, int>, int, IntPairHasher> _q_equality_variables;
-    
+    VariableAllocator& _allocator;
+    const USignature _primitive_signature;
+    const int _substitution_name_id;
+
+    FlatHashMap<IntPair, int, IntPairHasher> _substitution_variables;
+    FlatHashMap<IntPair, int, IntPairHasher> _q_constant_equality_variables;
+
+    static IntPair canonicalEqualityKey(int firstQConstant, int secondQConstant);
+    std::string positionVariableName(const Position& position, const USignature& signature) const;
+    std::string substitutionVariableName(int qConstant, int groundObject) const;
+
 public:
+    VariableProvider(HtnInstance& htn, VariableAllocator& allocator);
 
-    VariableProvider(Parameters& params, HtnInstance& htn) : _htn(htn) {
-        _sig_primitive = USignature(_htn.nameId("__PRIMITIVE___"), std::vector<int>());
-        _substitute_name_id = _htn.nameId("__SUBSTITUTE___");
-        _sig_substitution = USignature(_substitute_name_id, std::vector<int>(2));
-        VariableDomain::init(params);
-    }
+    bool hasVariable(VarType type, const Position& position, const USignature& signature) const;
+    int getVariable(VarType type, const Position& position, const USignature& signature) const;
+    int getOrCreateVariable(VarType type, Position& position, const USignature& signature);
 
-    inline bool isEncoded(VarType type, const Position& pos, const USignature& sig) {
-        return pos.hasVariable(type, sig);
-    }
+    int getOrCreateSubstitutionVariable(int qConstant, int groundObject);
+    /** Return zero when this substitution has not been encoded. */
+    int getSubstitutionVariableOrZero(int qConstant, int groundObject) const;
 
-    inline int getVariable(VarType type, const Position& pos, const USignature& sig) {
-        return pos.getVariable(type, sig);
-    }
+    int getOrCreatePrimitiveVariable(Position& position);
+    int getPrimitiveVariableOrZero(const Position& position) const;
 
-    inline int encodeVariable(VarType type, Position& pos, const USignature& sig) {
-        int var = pos.getVariableOrZero(type, sig);
-        if (var == 0) var = pos.encode(type, sig);
-        return var;
-    }
-
-    bool isEncodedSubstitution(const USignature& sig) {
-        return _substitution_variables.count(sig);
-    }
-
-    const USignature& sigSubstitute(int qConstId, int trueConstId) {
-        //assert(!_htn.isQConstant(trueConstId) || trueConstId < qConstId);
-        auto& args = _sig_substitution._args;
-        assert(_htn.isQConstant(qConstId));
-        assert(!_htn.isQConstant(trueConstId));
-
-        args[0] = qConstId;
-        args[1] = trueConstId;
-        return _sig_substitution;
-    }
-
-    int varSubstitution(int qConstId, int trueConstId) {
-        const USignature& sigSubst = sigSubstitute(qConstId, trueConstId);
-        int var;
-        if (!_substitution_variables.count(sigSubst)) {
-            assert(!VariableDomain::isLocked() || Log::e("Unknown substitution variable %s queried!\n", TOSTR(sigSubst)));
-            var = VariableDomain::nextVar();
-            _substitution_variables[sigSubst] = var;
-            VariableDomain::printVar(var, -1, -1, sigSubst);
-            //_no_decision_variables.push_back(var);
-        } else var = _substitution_variables[sigSubst];
-        return var;
-    }
-
-    int encodeVarPrimitive(Position& pos) {
-        return encodeVariable(VarType::OP, pos, _sig_primitive);
-    }
-    int getVarPrimitiveOrZero(const Position& pos) {
-        return pos.getVariableOrZero(VarType::OP, _sig_primitive);
-    }
-
-    bool isQConstantEqualityEncoded(int qconst1, int qconst2) {
-        return _q_equality_variables.count(IntPair(qconst1, qconst2));
-    }
-    int encodeQConstantEqualityVar(int qconst1, int qconst2) {
-        int var = VariableDomain::nextVar();
-        _q_equality_variables[IntPair(qconst1, qconst2)] = var;
-        return var;
-    }
-    int getQConstantEqualityVar(int qconst1, int qconst2) {
-        return _q_equality_variables[IntPair(qconst1, qconst2)];
-    }
-
-    void skipVariable() {
-        VariableDomain::nextVar();
-    }
-    int getNumVariables() {
-        return VariableDomain::getMaxVar();
-    }
+    bool hasQConstantEqualityVariable(int firstQConstant, int secondQConstant) const;
+    int createQConstantEqualityVariable(int firstQConstant, int secondQConstant);
+    /** Return an existing equality variable; both argument orders are equivalent. */
+    int getQConstantEqualityVariable(int firstQConstant, int secondQConstant) const;
 };
 
 #endif

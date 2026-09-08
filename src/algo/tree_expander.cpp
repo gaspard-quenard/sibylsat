@@ -58,8 +58,6 @@ void TreeExpander::createInitialLeaves() {
     _leaf_positions = {rootReductionPosition, goalPosition};
     for (size_t i = 0; i < _leaf_positions.size(); i++) {
         _leaf_positions[i]->setFrontierIndex(i);
-        _leaf_positions[i]->setLeftPosition(i > 0 ? _leaf_positions[i - 1] : nullptr);
-        _leaf_positions[i]->setCreatedInLastExpansion(true);
     }
 
     const Reduction& initReduction = _htn.getInitReduction();
@@ -108,11 +106,6 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
     _leaf_positions.reserve(nextLeafCount);
     Log::i("New leaf count: %zu\n", nextLeafCount);
 
-    // Positions from the previous frontier are not new in this expansion.
-    for (Position* leaf : currentLeaves) {
-        leaf->setCreatedInLastExpansion(false);
-    }
-
     _stats.beginTiming(TimingStage::EXPANSION);
     _analysis.resetReachability();
 
@@ -146,10 +139,7 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
 void TreeExpander::expandLeaf(Position& parent, size_t expansionSize) {
     for (size_t childIndex = 0; childIndex < expansionSize; childIndex++) {
         Position* child = new Position(_expansion_iteration, &parent);
-        child->setCreatedInLastExpansion(true);
-        Position* left = _leaf_positions.empty() ? nullptr : _leaf_positions.back();
         _leaf_positions.push_back(child);
-        child->setLeftPosition(left);
         populateChildFromParent(*child, parent);
 
         if (_params.isNonzero("edo")) {

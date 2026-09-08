@@ -1047,19 +1047,21 @@ size_t HtnInstance::getOriginPositionIdOfQConstant(int qconst) const {
     return _q_constant_origin_position_ids.at(qconst);
 }
 
-std::vector<int> HtnInstance::popOperationDependentDomainOfQConstant(int qconst, const USignature& op) {
+std::optional<std::vector<int>> HtnInstance::takeQConstantDomainForOperation(int qconst, const USignature& op) {
     auto it1 = _q_const_to_op_domains.find(qconst);
-    assert(it1 != _q_const_to_op_domains.end());
+    if (it1 == _q_const_to_op_domains.end()) return std::nullopt;
+
     auto& opDomains = it1->second;
     auto it2 = opDomains.find(op);
-    assert(it2 != opDomains.end());
-    std::vector<int> domain = it2->second;
+    if (it2 == opDomains.end()) return std::nullopt;
+
+    std::vector<int> domain = std::move(it2->second);
     if (opDomains.size() == 1) {
         _q_const_to_op_domains.erase(it1);
     } else {
         opDomains.erase(it2);
     }
-    return domain;
+    return std::optional<std::vector<int>>(std::move(domain));
 }
 
 const NodeHashMap<int, Action>& HtnInstance::getActionTemplates() const {
@@ -1085,8 +1087,16 @@ USignature HtnInstance::cutNonoriginalTaskArguments(const USignature& sig) {
     return sigCut;
 }
 
-const std::pair<int, int>& HtnInstance::getReductionAndActionFromPrimitivization(int primitivizationName) {
-    return _primitivization_to_parent_and_child[primitivizationName];
+bool HtnInstance::isPrimitivizedAction(int actionNameId) const {
+    return _primitivization_to_parent_and_child.count(actionNameId);
+}
+
+const std::pair<int, int>& HtnInstance::getReductionAndActionFromPrimitivization(int primitivizationName) const {
+    return _primitivization_to_parent_and_child.at(primitivizationName);
+}
+
+bool HtnInstance::isSecondSplitAction(int actionNameId) const {
+    return toString(actionNameId).starts_with("__LLT_SECOND");
 }
 
 USignature HtnInstance::getNormalizedLifted(const USignature& opSig, std::vector<int>& placeholderArgs) {

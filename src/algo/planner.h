@@ -69,6 +69,7 @@ public:
     Planner(Parameters& params, HtnInstance& htn);
     int findPlan();
     void optimizeCurrentPlan();
+    void writeFormulaFile() { _encoding.writeFormulaFile(); }
 
     const bool mustRestartPlanner() const {
         return _separate_tasks_scheduler != nullptr && _separate_tasks_scheduler->mustRestartPlanner();

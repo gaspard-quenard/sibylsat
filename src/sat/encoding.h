@@ -12,8 +12,6 @@
 #include "sat/variable_provider.h"
 #include "sat/decoder.h"
 
-typedef NodeHashMap<int, SigSet> State;
-
 class Encoding {
 
 private:
@@ -23,23 +21,12 @@ private:
     Position*& _root_position;
     std::vector<Position*>& _leaf_positions;
     Statistics& _stats;
+    VariableAllocator _variable_allocator;
     SatInterface _sat;
     VariableProvider _vars;
     Decoder _decoder;
 
     size_t _active_frontier_start = 0;
-
-    NodeHashSet<Substitution, Substitution::Hasher> _forbidden_substitutions;
-    FlatHashSet<int> _new_fact_vars;
-
-    FlatHashSet<int> _q_constants;
-    FlatHashSet<int> _new_q_constants;
-
-    std::vector<int> _primitive_ops;
-    std::vector<int> _nonprimitive_ops;
-
-    const bool _use_q_constant_mutexes;
-    const bool _implicit_primitiveness;
 
     const bool _use_sibylsat_expansion;
 
@@ -47,26 +34,19 @@ private:
 
     const bool _mutex_predicates;
 
-    // USigSet new_relevants_facts_to_encode;
-    NodeHashMap<USignature, int, USignatureHasher> _new_relevants_facts_to_encode;
-
 public:
     Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, Position*& rootPosition, std::vector<Position*>& leafPositions) : 
             _params(params), _htn(htn), _analysis(analysis), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(Statistics::getInstance()),
-            _sat(params), _vars(_params, _htn),
+            _variable_allocator(params), _sat(params), _vars(_htn, _variable_allocator),
             _decoder(_htn, _root_position, _leaf_positions, _sat, _vars),
-            _use_q_constant_mutexes(_params.getIntParam("qcm") > 0), 
-            _implicit_primitiveness(params.isNonzero("ip")),
             _use_sibylsat_expansion(params.isNonzero("sibylsat")),
             _optimal(params.isNonzero("optimal")),
             _mutex_predicates(_params.isNonzero("mutex")) {}
 
-    void encode(Position& pos);
     /**
-     * Encode the whole current frontier. Freshly expanded leaves are fully
-     * encoded; carried leaves (from the previous frontier) get their effects and
-     * frame axioms encoded incrementally. Leaves in the separate-tasks prefix
-     * (frontier index < _active_frontier_start) are skipped as already encoded.
+     * Encode the current frontier, including initial-state facts and any
+     * positions or transitions introduced by the latest tree expansion. An
+     * already encoded separate-tasks prefix is skipped.
      */
     void encodeAllLeaves();
     void addAssumptionsPrimPlan(bool permanent = false, int assumptions_until = -1);
@@ -74,47 +54,17 @@ public:
     
     int solve();
 
-    void printFailedVars();
-    void printSatisfyingAssignment();
-
-    Plan extractPlan() {
-        return _decoder.extractPlan();
-    }
-    std::vector<PlanItem> extractAbstractPlan() {
-        return _decoder.extractClassicalPlan(Decoder::ALL);
-    }
+    Decoder& getDecoder() { return _decoder; }
     SatInterface& getSatInterface() {return _sat;}
-
-    /**
-     * When using sibylsat expansion method. If the left position has been developped, we need to add the frame axioms, effects on this position and QfactSemantics (how those lifted effects can be decoded to a ground predicate)
-     */
-    void encodeOnlyEffsAndFrameAxioms(Position& pos);
-    void encodeNewRelevantsFacts(Position& initPos);
-    void encodeFrameAxiomsForNewRelevantsFacts(Position& newPos, Position& left);
-    void propagateRelevantsFacts(Position& pos);
-
-    const USignature getOpHoldingAt(const Position& pos);
-    const USignature getDecodingOpHoldingAt(const Position& pos);
-    void printStatementsAtPosition(const Position& pos);
-
-    void print_formula(std::string filename) {
-        _sat.print_formula(filename);
-    }
+    VariableAllocator& getVariableAllocator() { return _variable_allocator; }
 
     // For optimal planning using maxsat
     void clearSoftLits();
     void addSoftLit(int lit, int weight);
     int getObjectiveValue();
+    void writeFormulaFile();
 
-    NodeHashSet<int> getSnapshotsOpsAndPredsTrue(int untilPos);
     void addAssumptionsTasksAccomplished(NodeHashSet<int>& opsAndPredsTrue, bool permanent);
-
-    ~Encoding() {
-        // Append assumptions to written formula, close stream
-        if (!_params.isNonzero("cs") && !_sat.hasLastAssumptions()) {
-            addAssumptionsPrimPlan();
-        }
-    }
 
     void setActiveFrontierStart(size_t index) {
         _active_frontier_start = index;
@@ -122,13 +72,13 @@ public:
 
 private:
     struct EncodingEnvironment {
-        Position* left = nullptr;
-        Position* above = nullptr;
-        Position* leftOfAbove = nullptr;
-        Position* reusedFacts = nullptr;
+        Position* incoming = nullptr;         // Source of the incoming state transition.
+        Position* parent = nullptr;           // Source of decomposition constraints.
+        Position* reuseFactsFrom = nullptr;   // Position whose existing fact variables may be shared.
+        Position* reusePredecessor = nullptr; // Incoming source used when reuseFactsFrom was encoded.
     };
-    struct QFactView {
-        USigSet facts;
+    struct StateQFacts {
+        USigSet qFacts;
         NodeHashMap<USignature, USigSet, USignatureHasher> positiveDecodings;
         NodeHashMap<USignature, USigSet, USignatureHasher> negativeDecodings;
 
@@ -138,48 +88,96 @@ private:
         bool hasDecodings(const USignature& fact, bool negated) const;
         const USigSet& getDecodings(const USignature& fact, bool negated) const;
     };
-    // How a leaf is positioned relative to the previous frontier, which determines
-    // which facts/effects can be reused vs. must be re-encoded.
-    enum class EncodingContext {
-        NewlyCreatedLeaf,       // A Position created by the last expansion.
-        CarriedLeaf,            // A leaf carried over from the previous frontier.
-        CarriedLeafReuseSelf    // A carried leaf that reuses its own fact variables.
-    };
+    struct PositionedMethod {
+        Position* position;
+        USignature signature;
 
-    Position* getLeftPosition(const Position& pos) const;
-    Position* getAbovePosition(const Position& pos) const;
-    EncodingEnvironment buildEnvironment(Position& pos, EncodingContext context) const;
-    QFactView buildQFactView(const Position& position, const Position* left) const;
+        bool operator==(const PositionedMethod& other) const {
+            return position == other.position && signature == other.signature;
+        }
+    };
+    struct EffectSupports {
+        const USigSet* direct = nullptr;
+        IndirectFactSupportMapEntry* indirect = nullptr;
+
+        bool empty() const { return direct == nullptr && indirect == nullptr; }
+    };
+    using EffectUnifier = std::set<int>;
+    using EffectUnifierDnf = std::set<EffectUnifier>;
+    struct PositiveEffectUnifiers {
+        bool unconditional = false;
+        EffectUnifierDnf alternatives;
+    };
+    Position* getCurrentFrontierLeft(const Position& pos) const;
+    Position* getPreviousFrontierLeft(const Position& pos, size_t expansionIteration) const;
+    Position* getParentExcludingRoot(const Position& pos) const;
+    bool wasCreatedInCurrentExpansion(const Position& pos, size_t expansionIteration) const;
+    bool isPrimitiveReduction(const USignature& reduction) const;
+    bool hasPrimitiveCandidates(const Position& pos) const;
+    bool hasNonprimitiveCandidates(const Position& pos) const;
+    EncodingEnvironment buildFreshPositionEnvironment(Position& pos) const;
+    EncodingEnvironment buildExistingTransitionEnvironment(Position& source, Position& destination, size_t expansionIteration) const;
+    EncodingEnvironment buildRelevantFactPropagationEnvironment(Position& source, Position& destination, size_t expansionIteration) const;
+    StateQFacts collectStateQFacts(const Position& position, const Position* incoming) const;
+    void reuseParentFactVariables(Position& position, const EncodingEnvironment& env);
     int findReusableQFactVariable(
             const USignature& qfact,
             const Position& position,
-            const QFactView& qfacts,
+            const StateQFacts& stateQFacts,
             const Position* source,
-            const QFactView& sourceQFacts) const;
+            const StateQFacts& sourceStateQFacts) const;
+    void encodeFreshPosition(Position& pos);
     void encodeOperationVariables(Position& pos);
-    void encodeInitialRelevantFacts(Position& pos, bool rememberForPropagation);
-    void encodeFactVariables(Position& pos, const EncodingEnvironment& env);
-    void encodeFrameAxioms(Position& pos, Position& left, const EncodingEnvironment& env, bool onlyForNewRelevantsFacts = false);
-    bool encodeFrameAxiomForFact(
-            Position& newPos, Position& left, const EncodingEnvironment& env,
-            const USignature& fact, int oldFactVar,
-            bool nonprimFactSupport, bool hasPrimitiveOps, int prevVarPrim,
-            bool skipRedundantFrameAxioms, USigSet& positiveFacts);
+    /** Encode newly relevant facts in the state at the active-frontier start. */
+    BitVec encodeRelevantFactsAtFrontierStart(Position& position);
+    void encodeGroundFactTransition(Position& source, Position& destination, const EncodingEnvironment& env);
+    USigSet encodeQFactVariables(Position& pos, const EncodingEnvironment& env);
+    /** Encode all frame axioms, or only selected facts when selectedFactIds is provided. */
+    void encodeFrameAxioms(Position& source, Position& destination, const EncodingEnvironment& env, const BitVec* selectedFactIds = nullptr);
+
+    bool canSkipRedundantFrameAxioms(const Position& source, const EncodingEnvironment& env) const;
+    EffectSupports findEffectSupports(OutgoingEffects& effects, int factId, bool negated) const;
+    void encodeFrameAxiomForFact(Position& source, Position& destination, const EncodingEnvironment& env, const USignature& fact, int sourceFactVar, bool nonprimFactSupport, bool sourceHasPrimitiveCandidates, int sourceVarPrim, bool skipRedundantFrameAxioms, USigSet& positiveFacts);
     void encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int opVar, const IntPairTree& tree);
     void encodeOperationConstraints(Position& pos);
+    void encodeActionConstraints(Position& pos, std::vector<int>& operationVars);
+    void encodeReductionConstraints(Position& pos, std::vector<int>& operationVars);
+    void encodeOperationSelection(const std::vector<int>& operationVars);
     void encodeSubstitutionVars(const USignature& opSig, int opVar, int qconst);
-    void encodeQFactSemantics(Position& pos, const EncodingEnvironment& env, bool encodeOnlyEffectQFacts = false);
-    void encodeActionEffects(Position& pos, Position& left);
+    void encodeQFactSemantics(Position& pos, const EncodingEnvironment& env, const USigSet& newlyCreatedQFacts);
+    void encodeIncomingEffectQFactSemantics(Position& pos, const EncodingEnvironment& env, const USigSet& newlyCreatedQFacts);
+    void encodeQFactSemanticsWithReuseFiltering(Position& pos, const EncodingEnvironment& env, const StateQFacts& stateQFacts, const StateQFacts& reusedStateQFacts, const USigSet& newlyCreatedQFacts);
+    bool isQFactDecodingAlreadyEncoded(const EncodingEnvironment& env, const StateQFacts& reusedStateQFacts, const USignature& qfact, const USignature& decoding, bool negated, int qfactVar) const;
+    void encodeAllQFactSemantics(Position& pos, const StateQFacts& stateQFacts);
+    void encodeQFactDecoding(Position& pos, const USignature& qfact, int qfactVar, const USignature& decoding, bool negated, std::vector<int>& substitutionVars);
+    void encodeEffects(Position& source, Position& destination);
+    void encodeActionEffects(const USignature& action, int actionVar, Position& destination, bool useTreeConversion);
+    PositiveEffectUnifiers findPositiveEffectUnifiers(const Signature& negativeEffect, const SigSet& effects, const Position& destination);
+    std::optional<EffectUnifier> findEffectUnifier(const Signature& first, const Signature& second);
+    void encodeConditionalNegativeEffect(int actionVar, int factVar, const EffectUnifierDnf& unifiers, bool useTreeConversion);
     void encodeQConstraints(Position& pos);
+    void encodeQConstantTypeConstraints(Position& pos);
+    void encodeSubstitutionConstraints(Position& pos);
+    void encodeSubstitutionConstraintsForOperations(Position& pos, const USigSet& operations);
     void encodeSubtaskRelationships(Position& pos, const EncodingEnvironment& env);
-    void encodeMutexPredicates(Position& pos, const EncodingEnvironment& env, USigSet& possibleEffects);
+    void encodeExpansionRelationships(Position& pos, Position& parent);
+    void encodeExpansionSubstitutions(Position& pos, const USignature& parentOperation, int parentVar);
+    void encodePredecessorRelationships(Position& pos, Position& parent);
+    void encodeMutexPredicates(Position& pos, const EncodingEnvironment& env, const USigSet& possibleEffects);
+    void encodeMutexGroup(const std::vector<int>& factVars);
     int encodeQConstEquality(int q1, int q2);
+    void encodeTransition(Position& source, Position& destination, size_t expansionIteration);
+    void propagateNewRelevantFacts(Position& source, Position& destination, size_t expansionIteration, const BitVec& newlyRelevantFactIds);
 
+    std::vector<PositionedMethod> findMethodAncestorsWithSameName(Position& position, const USignature& method) const;
+    void encodeMethodMustDifferFromAncestors(Position& position, const USignature& method, const std::vector<PositionedMethod>& ancestors);
 
     /**
-     * When using the sibylsat expansion method, prevent a method to have the same signature than one of its parents or transitive parents (meaning same name and same parameters) to be able to have a finite search space
+     * Prevent a recursive method from having the same signature as one of its
+     * ancestors (the same method name with the same decoded arguments), ensuring
+     * that recursive expansion has a finite search space.
      */
-    void encodePreventionIdenticalSignatureThanParentsForAllMethods(Position& pos);
+    void encodeRecursiveMethodAncestorDistinctness(Position& position);
 
 };
 

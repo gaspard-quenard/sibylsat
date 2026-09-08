@@ -50,8 +50,8 @@ public:
     }
 
     void chooseRepresentation(Representation representation = UNDECIDED) {
-        const size_t forbiddenEncodingSize = _forbidden_assignments.getSizeOfNegationEncoding();
-        const size_t allowedEncodingSize = _allowed_assignments.getSizeOfEncoding();
+        const size_t forbiddenEncodingSize = _forbidden_assignments.getNegationEncodingLiteralCount();
+        const size_t allowedEncodingSize = _allowed_assignments.getEncodingLiteralCount();
         if (representation == ALLOWED_ASSIGNMENTS || (representation == UNDECIDED && forbiddenEncodingSize > allowedEncodingSize)) {
             _forbidden_assignments = IntPairTree();
             _representation = ALLOWED_ASSIGNMENTS;
@@ -105,7 +105,7 @@ public:
     }
 
     size_t getEncodedSize() const {
-        return _allowed_assignments.getSizeOfEncoding() + _forbidden_assignments.getSizeOfNegationEncoding();
+        return _allowed_assignments.getEncodingLiteralCount() + _forbidden_assignments.getNegationEncodingLiteralCount();
     }
 
     Representation getRepresentation() const {return _representation;}

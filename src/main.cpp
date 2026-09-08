@@ -83,9 +83,8 @@ void run(Parameters& params) {
 
     if (planner->mustRestartPlanner()) {
         Log::i("Restarting planner.\n");
-        // Clean the static and singleton data structures
+        // Clean singleton statistics before creating the new planner.
         Statistics::getInstance().reset();
-        VariableDomain::clear();
 
         // Resetting the unique_ptr will delete the current planner and create a new one.
         planner = std::make_unique<Planner>(params, htn);
@@ -95,6 +94,7 @@ void run(Parameters& params) {
 
     Statistics::getInstance().endTiming(TimingStage::TOTAL);
     Statistics::getInstance().printStats();
+    planner->writeFormulaFile();
 
     if (result == 0 && !params.isNonzero("cleanup")) {
         // Exit directly -- avoid to clean up :)

@@ -5,6 +5,8 @@
 #include <vector>
 #include <cstddef>
 
+class VariableAllocator;
+
 class BinaryAtMostOne {
 
 private:
@@ -14,7 +16,7 @@ private:
     std::vector<int> _bin_num_vars;
 
 public:
-    BinaryAtMostOne(const std::vector<int>& states, size_t numStates);
+    BinaryAtMostOne(const std::vector<int>& states, size_t numStates, VariableAllocator& variables);
     std::vector<std::vector<int>> encode();
 
 private:

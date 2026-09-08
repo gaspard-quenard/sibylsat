@@ -70,7 +70,7 @@ bool SeparateTasksScheduler::updateAfterSolved(Encoding &enc, const std::vector<
         int solve_positions = numLeafPositions - _init_task_network_size - 1 + _current_task_index;
         _num_pos_done = solve_positions;
         // Save a snapshot of all SAT variables that are true until solve_positions.
-        NodeHashSet<int> snapshot = enc.getSnapshotsOpsAndPredsTrue(solve_positions);
+        NodeHashSet<int> snapshot = enc.getDecoder().collectTrueVariablesBeforeFrontierIndex(solve_positions);
         _vars_tasks_accomplished.push_back(snapshot);
         _num_pos_done_at_each_step.push_back(_num_pos_done);
         _num_tasks_solved_at_each_step.push_back(_num_tasks_to_solve);
@@ -167,11 +167,8 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
         {
             Position& leaf = *leafPositions[i];
 
-            // To debug, print the current predicate at this position
-            // enc.printStatementsAtPosition(leaf);
-
             // Get the action true in this position
-            const USignature aSig = enc.getDecodingOpHoldingAt(leaf);
+            const USignature aSig = enc.getDecoder().getSelectedDecodedOperation(leaf);
 
             // It is maybe a reduction without subtasks, in that case, we skip it
             if (_htn.isReduction(aSig))

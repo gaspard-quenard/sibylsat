@@ -3,7 +3,7 @@
 #include "util/log.h"
 #include "util/params.h"
 
-#include "sat/variable_domain.h"
+#include "sat/variable_allocator.h"
 #include "sat/binary_amo.h"
 #include "sat/ipasir.h"
 
@@ -16,6 +16,7 @@ int main(int argc, char** argv) {
 
     int verbosity = params.getIntParam("v");
     Log::init(verbosity, /*coloredOutput=*/params.isNonzero("co"));
+    VariableAllocator variables(params);
 
     void* solver = ipasir_init();
 
@@ -25,8 +26,8 @@ int main(int argc, char** argv) {
             Log::d("n=%i, %i states\n", n, states);
 
             std::vector<int> vars;
-            for (int i = 1; i <= n; i++) vars.push_back(VariableDomain::nextVar());
-            for (auto c : BinaryAtMostOne(vars, states).encode()) {
+            for (int i = 1; i <= n; i++) vars.push_back(variables.allocateVariable());
+            for (auto c : BinaryAtMostOne(vars, states, variables).encode()) {
                 for (int lit : c) ipasir_add(solver, lit);
                 ipasir_add(solver, 0);
             }

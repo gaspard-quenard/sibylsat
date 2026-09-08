@@ -1,7 +1,6 @@
 
 #include "position.h"
 
-#include "sat/variable_domain.h"
 #include "util/log.h"
 
 void OutgoingEffects::reset(size_t numFacts) {
@@ -140,19 +139,6 @@ void Position::addQFact(const USignature& qfact) {
 }
 
 
-void Position::setHasPrimitiveOps(bool has) {
-    _has_primitive_ops = has;
-}
-void Position::setHasNonprimitiveOps(bool has) {
-    _has_nonprimitive_ops = has;
-}
-bool Position::hasPrimitiveOps() {
-    return _has_primitive_ops;
-}
-bool Position::hasNonprimitiveOps() {
-    return _has_nonprimitive_ops;
-}
-
 void Position::addQConstantTypeConstraint(const USignature& op, const TypeConstraint& c) {
     auto& vec = _q_constants_type_constraints[op];
     vec.push_back(c);
@@ -254,7 +240,9 @@ USigSet& Position::getActions() {return _actions;}
 const USigSet& Position::getActions() const {return _actions;}
 const USigSet& Position::getReductions() const {return _reductions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getExpansions() {return _expansions;}
+const NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getExpansions() const {return _expansions;}
 NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getPredecessors() {return _predecessors;}
+const NodeHashMap<USignature, USigSet, USignatureHasher>& Position::getPredecessors() const {return _predecessors;}
 const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& Position::getExpansionSubstitutions() const {return _expansion_substitutions;}
 
 void Position::clearFullPos() {

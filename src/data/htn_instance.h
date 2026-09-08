@@ -181,7 +181,7 @@ public:
     const FlatHashSet<int>& getSortsOfQConstant(int qconst);
     size_t getOriginPositionIdOfQConstant(int qconst) const;
     const FlatHashSet<int>& getDomainOfQConstant(int qconst) const;
-    std::vector<int> popOperationDependentDomainOfQConstant(int qconst, const USignature& op);
+    std::optional<std::vector<int>> takeQConstantDomainForOperation(int qconst, const USignature& op);
 
     /**
      * Returns one sort per condition argument, derived from the corresponding
@@ -209,7 +209,12 @@ public:
     USignature getNormalizedLifted(const USignature& opSig, std::vector<int>& placeholderArgs);
     
     USignature cutNonoriginalTaskArguments(const USignature& sig);
-    const std::pair<int, int>& getReductionAndActionFromPrimitivization(int primitivizationName);
+    /** Return whether an action is the compiled replacement of a single-subtask reduction. */
+    bool isPrimitivizedAction(int actionNameId) const;
+    /** Return the original reduction and child action represented by a primitivized action. */
+    const std::pair<int, int>& getReductionAndActionFromPrimitivization(int primitivizationName) const;
+    /** Return whether an action is the removable second half of a parser-split action. */
+    bool isSecondSplitAction(int actionNameId) const;
 
     int nameId(const std::string& name);
     std::string toString(int id) const;

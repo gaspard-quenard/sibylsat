@@ -103,11 +103,7 @@ int Planner::findPlan() {
 void Planner::initializeSearchTree() {
     // Create the initial search tree with only the root and the goal node as leaves.
     _tree_expander.createInitialLeaves();
-
-    // Encode the root method
-    _encoding.encode(*_leaf_positions[0]);
-    // Encode the goal node
-    _encoding.encode(*_leaf_positions[1]);
+    _encoding.encodeAllLeaves();
 }
 
 void Planner::expandAndEncode(SearchMode mode) {
@@ -159,7 +155,7 @@ int Planner::outputSolution() {
     }
 
     // Extract the plan from the SAT solver and output it.
-    Plan plan = _encoding.extractPlan();
+    Plan plan = _encoding.getDecoder().extractPlan();
     _plan_writer.outputPlan(plan);
     printTreeStatistics();
     return 0;
@@ -177,7 +173,8 @@ bool Planner::findGloballyOptimalSolutionInSearchTree() {
     }
 
     const int bestAbstractObjectiveValue = _encoding.getObjectiveValue();
-    collectLeavesToDevelopFromAbstractPlan(_encoding.extractAbstractPlan());
+    collectLeavesToDevelopFromAbstractPlan(
+            _encoding.getDecoder().extractFrontierPlan(Decoder::FrontierPlanMode::AllSelectedOperations));
     if (_sibylsat_nodes_to_develop.empty()) {
         Log::i("The plan is primitive\n");
         return true;
@@ -265,7 +262,8 @@ bool Planner::findAbstractPlanInSearchTree() {
     Log::i("Found an abstract plan\n");
     const int leafLimit =
             _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
-    collectLeavesToDevelopFromAbstractPlan(_encoding.extractAbstractPlan(), leafLimit);
+    collectLeavesToDevelopFromAbstractPlan(
+            _encoding.getDecoder().extractFrontierPlan(Decoder::FrontierPlanMode::AllSelectedOperations), leafLimit);
     Log::i("Number of leaves to develop: %zu\n", _sibylsat_nodes_to_develop.size());
     return true;
 }

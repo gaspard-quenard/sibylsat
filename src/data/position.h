@@ -8,7 +8,6 @@
 #include "util/hashmap.h"
 #include "data/signature.h"
 #include "util/names.h"
-#include "sat/variable_domain.h"
 #include "util/log.h"
 #include "sat/literal_tree.h"
 #include "data/substitution_constraint.h"
@@ -69,15 +68,10 @@ private:
 
     Position* _parent_position = nullptr;
     std::vector<Position*> _children_positions;
-    Position* _left_position = nullptr;  // Cached left neighbour from the relevant frontier.
 
     // Ordering of this leaf within the current frontier. Unlike _position_id,
     // this is reassigned after every expansion.
     size_t _frontier_index = -1;
-
-    // Carried leaves are false. The encoding uses this to choose between full
-    // and incremental encoding.
-    bool _created_in_last_expansion = false;
 
     // Running counter for globally unique position ids.
     static size_t _next_position_id;
@@ -107,9 +101,6 @@ private:
     NodeHashMap<USignature, int, USignatureHasher> _op_variables;
     NodeHashMap<USignature, int, USignatureHasher> _fact_variables;
 
-    bool _has_primitive_ops = false;
-    bool _has_nonprimitive_ops = false;
-
     // Indicate which mutex groups this position has fully encoded (i.e. already done an at most one for all elements in the group)
     FlatHashSet<int> _group_mutex_encoded;
 
@@ -119,15 +110,8 @@ public:
     Position(size_t creationIteration, Position* parentPosition);
     Position* getParentPosition() const { return _parent_position; }
     const std::vector<Position*>& getChildrenPositions() const { return _children_positions; }
-    void setLeftPosition(Position* left) { _left_position = left; }
-    Position* getLeftPosition() const { return _left_position; }
 
     void addQFact(const USignature& qfact);
-
-    void setHasPrimitiveOps(bool has);
-    void setHasNonprimitiveOps(bool has);
-    bool hasPrimitiveOps();
-    bool hasNonprimitiveOps();
 
     void addQConstantTypeConstraint(const USignature& op, const TypeConstraint& c);
     void addSubstitutionConstraint(const USignature& op, SubstitutionConstraint&& constr);
@@ -168,15 +152,15 @@ public:
     const USigSet& getActions() const;
     const USigSet& getReductions() const;
     NodeHashMap<USignature, USigSet, USignatureHasher>& getExpansions();
+    const NodeHashMap<USignature, USigSet, USignatureHasher>& getExpansions() const;
     NodeHashMap<USignature, USigSet, USignatureHasher>& getPredecessors();
+    const NodeHashMap<USignature, USigSet, USignatureHasher>& getPredecessors() const;
     const NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>& getExpansionSubstitutions() const;
 
     size_t getCreationIteration() const;
     size_t getPositionId() const;
     size_t getFrontierIndex() const { return _frontier_index; }
     void setFrontierIndex(size_t idx) { _frontier_index = idx; }
-    bool wasCreatedInLastExpansion() const { return _created_in_last_expansion; }
-    void setCreatedInLastExpansion(bool created) { _created_in_last_expansion = created; }
     size_t getOffset() const;
     void clearSubstitutions() {
         _substitution_constraints.clear();
@@ -184,19 +168,6 @@ public:
     }
     void clearDecodings();
     void clearFullPos();
-
-    inline int encode(VarType type, const USignature& sig) {
-        auto& vars = type == OP ? _op_variables : _fact_variables;
-        auto it = vars.find(sig);
-        if (it == vars.end()) {
-            // introduce a new variable
-            assert(!VariableDomain::isLocked() || Log::e("Unknown variable %s queried!\n", VariableDomain::varName(_creation_iteration, _position_id, sig).c_str()));
-            int var = VariableDomain::nextVar();
-            vars[sig] = var;
-            VariableDomain::printVar(var, _creation_iteration, _position_id, sig);
-            return var;
-        } else return it->second;
-    }
 
     inline int setVariable(VarType type, const USignature& sig, int var) {
         auto& vars = type == OP ? _op_variables : _fact_variables;
@@ -215,7 +186,8 @@ public:
 
     inline int getVariable(VarType type, const USignature& sig) const {
         auto& vars = type == OP ? _op_variables : _fact_variables;
-        assert(vars.count(sig) || Log::e("Unknown variable %s queried!\n", VariableDomain::varName(_creation_iteration, _position_id, sig).c_str()));
+        assert(vars.count(sig) || Log::e("Unknown variable %s@(%zu,%zu) queried!\n",
+                TOSTR(sig), _creation_iteration, _position_id));
         return vars.at(sig);
     }
 

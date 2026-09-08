@@ -57,8 +57,8 @@ endif()
 set(BASE_SOURCES
     src/algo/arg_iterator.cpp src/algo/domination_resolver.cpp src/algo/fact_analysis.cpp src/algo/method_effect_analysis.cpp src/algo/network_traversal.cpp src/algo/planner.cpp src/algo/tree_expander.cpp src/algo/plan_writer.cpp src/algo/retroactive_pruning.cpp src/algo/separate_tasks_scheduler.cpp
     src/data/action.cpp src/data/htn_instance.cpp src/data/htn_op.cpp src/data/position.cpp src/data/reduction.cpp src/data/signature.cpp src/data/substitution.cpp src/data/sas_plus.cpp src/data/tdg.cpp
-    src/sat/binary_amo.cpp src/sat/encoding.cpp src/sat/literal_tree.cpp src/sat/plan_optimizer.cpp src/sat/variable_domain.cpp
-    src/util/log.cpp src/util/names.cpp src/util/params.cpp src/util/random.cpp src/util/signal_manager.cpp src/util/timer.cpp src/util/project_utils.cpp
+    src/sat/binary_amo.cpp src/sat/decoder.cpp src/sat/encoding.cpp src/sat/plan_optimizer.cpp src/sat/sat_interface.cpp src/sat/variable_allocator.cpp src/sat/variable_provider.cpp
+    src/util/log.cpp src/util/names.cpp src/util/params.cpp src/util/process_utils.cpp src/util/project_utils.cpp src/util/random.cpp src/util/signal_manager.cpp src/util/timer.cpp
 )
 
 
@@ -129,3 +129,7 @@ target_include_directories(test_arg_iterator PRIVATE ${BASE_INCLUDES})
 target_compile_options(test_arg_iterator PRIVATE ${BASE_COMPILEFLAGS})
 target_link_libraries(test_arg_iterator ${BASE_LIBS} lotane)
 add_test(NAME test_arg_iterator COMMAND test_arg_iterator)
+
+add_executable(test_literal_tree src/test/test_literal_tree.cpp)
+target_include_directories(test_literal_tree PRIVATE ${BASE_INCLUDES})
+add_test(NAME test_literal_tree COMMAND test_literal_tree)

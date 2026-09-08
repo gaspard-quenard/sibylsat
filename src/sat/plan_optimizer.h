@@ -16,12 +16,13 @@ private:
     std::vector<Position*>& _leaf_positions;
     Encoding& _enc;
     SatInterface& _sat;
+    VariableAllocator& _variables;
     Statistics& _stats;
 
 public:
     PlanOptimizer(HtnInstance& htn, std::vector<Position*>& leafPositions, Encoding& enc) : 
             _htn(htn), _leaf_positions(leafPositions), _enc(enc), 
-            _sat(_enc.getSatInterface()), _stats(Statistics::getInstance()) {}
+            _sat(_enc.getSatInterface()), _variables(_enc.getVariableAllocator()), _stats(Statistics::getInstance()) {}
 
     enum ConstraintAddition { TRANSIENT, PERMANENT };
 

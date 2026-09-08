@@ -13,8 +13,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
     _stats.begin(STAGE_PLANLENGTHCOUNTING);
     int minPlanLength = 0;
     int maxPlanLength = 0;
-    std::vector<int> planLengthVars(1, VariableDomain::nextVar());
-    Log::d("VARNAME %i (plan_length_equals %i %i)\n", planLengthVars[0], 0, 0);
+    std::vector<int> planLengthVars(1, _variables.allocateVariable("(plan_length_equals 0 0)"));
     // At position zero, the plan length is always equal to zero
     _sat.addClause(planLengthVars[0]);
     for (size_t pos = 0; pos + 1 < _leaf_positions.size(); pos++) {
@@ -65,7 +64,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
             bool encodeActualsOnly = emptyActions.size() > actualActions.size();
             if (!encodeDirectly) {
                 // Encode with a helper variable
-                emptySpotVar = VariableDomain::nextVar();
+                emptySpotVar = _variables.allocateVariable("(__empty_plan_position " + std::to_string(pos) + ")");
 
                 // Define for each action var whether it implies an empty spot or not
                 for (int v : emptyActions) {
@@ -81,7 +80,8 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
             // create new variables and constraints.
             std::vector<int> newPlanLengthVars(planLengthVars.size()+(increaseUpperBound?1:0));
             for (size_t i = 0; i < newPlanLengthVars.size(); i++) {
-                newPlanLengthVars[i] = VariableDomain::nextVar();
+                newPlanLengthVars[i] = _variables.allocateVariable(
+                        "(plan_length_equals " + std::to_string(pos + 1) + " " + std::to_string(i) + ")");
             }
 
             // Propagate plan length from previous position to new position
@@ -168,7 +168,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
         // Bound update on SAT 
         [&]() {
             // SAT: Shorter plan found!
-            plan = _enc.extractPlan();
+            plan = _enc.getDecoder().extractPlan();
             int newPlanLength = getPlanLength(std::get<0>(plan));
             Log::i("Shorter plan (length %i) found\n", newPlanLength);
             assert(newPlanLength < curr);
