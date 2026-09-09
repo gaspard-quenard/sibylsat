@@ -11,6 +11,7 @@
 #include "preprocessing/macro_action_compiler.h"
 
 class Parameters;
+class Statistics;
 
 /** Owns the model and analysis data that remain valid throughout planning. */
 struct PlanningContext {
@@ -37,6 +38,6 @@ struct PlanningContext {
 };
 
 /** Parse, transform, build, and analyze a problem before search begins. */
-PlanningContext preprocessProblem(Parameters& params);
+PlanningContext preprocessProblem(Parameters& params, Statistics& statistics);
 
 #endif

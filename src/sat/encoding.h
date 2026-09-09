@@ -4,6 +4,7 @@
 #include <set>
 
 #include "util/params.h"
+#include "util/statistics.h"
 #include "data/position.h"
 #include "data/signature.h"
 #include "data/htn_instance.h"
@@ -39,9 +40,9 @@ private:
     const bool _optimal;
 
 public:
-    Encoding(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, Position*& rootPosition, std::vector<Position*>& leafPositions) :
-            _params(params), _htn(htn), _q_constants(qConstants), _analysis(analysis), _mutex_groups(mutexGroups), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(Statistics::getInstance()),
-            _variable_allocator(params), _sat(params), _vars(_htn, _q_constants, _variable_allocator),
+    Encoding(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, Position*& rootPosition, std::vector<Position*>& leafPositions, Statistics& statistics) :
+            _params(params), _htn(htn), _q_constants(qConstants), _analysis(analysis), _mutex_groups(mutexGroups), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(statistics),
+            _variable_allocator(params), _sat(params, statistics), _vars(_htn, _q_constants, _variable_allocator),
             _decoder(_htn, _q_constants, _root_position, _leaf_positions, _sat, _vars),
             _use_sibylsat_expansion(params.isNonzero("sibylsat")),
             _optimal(params.isNonzero("optimal")) {}

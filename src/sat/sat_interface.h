@@ -32,7 +32,7 @@ private:
     void writeFormulaHeader(int maxVariable, std::size_t numClauses);
 
 public:
-    explicit SatInterface(Parameters& params);
+    SatInterface(Parameters& params, Statistics& statistics);
     ~SatInterface();
 
     // Each instance exclusively owns its solver handle; copying or moving it

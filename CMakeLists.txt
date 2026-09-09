@@ -60,7 +60,7 @@ set(BASE_SOURCES
     src/preprocessing/panda_ground_problem_loader.cpp src/preprocessing/lifted_problem_normalizer.cpp src/parser/panda_parser.cpp src/parser/panda_lifted_problem_reader.cpp
     src/preprocessing/macro_action_compiler.cpp src/preprocessing/mutex_loader.cpp src/preprocessing/problem_preprocessor.cpp
     src/sat/binary_amo.cpp src/sat/decoder.cpp src/sat/encoding.cpp src/sat/plan_optimizer.cpp src/sat/sat_interface.cpp src/sat/variable_allocator.cpp src/sat/variable_provider.cpp
-    src/util/log.cpp src/util/names.cpp src/util/params.cpp src/util/process_utils.cpp src/util/project_utils.cpp src/util/random.cpp src/util/signal_manager.cpp src/util/timer.cpp
+    src/util/log.cpp src/util/names.cpp src/util/params.cpp src/util/process_utils.cpp src/util/project_utils.cpp src/util/random.cpp src/util/signal_manager.cpp src/util/statistics.cpp src/util/timer.cpp
 )
 
 

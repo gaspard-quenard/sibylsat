@@ -46,6 +46,7 @@ private:
     Position*& _root_position;
     std::vector<Position*>& _leaf_positions;
     FactAnalysis& _analysis;
+    Statistics& _statistics;
     Encoding _encoding;
     std::unique_ptr<RetroactivePruning> _pruning;
     PlanWriter _plan_writer;
@@ -64,7 +65,7 @@ private:
     float _optimization_factor;
 
 public:
-    Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions);
+    Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions, Statistics& statistics);
     int findPlan();
     void optimizeCurrentPlan();
     void writeFormulaFile() { _encoding.writeFormulaFile(); }

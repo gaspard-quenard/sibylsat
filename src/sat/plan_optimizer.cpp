@@ -10,7 +10,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
     Log::v("PLO BEGIN %i\n", currentPlanLength);
 
     // Add counting mechanism
-    _stats.begin(STAGE_PLANLENGTHCOUNTING);
+    _stats.begin(EncodingStage::PLAN_LENGTH_COUNTING);
     int minPlanLength = 0;
     int maxPlanLength = 0;
     std::vector<int> planLengthVars(1, _variables.allocateVariable("(plan_length_equals 0 0)"));
@@ -157,7 +157,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
     // Add primitiveness of all positions at the final layer
     // as unit literals (instead of assumptions)
     _enc.addAssumptionsPrimPlan(/*permanent=*/mode == ConstraintAddition::PERMANENT);
-    _stats.end(STAGE_PLANLENGTHCOUNTING);
+    _stats.end(EncodingStage::PLAN_LENGTH_COUNTING);
 
     int curr = currentPlanLength;
     currentPlanLength = findMinBySat(minPlanLength, std::min(maxPlanLength, currentPlanLength), 
@@ -202,7 +202,7 @@ int PlanOptimizer::findMinBySat(int lower, int upper, std::function<int(int)> va
         }
 
         // Assume a shorter plan by one
-        _stats.begin(STAGE_PLANLENGTHCOUNTING);
+        _stats.begin(EncodingStage::PLAN_LENGTH_COUNTING);
 
         // Permanently forbid any plan lengths greater than / equal to the last found plan
         if (mode == TRANSIENT) {
@@ -223,7 +223,7 @@ int PlanOptimizer::findMinBySat(int lower, int upper, std::function<int(int)> va
         if (mode == TRANSIENT) _sat.assume(-probedVar);
         else _sat.addClause(-probedVar);
 
-        _stats.end(STAGE_PLANLENGTHCOUNTING);
+        _stats.end(EncodingStage::PLAN_LENGTH_COUNTING);
 
         Log::i("Searching for a plan of length < %i\n", upper);
         int result = _enc.solve();
@@ -245,11 +245,11 @@ int PlanOptimizer::findMinBySat(int lower, int upper, std::function<int(int)> va
     }
 
     if (mode == TRANSIENT) {
-        _stats.begin(STAGE_PLANLENGTHCOUNTING);
+        _stats.begin(EncodingStage::PLAN_LENGTH_COUNTING);
         for (int bound = originalUpper; bound > current; bound--) {
             _sat.assume(-varMap(bound));
         }
-        _stats.end(STAGE_PLANLENGTHCOUNTING);
+        _stats.end(EncodingStage::PLAN_LENGTH_COUNTING);
 
         Log::i("Recovering an optimal plan of length <= %i\n", current);
         const int result = _enc.solve();

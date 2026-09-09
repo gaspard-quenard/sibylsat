@@ -8,6 +8,7 @@
 #include "sat/sat_interface.h"
 #include "sat/variable_provider.h"
 #include "sat/encoding.h"
+#include "util/statistics.h"
 
 class PlanOptimizer {
 
@@ -20,9 +21,9 @@ private:
     Statistics& _stats;
 
 public:
-    PlanOptimizer(HtnInstance& htn, std::vector<Position*>& leafPositions, Encoding& enc) : 
+    PlanOptimizer(HtnInstance& htn, std::vector<Position*>& leafPositions, Encoding& enc, Statistics& statistics) :
             _htn(htn), _leaf_positions(leafPositions), _enc(enc), 
-            _sat(_enc.getSatInterface()), _variables(_enc.getVariableAllocator()), _stats(Statistics::getInstance()) {}
+            _sat(_enc.getSatInterface()), _variables(_enc.getVariableAllocator()), _stats(statistics) {}
 
     enum ConstraintAddition { TRANSIENT, PERMANENT };
 

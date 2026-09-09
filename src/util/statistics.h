@@ -1,259 +1,105 @@
-#ifndef STATISTICS_H
-#define STATISTICS_H
+#ifndef SIBYLSAT_STATISTICS_H
+#define SIBYLSAT_STATISTICS_H
 
-#include <vector>
-#include <map>
+#include <array>
 #include <chrono>
-#include <assert.h>
+#include <cstddef>
+#include <cstdint>
+#include <map>
+#include <vector>
 
-// Example of logging; adjust to your own logging utility as needed.
-#include "util/log.h"
+/** Encoding phases to which generated clauses are attributed. */
+enum class EncodingStage {
+    ACTION_CONSTRAINTS,
+    ACTION_EFFECTS,
+    AT_LEAST_ONE_ELEMENT,
+    AT_MOST_ONE_ELEMENT,
+    DIRECT_FRAME_AXIOMS,
+    EXPANSIONS,
+    FACT_VARIABLE_ENCODING,
+    FORBIDDEN_OPERATIONS,
+    INDIRECT_FRAME_AXIOMS,
+    PREDECESSORS,
+    Q_CONSTANT_EQUALITY,
+    Q_FACT_SEMANTICS,
+    Q_TYPE_CONSTRAINTS,
+    REDUCTION_CONSTRAINTS,
+    SUBSTITUTION_CONSTRAINTS,
+    ASSUMPTIONS,
+    PLAN_LENGTH_COUNTING,
+    MUTEXES,
+    COUNT
+};
 
-// Stage constants
-const int STAGE_ACTIONCONSTRAINTS    = 0;
-const int STAGE_ACTIONEFFECTS        = 1;
-const int STAGE_ATLEASTONEELEMENT    = 2;
-const int STAGE_ATMOSTONEELEMENT     = 3;
-const int STAGE_DIRECTFRAMEAXIOMS    = 4;
-const int STAGE_EXPANSIONS           = 5;
-const int STAGE_FACTPROPAGATION      = 6;
-const int STAGE_FACTVARENCODING      = 7;
-const int STAGE_FORBIDDENOPERATIONS  = 8;
-const int STAGE_INDIRECTFRAMEAXIOMS  = 9;
-const int STAGE_INITSUBSTITUTIONS    = 10;
-const int STAGE_PREDECESSORS         = 11;
-const int STAGE_QCONSTEQUALITY       = 12;
-const int STAGE_QFACTSEMANTICS       = 13;
-const int STAGE_QTYPECONSTRAINTS     = 14;
-const int STAGE_REDUCTIONCONSTRAINTS = 15;
-const int STAGE_SUBSTITUTIONCONSTRAINTS = 16;
-const int STAGE_TRUEFACTS            = 17;
-const int STAGE_ASSUMPTIONS          = 18;
-const int STAGE_PLANLENGTHCOUNTING   = 19;
-const int STAGE_MUTEX                = 20;
-
+/** Independently accumulated wall-clock measurements. */
 enum class TimingStage {
-    INIT_GROUNDING,
-    INIT_MUTEXES,
-    PLANNER,
+    GROUNDING,
+    MUTEX_COMPUTATION,
     EXPANSION,
     ENCODING,
     SOLVER,
-    ENCODING_MUTEXES,
-    TOTAL,
-    EXPANSION_LEFT_SIMPLFIED,
-    EXPANSION_LEFT,
-    EXPANSION_ABOVE,
-    EXPANSION_INITIALIZED_NEXT_EFFECTS,
-    TEST_1,
-    TEST_2,
-    TEST_3,
-    TEST_4,
-    TEST_5,
-    TEST_6,
-    COMPUTE_PFC,
-    CLEAN_PFC,
-    GET_ALL_PREDS,
-    EXPANSION_LEFT_GROUND,
-    EXPANSION_LEFT_PSEUDO,
-    CLEANING_MEMORY,
+    TOTAL
 };
 
-class Statistics
-{
+/** Collects statistics for one invocation of the planner. */
+class Statistics {
 public:
-    /**
-     * Return the singleton instance of Statistics.
-     * Ensures only one instance exists in the entire program.
-     */
-    static Statistics& getInstance() {
-        static Statistics instance;  // Constructed only once
-        return instance;
-    }
+    using Count = std::uint64_t;
+    using Duration = std::chrono::nanoseconds;
 
-    // Deleted copy/assignment to enforce singleton property
+    Statistics() = default;
     Statistics(const Statistics&) = delete;
     Statistics& operator=(const Statistics&) = delete;
+    Statistics(Statistics&&) = delete;
+    Statistics& operator=(Statistics&&) = delete;
 
+    void beginPosition();
+    void endPosition();
 
-    void beginPosition() {
-        _prev_num_cls  = _num_cls;
-        _prev_num_lits = _num_lits;
-    }
+    /** Attribute subsequently generated clauses to this phase until end(). */
+    void begin(EncodingStage stage);
+    void end(EncodingStage stage);
 
-    void endPosition() {
-        assert(_current_stages.empty());
-        Log::v("  Encoded %i cls, %i lits\n", 
-               _num_cls - _prev_num_cls, 
-               _num_lits - _prev_num_lits);
-    }
+    void beginTiming(TimingStage stage);
+    void endTiming(TimingStage stage);
+    Duration getTiming(TimingStage stage) const;
 
-    void begin(int stage) {
-        if (!_current_stages.empty()) {
-            int oldStage = _current_stages.back();
-            _num_cls_per_stage[oldStage] += _num_cls - _num_cls_at_stage_start;
-        }
-        _num_cls_at_stage_start = _num_cls;
-        _current_stages.push_back(stage);
-    }
+    void recordLiteral() { ++_num_literals; }
+    void recordClause() { ++_num_clauses; }
+    void recordAssumption() { ++_num_assumptions; }
+    void clearAssumptionCount() { _num_assumptions = 0; }
 
-    void end(int stage) {
-        assert(!_current_stages.empty() && _current_stages.back() == stage);
-        _current_stages.pop_back();
-        _num_cls_per_stage[stage] += _num_cls - _num_cls_at_stage_start;
-        _num_cls_at_stage_start = _num_cls;
-    }
+    Count getNumClauses() const { return _num_clauses; }
+    Count getNumLiterals() const { return _num_literals; }
+    Count getNumAssumptions() const { return _num_assumptions; }
 
-    // Print a summary of stages and timing
-    void printStats() {
-        Log::i("Total amount of clauses encoded: %i\n", _num_cls);
+    void print() const;
 
-        // Sort stages in descending order of their clause counts
-        std::map<int, int, std::greater<int>> stagesSorted;
-        for (size_t stage = 0; stage < _num_cls_per_stage.size(); stage++) {
-            if (_num_cls_per_stage[stage] > 0)
-                stagesSorted[_num_cls_per_stage[stage]] = static_cast<int>(stage);
-        }
-
-        // Print each stage
-        for (const auto& [num, stage] : stagesSorted) {
-            Log::i("- %s : %i cls\n", STAGES_NAMES[stage], num);
-        }
-        _num_cls_per_stage.clear();
-
-        // Print timing statistics
-        if (!_stage_times_ms.empty()) {
-            for (const auto& [stage, time] : _stage_times_ms) {
-                Log::i("* %s : %lli ms\n", toString(stage), time / 1000000);
-            }
-        }
-
-        // Warn if some timing stages were not closed
-        if (!_active_timings.empty()) {
-            Log::w("\nWarning: Some timing stages were not properly closed:\n");
-            for (const auto& [stage, _] : _active_timings) {
-                Log::w("* %s\n", toString(stage));
-            }
-        }
-    }
-
-
-    void beginTiming(TimingStage stage) {
-        if (_active_timings.count(stage) > 0) {
-            Log::w("Warning: Attempted to start timing for stage %s which is already running\n", 
-                toString(stage));
-            return;
-        }
-        _active_timings[stage] = std::chrono::high_resolution_clock::now();
-    }
-
-
-    void endTiming(TimingStage stage) {
-        auto it = _active_timings.find(stage);
-        if (it == _active_timings.end()) {
-            Log::w("Warning: Attempted to end timing for stage %s which was not started\n", 
-                toString(stage));
-            return;
-        }
-
-        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::high_resolution_clock::now() - it->second).count();
-        _stage_times_ms[stage] += duration;
-        _active_timings.erase(it);
-    }
-
-    long long getTiming(TimingStage stage) {
-        return _stage_times_ms[stage];
-    }
-
-    // Utility to convert a TimingStage enum to string
-    static const char* toString(TimingStage stage) {
-        switch (stage) {
-            case TimingStage::EXPANSION:        return "time expansion";
-            case TimingStage::ENCODING:         return "time encoding";
-            case TimingStage::SOLVER:           return "time solver";
-            case TimingStage::INIT_GROUNDING:   return "time grounding";
-            case TimingStage::INIT_MUTEXES:     return "time compute mutexes";
-            case TimingStage::PLANNER:          return "time planner";
-            case TimingStage::ENCODING_MUTEXES: return "time encoding mutexes";
-            case TimingStage::TOTAL:            return "time total";
-            case TimingStage::EXPANSION_LEFT_SIMPLFIED: return "time expansion left simplified";
-            case TimingStage::EXPANSION_LEFT:   return "time expansion left";
-            case TimingStage::EXPANSION_ABOVE:  return "time expansion above";
-            case TimingStage::EXPANSION_INITIALIZED_NEXT_EFFECTS: return "time expansion initialized next effects";
-            case TimingStage::TEST_1:           return "time test 1";
-            case TimingStage::TEST_2:           return "time test 2";
-            case TimingStage::TEST_3:           return "time test 3";
-            case TimingStage::TEST_4:           return "time test 4";
-            case TimingStage::TEST_5:           return "time test 5";
-            case TimingStage::TEST_6:           return "time test 6";
-            case TimingStage::COMPUTE_PFC:      return "time compute pfc";
-            case TimingStage::CLEAN_PFC:        return "time clean pfc";
-            case TimingStage::GET_ALL_PREDS:        return "time get all preds";
-            case TimingStage::EXPANSION_LEFT_GROUND: return "time expansion left ground";
-            case TimingStage::EXPANSION_LEFT_PSEUDO: return "time expansion left pseudo";
-            case TimingStage::CLEANING_MEMORY:  return "time cleaning memory";
-            default:                            return "UNKNOWN_TIMING_STAGE";
-
-        }
-    }
-
-    // Function to reset all statistics
-    void reset() {
-        _num_cls = 0;
-        _num_lits = 0;
-        _num_asmpts = 0;
-        _num_cls_per_stage.clear();
-        _current_stages.clear();
-        _prev_num_cls = 0;
-        _prev_num_lits = 0;
-        _num_cls_at_stage_start = 0;
-        _active_timings.clear();
-        _stage_times_ms.clear();
-    }
-
-    // Public data members (if needed externally)
-    int _num_cls  = 0;
-    int _num_lits = 0;
-    int _num_asmpts = 0;
+    /**
+     * Discard measurements from an abandoned search while retaining
+     * preprocessing measurements and the running whole-invocation timer.
+     */
+    void resetSearchStatistics();
 
 private:
-    // Private constructor for singleton
-    Statistics() {
-        _num_cls_per_stage.resize(sizeof(STAGES_NAMES)/sizeof(*STAGES_NAMES));
-    }
+    using Clock = std::chrono::steady_clock;
+    static constexpr std::size_t NUM_ENCODING_STAGES = static_cast<std::size_t>(EncodingStage::COUNT);
 
-    // Destructor prints the final stats automatically
-    ~Statistics() {
-        
-    }
+    static std::size_t stageIndex(EncodingStage stage);
+    static const char* stageName(EncodingStage stage);
+    static const char* timingName(TimingStage stage);
 
-private:
-    // Stage names
-    const char* STAGES_NAMES[21] = {
-        "actionconstraints", "actioneffects", "atleastoneelement", "atmostoneelement",
-        "directframeaxioms", "expansions", "factpropagation",
-        "factvarencoding", "forbiddenoperations", "indirectframeaxioms", "initsubstitutions",
-        "predecessors", "qconstequality", "qfactsemantics", "qtypeconstraints",
-        "reductionconstraints", "substitutionconstraints", "truefacts", "assumptions",
-        "planlengthcounting", "mutexes"
-    };
+    Count _num_clauses = 0;
+    Count _num_literals = 0;
+    Count _num_assumptions = 0;
+    Count _previous_num_clauses = 0;
+    Count _previous_num_literals = 0;
+    Count _num_clauses_at_stage_start = 0;
 
-    // Tracks the total clauses added per stage
-    std::vector<int> _num_cls_per_stage;
-
-    // Stack of current active stages
-    std::vector<int> _current_stages;
-
-    // Clause counters
-    int _prev_num_cls  = 0;
-    int _prev_num_lits = 0;
-    int _num_cls_at_stage_start = 0;
-
-    // Timing-related members
-    std::map<TimingStage, std::chrono::time_point<std::chrono::high_resolution_clock>> _active_timings;
-    std::map<TimingStage, long long> _stage_times_ms;
-
+    std::array<Count, NUM_ENCODING_STAGES> _num_clauses_per_stage{};
+    std::vector<EncodingStage> _current_stages;
+    std::map<TimingStage, Clock::time_point> _active_timings;
+    std::map<TimingStage, Duration> _elapsed_times;
 };
 
-#endif // STATISTICS_H
+#endif

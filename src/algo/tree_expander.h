@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "util/params.h"
+#include "util/statistics.h"
 #include "data/position.h"
 #include "data/htn_instance.h"
 #include "algo/fact_analysis.h"
@@ -43,7 +44,7 @@ private:
     size_t _num_instantiated_reductions = 0;
 
 public:
-    TreeExpander(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis);
+    TreeExpander(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, Statistics& statistics);
 
     void attachPruning(RetroactivePruning& pruning) { _pruning = &pruning; }
     void attachTDG(TDG& tdg) { _tdg = &tdg; }

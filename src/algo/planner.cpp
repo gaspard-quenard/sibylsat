@@ -7,14 +7,15 @@
 #include "sat/plan_optimizer.h"
 #include "preprocessing/macro_action_compiler.h"
 
-Planner::Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions)
+Planner::Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions, Statistics& statistics)
         : _params(params),
           _htn_instance(htn),
-          _tree_expander(_params, _htn_instance, qConstants, analysis),
+          _tree_expander(_params, _htn_instance, qConstants, analysis, statistics),
           _root_position(_tree_expander.getRootPositionRef()),
           _leaf_positions(_tree_expander.getLeafPositions()),
           _analysis(analysis),
-          _encoding(_params, _htn_instance, qConstants, _analysis, mutexGroups, _root_position, _leaf_positions),
+          _statistics(statistics),
+          _encoding(_params, _htn_instance, qConstants, _analysis, mutexGroups, _root_position, _leaf_positions, statistics),
           _pruning(std::make_unique<RetroactivePruning>(_encoding)),
           _plan_writer(_htn_instance, macroActions, _params.getDomainFilename(), _params.getProblemFilename(), _params.isNonzero("vp"), _params.isNonzero("wp")),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
@@ -280,7 +281,7 @@ void Planner::collectLeavesToDevelopFromAbstractPlan(const std::vector<PlanItem>
 }
 
 void Planner::optimizeCurrentPlan() {
-    PlanOptimizer optimizer(_htn_instance, _leaf_positions, _encoding);
+    PlanOptimizer optimizer(_htn_instance, _leaf_positions, _encoding, _statistics);
     Plan optimizedPlan;
     const int upperBound = _leaf_positions.empty() ? 0 : static_cast<int>(_leaf_positions.size()) - 1;
     Log::i("Optimize the current frontier with plan length upper bound %d\n", upperBound);

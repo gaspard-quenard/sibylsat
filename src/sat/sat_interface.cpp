@@ -23,8 +23,8 @@ constexpr const char* WCNF_OUTPUT_PATH = "f.wcnf";
 constexpr std::size_t FORMULA_HEADER_WIDTH = 80;
 }
 
-SatInterface::SatInterface(Parameters& params)
-        : _stats(Statistics::getInstance()),
+SatInterface::SatInterface(Parameters& params, Statistics& statistics)
+        : _stats(statistics),
           _write_formula(params.isNonzero("wf")),
           _write_wcnf(params.isNonzero("optimal")) {
     #ifdef USE_IPAMIR
@@ -114,7 +114,7 @@ void SatInterface::appendClause(int literal) {
 
     addHardLiteralToSolver(literal);
     if (_write_formula) _formula_stream << literal << " ";
-    _stats._num_lits++;
+    _stats.recordLiteral();
 }
 
 void SatInterface::appendClause(int firstLiteral, int secondLiteral) {
@@ -134,7 +134,7 @@ void SatInterface::endClause() {
     addHardLiteralToSolver(0);
     if (_write_formula) _formula_stream << "0\n";
     _clause_open = false;
-    _stats._num_cls++;
+    _stats.recordClause();
 }
 
 void SatInterface::addSoftLit(int literal, int weight) {
@@ -189,7 +189,7 @@ void SatInterface::assume(int literal) {
     ipasir_assume(_solver, literal);
     #endif
     _pending_assumptions.push_back(literal);
-    _stats._num_asmpts++;
+    _stats.recordAssumption();
 }
 
 bool SatInterface::holds(int literal) const {
@@ -252,7 +252,7 @@ int SatInterface::solve() {
     #endif
 
     _pending_assumptions.clear();
-    _stats._num_asmpts = 0;
+    _stats.clearAssumptionCount();
     _stats.endTiming(TimingStage::SOLVER);
     return result;
 }
@@ -293,7 +293,7 @@ void SatInterface::writeFormulaFile(int maxVariable) {
         }
     }
 
-    const std::size_t numClauses = static_cast<std::size_t>(_stats._num_cls)
+    const std::size_t numClauses = static_cast<std::size_t>(_stats.getNumClauses())
             + assumptions.size() + _soft_literal_weights.size();
     writeFormulaHeader(maxVariable, numClauses);
     _formula_stream.close();

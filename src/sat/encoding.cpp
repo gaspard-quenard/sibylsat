@@ -184,8 +184,6 @@ Encoding::EncodingEnvironment Encoding::buildRelevantFactPropagationEnvironment(
 }
 
 void Encoding::encodeAllLeaves() {
-    Statistics& stats = Statistics::getInstance();
-
     Log::i("Collected %i relevant facts at this expansion iteration\n", _analysis.getRelevantFacts().count());
     Log::i("Encoding ...\n");
 
@@ -197,7 +195,7 @@ void Encoding::encodeAllLeaves() {
         return !wasCreatedInCurrentExpansion(*leaf, currentExpansionIteration);
     });
 
-    stats.beginTiming(TimingStage::ENCODING);
+    _stats.beginTiming(TimingStage::ENCODING);
     Log::i("Frontier size: %zu\n", _leaf_positions.size());
 
     // Reuse parent state variables before encoding any fresh position. This also
@@ -228,7 +226,7 @@ void Encoding::encodeAllLeaves() {
             }
         }
     }
-    stats.endTiming(TimingStage::ENCODING);
+    _stats.endTiming(TimingStage::ENCODING);
 
     // Expanded positions are now internal nodes; retained frontier positions no
     // longer need the temporary decoding data used during this encoding pass.
@@ -296,16 +294,16 @@ void Encoding::encodeOperationVariables(Position& newPos) {
     std::vector<int> nonprimitiveOpVars;
     nonprimitiveOpVars.reserve(newPos.getReductions().size());
 
-    _stats.begin(STAGE_ACTIONCONSTRAINTS);
+    _stats.begin(EncodingStage::ACTION_CONSTRAINTS);
     for (const auto& aSig : newPos.getActions()) {
         int aVar = _vars.getOrCreateVariable(VarType::OP, newPos, aSig);
 
         // If the action occurs, the position is primitive
         primitiveOpVars.push_back(aVar);
     }
-    _stats.end(STAGE_ACTIONCONSTRAINTS);
+    _stats.end(EncodingStage::ACTION_CONSTRAINTS);
 
-    _stats.begin(STAGE_REDUCTIONCONSTRAINTS);
+    _stats.begin(EncodingStage::REDUCTION_CONSTRAINTS);
     for (const auto& rSig : newPos.getReductions()) {
         int rVar = _vars.getOrCreateVariable(VarType::OP, newPos, rSig);
 
@@ -317,7 +315,7 @@ void Encoding::encodeOperationVariables(Position& newPos) {
             nonprimitiveOpVars.push_back(rVar);
         }
     }
-    _stats.end(STAGE_REDUCTIONCONSTRAINTS);
+    _stats.end(EncodingStage::REDUCTION_CONSTRAINTS);
 
     // Only primitive ops here? -> No primitiveness definition necessary
     if (nonprimitiveOpVars.empty()) {
@@ -326,18 +324,18 @@ void Encoding::encodeOperationVariables(Position& newPos) {
 
     int varPrim = _vars.getOrCreatePrimitiveVariable(newPos);
 
-    _stats.begin(STAGE_REDUCTIONCONSTRAINTS);
+    _stats.begin(EncodingStage::REDUCTION_CONSTRAINTS);
     if (primitiveOpVars.empty()) {
         // Only non-primitive ops here
         _sat.addClause(-varPrim);
     } else {
         // Mix of primitive and non-primitive ops (default)
-        _stats.begin(STAGE_ACTIONCONSTRAINTS);
+        _stats.begin(EncodingStage::ACTION_CONSTRAINTS);
         for (int primitiveOpVar : primitiveOpVars) _sat.addClause(-primitiveOpVar, varPrim);
-        _stats.end(STAGE_ACTIONCONSTRAINTS);
+        _stats.end(EncodingStage::ACTION_CONSTRAINTS);
         for (int nonprimitiveOpVar : nonprimitiveOpVars) _sat.addClause(-nonprimitiveOpVar, -varPrim);
     }
-    _stats.end(STAGE_REDUCTIONCONSTRAINTS);
+    _stats.end(EncodingStage::REDUCTION_CONSTRAINTS);
 }
 
 BitVec Encoding::encodeRelevantFactsAtFrontierStart(Position& position) {
@@ -365,15 +363,15 @@ void Encoding::reuseParentFactVariables(Position& position, const Encoding::Enco
 void Encoding::encodeGroundFactTransition(Position& source, Position& destination, const Encoding::EncodingEnvironment& env) {
     if (destination.getFrontierIndex() == 0 || destination.getFrontierIndex() == _active_frontier_start) return;
 
-    _stats.begin(STAGE_FACTVARENCODING);
+    _stats.begin(EncodingStage::FACT_VARIABLE_ENCODING);
     encodeFrameAxioms(source, destination, env);
-    _stats.end(STAGE_FACTVARENCODING);
+    _stats.end(EncodingStage::FACT_VARIABLE_ENCODING);
 }
 
 USigSet Encoding::encodeQFactVariables(Position& newPos, const Encoding::EncodingEnvironment& env) {
     USigSet newlyCreatedQFacts;
 
-    _stats.begin(STAGE_FACTVARENCODING);
+    _stats.begin(EncodingStage::FACT_VARIABLE_ENCODING);
 
     const StateQFacts stateQFacts = collectStateQFacts(newPos, env.incoming);
     const StateQFacts incomingStateQFacts = env.incoming == nullptr
@@ -402,12 +400,12 @@ USigSet Encoding::encodeQFactVariables(Position& newPos, const Encoding::Encodin
         }
     }
 
-    _stats.end(STAGE_FACTVARENCODING);
+    _stats.end(EncodingStage::FACT_VARIABLE_ENCODING);
     return newlyCreatedQFacts;
 }
 
 void Encoding::encodeFrameAxioms(Position& source, Position& destination, const Encoding::EncodingEnvironment& env, const BitVec* selectedFactIds) {
-    _stats.begin(STAGE_DIRECTFRAMEAXIOMS);
+    _stats.begin(EncodingStage::DIRECT_FRAME_AXIOMS);
 
     const bool nonprimFactSupport = _params.isNonzero("nps") || _use_sibylsat_expansion;
     const bool sourceHasPrimitiveCandidates = hasPrimitiveCandidates(source) || _use_sibylsat_expansion;
@@ -437,7 +435,7 @@ void Encoding::encodeFrameAxioms(Position& source, Position& destination, const 
             encodeFrameAxiomForFact(source, destination, env, fact, sourceFactVar, nonprimFactSupport, sourceHasPrimitiveCandidates, sourceVarPrim, skipRedundantFrameAxioms, positiveFacts);
         }
     }
-    _stats.end(STAGE_DIRECTFRAMEAXIOMS);
+    _stats.end(EncodingStage::DIRECT_FRAME_AXIOMS);
 
     if (_mutex_groups != nullptr) {
         encodeMutexPredicates(destination, env, positiveFacts);
@@ -560,7 +558,7 @@ void Encoding::encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int
     // Unconditional effect?
     if (tree.containsEmpty()) return;
 
-    _stats.begin(STAGE_INDIRECTFRAMEAXIOMS);
+    _stats.begin(EncodingStage::INDIRECT_FRAME_AXIOMS);
             
     // Transform header and tree into a set of clauses
     for (const auto& cls : tree.encode()) {
@@ -572,7 +570,7 @@ void Encoding::encodeIndirectFrameAxioms(const std::vector<int>& headerLits, int
         _sat.endClause();
     }
     
-    _stats.end(STAGE_INDIRECTFRAMEAXIOMS);
+    _stats.end(EncodingStage::INDIRECT_FRAME_AXIOMS);
 }
 
 void Encoding::encodeOperationConstraints(Position& newPos) {
@@ -586,7 +584,7 @@ void Encoding::encodeOperationConstraints(Position& newPos) {
 }
 
 void Encoding::encodeActionConstraints(Position& pos, std::vector<int>& operationVars) {
-    _stats.begin(STAGE_ACTIONCONSTRAINTS);
+    _stats.begin(EncodingStage::ACTION_CONSTRAINTS);
     for (const USignature& action : pos.getActions()) {
         const int actionVar = _vars.getVariable(VarType::OP, pos, action);
         operationVars.push_back(actionVar);
@@ -601,11 +599,11 @@ void Encoding::encodeActionConstraints(Position& pos, std::vector<int>& operatio
             _sat.addClause(-actionVar, (precondition._negated ? -1 : 1) * factVar);
         }
     }
-    _stats.end(STAGE_ACTIONCONSTRAINTS);
+    _stats.end(EncodingStage::ACTION_CONSTRAINTS);
 }
 
 void Encoding::encodeReductionConstraints(Position& pos, std::vector<int>& operationVars) {
-    _stats.begin(STAGE_REDUCTIONCONSTRAINTS);
+    _stats.begin(EncodingStage::REDUCTION_CONSTRAINTS);
     for (const USignature& reduction : pos.getReductions()) {
         const int reductionVar = _vars.getVariable(VarType::OP, pos, reduction);
         operationVars.push_back(reductionVar);
@@ -618,7 +616,7 @@ void Encoding::encodeReductionConstraints(Position& pos, std::vector<int>& opera
             _sat.addClause(-reductionVar, (precondition._negated ? -1 : 1) * factVar);
         }
     }
-    _stats.end(STAGE_REDUCTIONCONSTRAINTS);
+    _stats.end(EncodingStage::REDUCTION_CONSTRAINTS);
 }
 
 void Encoding::encodeOperationSelection(const std::vector<int>& operationVars) {
@@ -627,30 +625,30 @@ void Encoding::encodeOperationSelection(const std::vector<int>& operationVars) {
     // A sole candidate must occur. With multiple candidates, other encoding
     // constraints provide occurrence; this function only makes them exclusive.
     if (operationVars.size() == 1) {
-        _stats.begin(STAGE_ATLEASTONEELEMENT);
+        _stats.begin(EncodingStage::AT_LEAST_ONE_ELEMENT);
         _sat.addClause(operationVars.front());
-        _stats.end(STAGE_ATLEASTONEELEMENT);
+        _stats.end(EncodingStage::AT_LEAST_ONE_ELEMENT);
         return;
     }
 
     if ((int)operationVars.size() >= _params.getIntParam("bamot")) {
         // Binary at-most-one
 
-        _stats.begin(STAGE_ATMOSTONEELEMENT);
+        _stats.begin(EncodingStage::AT_MOST_ONE_ELEMENT);
         auto bamo = BinaryAtMostOne(operationVars, operationVars.size()+1, _variable_allocator);
         for (const auto& c : bamo.encode()) _sat.addClause(c);
-        _stats.end(STAGE_ATMOSTONEELEMENT);
+        _stats.end(EncodingStage::AT_MOST_ONE_ELEMENT);
 
     } else {
         // Naive at-most-one
 
-        _stats.begin(STAGE_ATMOSTONEELEMENT);
+        _stats.begin(EncodingStage::AT_MOST_ONE_ELEMENT);
         for (size_t i = 0; i < operationVars.size(); i++) {
             for (size_t j = i+1; j < operationVars.size(); j++) {
                 _sat.addClause(-operationVars[i], -operationVars[j]);
             }
         }
-        _stats.end(STAGE_ATMOSTONEELEMENT);
+        _stats.end(EncodingStage::AT_MOST_ONE_ELEMENT);
     }
 }
 
@@ -697,9 +695,9 @@ void Encoding::encodeQFactSemantics(Position& pos, const Encoding::EncodingEnvir
             ? StateQFacts()
             : collectStateQFacts(*env.reuseFactsFrom, env.reusePredecessor);
 
-    _stats.begin(STAGE_QFACTSEMANTICS);
+    _stats.begin(EncodingStage::Q_FACT_SEMANTICS);
     encodeQFactSemanticsWithReuseFiltering(pos, env, stateQFacts, reusedStateQFacts, newlyCreatedQFacts);
-    _stats.end(STAGE_QFACTSEMANTICS);
+    _stats.end(EncodingStage::Q_FACT_SEMANTICS);
 }
 
 void Encoding::encodeIncomingEffectQFactSemantics(Position& pos, const Encoding::EncodingEnvironment& env, const USigSet& newlyCreatedQFacts) {
@@ -708,7 +706,7 @@ void Encoding::encodeIncomingEffectQFactSemantics(Position& pos, const Encoding:
     StateQFacts effectQFacts;
     effectQFacts.add(env.incoming->getOutgoingEffects());
 
-    _stats.begin(STAGE_QFACTSEMANTICS);
+    _stats.begin(EncodingStage::Q_FACT_SEMANTICS);
     if (_use_sibylsat_expansion) {
         // A newly expanded predecessor may contain an aar repetition action.
         // Its effect decodings belong to this new transition and must be encoded.
@@ -719,7 +717,7 @@ void Encoding::encodeIncomingEffectQFactSemantics(Position& pos, const Encoding:
                 : collectStateQFacts(*env.reuseFactsFrom, env.reusePredecessor);
         encodeQFactSemanticsWithReuseFiltering(pos, env, effectQFacts, reusedStateQFacts, newlyCreatedQFacts);
     }
-    _stats.end(STAGE_QFACTSEMANTICS);
+    _stats.end(EncodingStage::Q_FACT_SEMANTICS);
 }
 
 void Encoding::encodeQFactSemanticsWithReuseFiltering(Position& pos, const Encoding::EncodingEnvironment& env, const StateQFacts& stateQFacts, const StateQFacts& reusedStateQFacts, const USigSet& newlyCreatedQFacts) {
@@ -795,13 +793,13 @@ void Encoding::encodeQFactDecoding(Position& pos, const USignature& qfact, int q
 
 void Encoding::encodeEffects(Position& source, Position& destination) {
     const bool useTreeConversion = _params.isNonzero("tc");
-    _stats.begin(STAGE_ACTIONEFFECTS);
+    _stats.begin(EncodingStage::ACTION_EFFECTS);
     for (const USignature& action : source.getActions()) {
         if (_htn.isActionRepetition(action._name_id)) continue;
         const int actionVar = _vars.getVariable(VarType::OP, source, action);
         encodeActionEffects(action, actionVar, destination, useTreeConversion);
     }
-    _stats.end(STAGE_ACTIONEFFECTS);
+    _stats.end(EncodingStage::ACTION_EFFECTS);
 }
 
 void Encoding::encodeActionEffects(const USignature& action, int actionVar, Position& destination, bool useTreeConversion) {
@@ -892,7 +890,7 @@ void Encoding::encodeQConstraints(Position& pos) {
 }
 
 void Encoding::encodeQConstantTypeConstraints(Position& pos) {
-    _stats.begin(STAGE_QTYPECONSTRAINTS);
+    _stats.begin(EncodingStage::Q_TYPE_CONSTRAINTS);
     const auto& constraintsByOperation = pos.getQConstantsTypeConstraints();
     for (const auto& [operation, constraints] : constraintsByOperation) {
         const int operationVar = pos.getVariableOrZero(VarType::OP, operation);
@@ -917,15 +915,15 @@ void Encoding::encodeQConstantTypeConstraints(Position& pos) {
             }
         }
     }
-    _stats.end(STAGE_QTYPECONSTRAINTS);
+    _stats.end(EncodingStage::Q_TYPE_CONSTRAINTS);
 }
 
 void Encoding::encodeSubstitutionConstraints(Position& pos) {
-    _stats.begin(STAGE_SUBSTITUTIONCONSTRAINTS);
+    _stats.begin(EncodingStage::SUBSTITUTION_CONSTRAINTS);
     encodeSubstitutionConstraintsForOperations(pos, pos.getActions());
     encodeSubstitutionConstraintsForOperations(pos, pos.getReductions());
     pos.clearSubstitutions();
-    _stats.end(STAGE_SUBSTITUTIONCONSTRAINTS);
+    _stats.end(EncodingStage::SUBSTITUTION_CONSTRAINTS);
 }
 
 void Encoding::encodeSubstitutionConstraintsForOperations(Position& pos, const USigSet& operations) {
@@ -966,7 +964,7 @@ void Encoding::encodeSubtaskRelationships(Position& pos, const Encoding::Encodin
 }
 
 void Encoding::encodeExpansionRelationships(Position& pos, Position& parentPosition) {
-    _stats.begin(STAGE_EXPANSIONS);
+    _stats.begin(EncodingStage::EXPANSIONS);
     for (const auto& [parentOperation, children] : pos.getExpansions()) {
         const int parentVar = _vars.getVariable(VarType::OP, parentPosition, parentOperation);
         _sat.appendClause(-parentVar);
@@ -978,7 +976,7 @@ void Encoding::encodeExpansionRelationships(Position& pos, Position& parentPosit
 
         encodeExpansionSubstitutions(pos, parentOperation, parentVar);
     }
-    _stats.end(STAGE_EXPANSIONS);
+    _stats.end(EncodingStage::EXPANSIONS);
 }
 
 void Encoding::encodeExpansionSubstitutions(Position& pos, const USignature& parentOperation, int parentVar) {
@@ -1004,7 +1002,7 @@ void Encoding::encodeExpansionSubstitutions(Position& pos, const USignature& par
 }
 
 void Encoding::encodePredecessorRelationships(Position& pos, Position& parentPosition) {
-    _stats.begin(STAGE_PREDECESSORS);
+    _stats.begin(EncodingStage::PREDECESSORS);
     for (const auto& [child, parentOperations] : pos.getPredecessors()) {
         _sat.appendClause(-_vars.getVariable(VarType::OP, pos, child));
         for (const USignature& parentOperation : parentOperations) {
@@ -1012,14 +1010,14 @@ void Encoding::encodePredecessorRelationships(Position& pos, Position& parentPos
         }
         _sat.endClause();
     }
-    _stats.end(STAGE_PREDECESSORS);
+    _stats.end(EncodingStage::PREDECESSORS);
 }
 
 int Encoding::encodeQConstEquality(int q1, int q2) {
 
     if (!_vars.hasQConstantEqualityVariable(q1, q2)) {
         
-        _stats.begin(STAGE_QCONSTEQUALITY);
+        _stats.begin(EncodingStage::Q_CONSTANT_EQUALITY);
         FlatHashSet<int> good, bad1, bad2;
         for (int c : _q_constants.getDomain(q1)) {
             if (!_q_constants.getDomain(q2).count(c)) bad1.insert(c);
@@ -1047,13 +1045,13 @@ int Encoding::encodeQConstEquality(int q1, int q2) {
             for (int c : bad1) _sat.addClause(-_vars.getOrCreateSubstitutionVariable(q1, c), -varEq);
             for (int c : bad2) _sat.addClause(-_vars.getOrCreateSubstitutionVariable(q2, c), -varEq);
         }
-        _stats.end(STAGE_QCONSTEQUALITY);
+        _stats.end(EncodingStage::Q_CONSTANT_EQUALITY);
     }
     return _vars.getQConstantEqualityVariable(q1, q2);
 }
 
 void Encoding::addAssumptionsPrimPlan(bool permanent, int assumptions_until) {
-    _stats.begin(STAGE_ASSUMPTIONS);
+    _stats.begin(EncodingStage::ASSUMPTIONS);
     for (size_t pos = 0; pos < _leaf_positions.size(); pos++) {
         if (pos == assumptions_until) break;
         
@@ -1063,12 +1061,12 @@ void Encoding::addAssumptionsPrimPlan(bool permanent, int assumptions_until) {
             else _sat.assume(v);
         }
     }
-    _stats.end(STAGE_ASSUMPTIONS);
+    _stats.end(EncodingStage::ASSUMPTIONS);
 }
 
 void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvironment& env, const USigSet& possibleEffects) {
     assert(_mutex_groups != nullptr);
-    _stats.begin(STAGE_MUTEX);
+    _stats.begin(EncodingStage::MUTEXES);
     std::vector<int> mutexFactVars;
     FlatHashSet<int> encodedGroupIds;
 
@@ -1101,13 +1099,13 @@ void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvi
             if (groupIsFullyDefined) pos.addGroupMutexEncoded(groupId);
         }
     }
-    _stats.end(STAGE_MUTEX);
+    _stats.end(EncodingStage::MUTEXES);
 }
 
 void Encoding::encodeMutexGroup(const std::vector<int>& factVars) {
     constexpr size_t binaryEncodingClauseThreshold = 250000000;
     const bool useBinaryEncoding = (int)factVars.size() >= _params.getIntParam("bamot")
-            && _stats._num_cls > binaryEncodingClauseThreshold;
+            && _stats.getNumClauses() > binaryEncodingClauseThreshold;
 
     if (useBinaryEncoding) {
         BinaryAtMostOne encoding(factVars, factVars.size() + 1, _variable_allocator);
@@ -1234,8 +1232,10 @@ void onClauseLearnt(void* state, int* cls) {
 }
 
 int Encoding::solve() {
-    Log::i("Attempting to solve formula with %i clauses (%i literals) and %i assumptions\n", 
-                _stats._num_cls, _stats._num_lits, _stats._num_asmpts);
+    Log::i("Attempting to solve formula with %llu clauses (%llu literals) and %llu assumptions\n",
+            static_cast<unsigned long long>(_stats.getNumClauses()),
+            static_cast<unsigned long long>(_stats.getNumLiterals()),
+            static_cast<unsigned long long>(_stats.getNumAssumptions()));
     
     if (_params.isNonzero("plc"))
         _sat.setLearnCallback(/*maxLength=*/100, this, onClauseLearnt);
@@ -1246,9 +1246,9 @@ int Encoding::solve() {
 }
 
 void Encoding::addUnitConstraint(int lit) {
-    _stats.begin(STAGE_FORBIDDENOPERATIONS);
+    _stats.begin(EncodingStage::FORBIDDEN_OPERATIONS);
     _sat.addClause(lit);
-    _stats.end(STAGE_FORBIDDENOPERATIONS);
+    _stats.end(EncodingStage::FORBIDDEN_OPERATIONS);
 }
 
 void Encoding::addAssumptionsTasksAccomplished(NodeHashSet<int>& opsAndPredsTrue, bool permanent) {

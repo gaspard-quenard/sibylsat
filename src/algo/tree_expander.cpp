@@ -4,11 +4,11 @@
 #include "tree_expander.h"
 #include "util/log.h"
 
-TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis)
+TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, Statistics& statistics)
         : _params(params),
           _htn(htn),
           _q_constants(qConstants),
-          _stats(Statistics::getInstance()),
+          _stats(statistics),
           _analysis(analysis),
           _operation_domain_analyzer(_htn, _q_constants, _analysis),
           _domination_resolver(_q_constants),

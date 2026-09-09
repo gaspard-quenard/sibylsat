@@ -34,19 +34,18 @@ std::unique_ptr<MacroActionCompiler> compileMacroActions(LiftedProblem& problem,
 }
 
 /** Compute mutex groups and immediately filter them through grounded facts. */
-std::unique_ptr<MutexGroups> computeMutexGroups(HtnInstance& htn, FactAnalysis& facts, const std::filesystem::path& pandaProblemFile, Parameters& params) {
+std::unique_ptr<MutexGroups> computeMutexGroups(HtnInstance& htn, FactAnalysis& facts, const std::filesystem::path& pandaProblemFile, Parameters& params, Statistics& statistics) {
     if (!params.isNonzero("mutex")) return nullptr;
 
-    Statistics& statistics = Statistics::getInstance();
-    statistics.beginTiming(TimingStage::INIT_MUTEXES);
+    statistics.beginTiming(TimingStage::MUTEX_COMPUTATION);
     std::unique_ptr<MutexGroups> mutexGroups = MutexLoader::compute(htn, facts, pandaProblemFile);
-    statistics.endTiming(TimingStage::INIT_MUTEXES);
+    statistics.endTiming(TimingStage::MUTEX_COMPUTATION);
     return mutexGroups;
 }
 
 }
 
-PlanningContext preprocessProblem(Parameters& params) {
+PlanningContext preprocessProblem(Parameters& params, Statistics& statistics) {
     // Produce PandaPIgrounder's input independently of the in-memory parser representation.
     const std::filesystem::path pandaProblemFile = getProblemProcessingDir() / "problem.parsed";
     PandaParser::parse(params.getDomainFilename(), params.getProblemFilename(), pandaProblemFile);
@@ -71,16 +70,15 @@ PlanningContext preprocessProblem(Parameters& params) {
     auto qConstants = std::make_unique<QConstantManager>(*htn, params.isNonzero("sqq"));
 
     // Ground reachable predicates and initialize the ground-fact analysis.
-    Statistics& statistics = Statistics::getInstance();
-    statistics.beginTiming(TimingStage::INIT_GROUNDING);
+    statistics.beginTiming(TimingStage::GROUNDING);
     GroundFacts groundFacts = PandaGroundProblemLoader::load(*htn, pandaProblemFile, params.isNonzero("optimal"));
     auto factAnalysis = std::make_unique<FactAnalysis>(*htn, *qConstants, std::move(groundFacts));
-    statistics.endTiming(TimingStage::INIT_GROUNDING);
-    const double groundingSeconds = static_cast<double>(statistics.getTiming(TimingStage::INIT_GROUNDING)) / 1'000'000'000.0;
+    statistics.endTiming(TimingStage::GROUNDING);
+    const double groundingSeconds = std::chrono::duration<double>(statistics.getTiming(TimingStage::GROUNDING)).count();
     Log::i("Grounding time: %.3f s\n", groundingSeconds);
 
     // Compute mutex groups and remove groups invalidated by grounded reachability.
-    std::unique_ptr<MutexGroups> mutexGroups = computeMutexGroups(*htn, *factAnalysis, pandaProblemFile, params);
+    std::unique_ptr<MutexGroups> mutexGroups = computeMutexGroups(*htn, *factAnalysis, pandaProblemFile, params, statistics);
 
     // Compute and attach the possible effects of every method template.
     MethodEffectAnalyzer::analyze(*htn, *factAnalysis);

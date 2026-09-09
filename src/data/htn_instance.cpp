@@ -2,6 +2,8 @@
 #include <algorithm>
 #include "data/htn_instance.h"
 
+#include "util/log.h"
+
 int HtnInstance::nameId(const std::string& name) {
     auto existing = _name_table.find(name);
     if (existing != _name_table.end()) return existing->second;
