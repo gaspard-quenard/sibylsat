@@ -18,6 +18,11 @@ std::string quoteShellArgument(const std::string& argument) {
     return quoted + "'";
 }
 
+bool commandSucceeds(const std::string& command) {
+    const int status = std::system(command.c_str());
+    return status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 bool commandSucceedsAndOutputContains(const std::string& command, const std::string& expectedOutput) {
     FILE* pipe = popen(command.c_str(), "r");
     if (pipe == nullptr) throw std::runtime_error("Could not execute command: " + command);

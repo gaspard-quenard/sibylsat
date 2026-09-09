@@ -4,12 +4,11 @@
 #include "tree_expander.h"
 #include "util/log.h"
 
-TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn)
+TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn, FactAnalysis& analysis)
         : _params(params),
           _htn(htn),
           _stats(Statistics::getInstance()),
-          _analysis(_htn),
-          _method_effects(_htn, _analysis),
+          _analysis(analysis),
           _domination_resolver(_htn),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _nonprimitive_support(_params.isNonzero("nps")),
@@ -70,7 +69,7 @@ void TreeExpander::createInitialLeaves() {
     addOutgoingEffectsToReachability(*rootReductionPosition);
 
     // The artificial goal has no effects, but the encoding reads its outgoing bit vectors.
-    goalPosition->getOutgoingEffects().reset(_htn.getNumPositiveGroundFacts());
+    goalPosition->getOutgoingEffects().reset(_analysis.getNumGroundFacts());
 
     const USignature goalSig = _htn.getGoalAction().getSignature();
     goalPosition->addAction(goalSig);
@@ -171,7 +170,7 @@ void TreeExpander::populateChildFromParent(Position& child, Position& parent) {
 
 void TreeExpander::computeOutgoingEffects(Position& position) {
     OutgoingEffects& effects = position.getOutgoingEffects();
-    effects.reset(_htn.getNumPositiveGroundFacts());
+    effects.reset(_analysis.getNumGroundFacts());
 
     USigSet actionsToPrune;
     for (const USignature& actionSig : position.getActions()) {
@@ -200,13 +199,10 @@ bool TreeExpander::addActionOutgoingEffects(OutgoingEffects& effects, Position& 
 }
 
 void TreeExpander::addReductionOutgoingEffects(OutgoingEffects& effects, Position& position, const USignature& reductionSig) {
-    const BitVec& argumentIndependentPositiveEffects = _method_effects.getArgumentIndependentGroundEffects(reductionSig, /*negated=*/false);
-    const BitVec& argumentIndependentNegativeEffects = _method_effects.getArgumentIndependentGroundEffects(reductionSig, /*negated=*/true);
-    const SigSet argumentDependentEffects = _method_effects.instantiateArgumentDependentEffects(reductionSig);
-
-    addGroundEffect(effects, reductionSig, argumentIndependentPositiveEffects, /*negated=*/false, EffectMode::POSSIBLE_METHOD_EFFECT);
-    addGroundEffect(effects, reductionSig, argumentIndependentNegativeEffects, /*negated=*/true, EffectMode::POSSIBLE_METHOD_EFFECT);
-    for (const Signature& effect : argumentDependentEffects) {
+    const Reduction& reduction = _htn.getOpTable().getReduction(reductionSig);
+    addGroundEffect(effects, reductionSig, reduction.getArgumentIndependentPossibleEffects(/*negated=*/false), /*negated=*/false, EffectMode::POSSIBLE_METHOD_EFFECT);
+    addGroundEffect(effects, reductionSig, reduction.getArgumentIndependentPossibleEffects(/*negated=*/true), /*negated=*/true, EffectMode::POSSIBLE_METHOD_EFFECT);
+    for (const Signature& effect : reduction.getArgumentDependentPossibleEffects()) {
         addInstantiatedEffect(effects, position, reductionSig, effect, EffectMode::POSSIBLE_METHOD_EFFECT);
     }
 }
@@ -299,13 +295,13 @@ void TreeExpander::analyzeGroundPrecondition(const Signature& precondition) {
         const bool holds = precondition._negated ? fact._args[0] != fact._args[1] : fact._args[0] == fact._args[1];
         assert(holds || Log::e("Precondition %s not reachable!\n", TOSTR(precondition)));
         if (holds && !precondition._negated) {
-            const int factId = _htn.getGroundFactId(fact, /*negated=*/false);
+            const int factId = _analysis.getGroundFactId(fact, /*negated=*/false);
             _analysis.addRelevantFact(factId);
         }
         return;
     }
 
-    const int factId = _htn.getGroundFactId(fact, precondition._negated);
+    const int factId = _analysis.getGroundFactId(fact, precondition._negated);
     if (factId < 0) {
         Log::e("Precondition %s not reachable!\n", TOSTR(precondition));
         return;
@@ -336,9 +332,9 @@ SubstitutionConstraint TreeExpander::buildStaticPreconditionConstraint(const Sig
     constraint.chooseRepresentation(precondition._negated ? SubstitutionConstraint::FORBIDDEN_ASSIGNMENTS : SubstitutionConstraint::ALLOWED_ASSIGNMENTS);
 
     // Static predicates only need facts present in the indexed ground-fact table.
-    const BitVec matchingPositiveFacts = _htn.findMatchingGroundFactIds(fact, /*negated=*/false, sorts);
+    const BitVec matchingPositiveFacts = _analysis.findMatchingGroundFactIds(fact, /*negated=*/false, sorts);
     for (int factId : matchingPositiveFacts) {
-        const USignature& decoding = _htn.getGroundPositiveFact(factId);
+        const USignature& decoding = _analysis.getGroundFact(factId);
         const auto path = SubstitutionConstraint::toAssignmentPath(fact._args, decoding._args, qArgumentIndices);
         if (precondition._negated) constraint.forbid(path);
         else constraint.allow(path);
@@ -361,7 +357,7 @@ SubstitutionConstraint TreeExpander::buildFluentPreconditionConstraint(Position&
     if (chooseRepresentationFromSample) {
         size_t numReachableSamples = 0;
         for (const USignature& decoding : _htn.sampleCandidateDecodings(fact, eligibleArguments, sampleSize)) {
-            const int factId = _htn.getGroundFactId(decoding, precondition._negated);
+            const int factId = _analysis.getGroundFactId(decoding, precondition._negated);
             if (factId >= 0 && _analysis.isReachable(factId, precondition._negated)) numReachableSamples++;
         }
         representation = numReachableSamples < sampleSize / 2 ? SubstitutionConstraint::ALLOWED_ASSIGNMENTS : SubstitutionConstraint::FORBIDDEN_ASSIGNMENTS;
@@ -370,7 +366,7 @@ SubstitutionConstraint TreeExpander::buildFluentPreconditionConstraint(Position&
 
     // Reachability determines valid substitutions. Non-invariant decodings also need SAT fact variables.
     for (const USignature& decoding : _htn.enumerateCandidateDecodings(fact, eligibleArguments)) {
-        const int factId = _htn.getGroundFactId(decoding, precondition._negated);
+        const int factId = _analysis.getGroundFactId(decoding, precondition._negated);
         const bool reachable = factId >= 0 && _analysis.isReachable(factId, precondition._negated);
         const auto path = SubstitutionConstraint::toAssignmentPath(fact._args, decoding._args, qArgumentIndices);
 
@@ -385,7 +381,7 @@ SubstitutionConstraint TreeExpander::buildFluentPreconditionConstraint(Position&
     if (!stateDependentFactIds.empty()) {
         if (registerDynamicQFact) position.addQFact(fact);
         for (int factId : stateDependentFactIds) {
-            const USignature& decoding = _htn.getGroundPositiveFact(factId);
+            const USignature& decoding = _analysis.getGroundFact(factId);
             if (registerDynamicQFact) position.addQFactDecoding(fact, decoding, precondition._negated);
             _analysis.addRelevantFact(factId);
         }
@@ -455,14 +451,32 @@ bool TreeExpander::hasNegativeEffectOnPredicate(const USignature& actionSig, int
 
 bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& position, const USignature& opSig, const Signature& effect, EffectMode mode) {
     const USignature& unsignedEffect = effect.getUnsigned();
-    if (!_htn.hasQConstants(unsignedEffect)) {
-        const int factId = _htn.getGroundFactId(unsignedEffect, effect._negated);
+    const bool hasQConstants = _htn.hasQConstants(unsignedEffect);
+    if (!hasQConstants && _htn.isFullyGround(unsignedEffect)) {
+        const int factId = _analysis.getGroundFactId(unsignedEffect, effect._negated);
         if (factId < 0) return false;
         addGroundEffect(outgoing, opSig, factId, effect._negated, mode);
         return true;
     }
 
-    const std::vector<int> effectSorts = _htn.getConditionSortsFromOperation(unsignedEffect, opSig);
+    std::vector<int> effectSorts = _htn.getArgumentSorts(unsignedEffect);
+    const std::vector<int>& operationSorts = _htn.getSorts(opSig._name_id);
+    for (size_t effectIndex = 0; effectIndex < unsignedEffect._args.size(); ++effectIndex) {
+        for (size_t operationIndex = 0; operationIndex < opSig._args.size(); ++operationIndex) {
+            if (unsignedEffect._args[effectIndex] == opSig._args[operationIndex]) {
+                effectSorts[effectIndex] = operationSorts[operationIndex];
+                break;
+            }
+        }
+    }
+
+    const BitVec matchingFactIds = _analysis.findMatchingGroundFactIds(unsignedEffect, effect._negated, effectSorts);
+    if (!hasQConstants) {
+        if (matchingFactIds.none()) return false;
+        for (int factId : matchingFactIds) addGroundEffect(outgoing, opSig, factId, effect._negated, mode);
+        return true;
+    }
+
     const std::vector<int> qArgumentIndices = SubstitutionConstraint::getQArgumentIndicesByDomainSize(_htn, unsignedEffect._args, effectSorts);
     const std::vector<int> effectQConstants = collectQConstants(unsignedEffect, qArgumentIndices);
 
@@ -484,9 +498,8 @@ bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& po
     bool hasValidDecoding = false;
     bool requiresQFactEncoding = false;
 
-    const BitVec matchingFactIds = _htn.findMatchingGroundFactIds(unsignedEffect, effect._negated, effectSorts);
     for (int factId : matchingFactIds) {
-        const USignature& decoding = _htn.getGroundPositiveFact(factId);
+        const USignature& decoding = _analysis.getGroundFact(factId);
         const std::vector<IntPair> assignmentPath = SubstitutionConstraint::toAssignmentPath(unsignedEffect._args, decoding._args, qArgumentIndices);
         if (!isEffectDecodingAllowed(assignmentPath, sameQConstantConstraints, relatedConstraints)) continue;
 
@@ -720,6 +733,7 @@ std::optional<USignature> TreeExpander::instantiateAndRegisterReduction(Reductio
     if (!_analysis.hasValidPreconditions(reduction.getPreconditions())) return std::nullopt;
     if (!_analysis.hasValidPreconditions(reduction.getExtraPreconditions())) return std::nullopt;
 
+    reduction.specializeArgumentDependentPossibleEffects();
     _htn.getOpTable().addReduction(reduction);
     return reduction.getSignature();
 }

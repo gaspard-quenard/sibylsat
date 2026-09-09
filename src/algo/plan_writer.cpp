@@ -104,7 +104,7 @@ std::string PlanWriter::serializeNormalizedPlan(const Plan& normalizedPlan) {
     for (const PlanItem& action : normalizedPlan.first) {
         actionIds.insert(action.id);
         if (!isPrintableAction(action)) continue;
-        stream << action.id << " " << Names::to_string_nobrackets(_htn.cutNonoriginalTaskArguments(action.abstractTask)) << "\n";
+        stream << action.id << " " << Names::to_string_nobrackets(_htn.restoreOriginalTaskArity(action.abstractTask)) << "\n";
     }
 
     bool writeRoot = true;
@@ -118,7 +118,7 @@ std::string PlanWriter::serializeNormalizedPlan(const Plan& normalizedPlan) {
         }
         if (item.id <= 0 || actionIds.count(item.id)) continue;
 
-        stream << item.id << " " << Names::to_string_nobrackets(_htn.cutNonoriginalTaskArguments(item.abstractTask))
+        stream << item.id << " " << Names::to_string_nobrackets(_htn.restoreOriginalTaskArity(item.abstractTask))
                 << " -> " << Names::to_string_nobrackets(item.reduction);
         for (int subtaskId : item.subtaskIds) stream << " " << subtaskId;
         stream << "\n";

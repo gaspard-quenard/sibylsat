@@ -7,6 +7,9 @@
 /** Quote one argument so it is passed literally to a POSIX shell command. */
 std::string quoteShellArgument(const std::string& argument);
 
+/** Run a command and return whether it exits successfully. */
+bool commandSucceeds(const std::string& command);
+
 /** Run a command and return whether it exits successfully and prints the expected text. */
 bool commandSucceedsAndOutputContains(const std::string& command, const std::string& expectedOutput);
 

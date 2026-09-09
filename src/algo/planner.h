@@ -6,11 +6,9 @@
 #include "data/position.h"
 #include "data/htn_instance.h"
 #include "algo/plan_writer.h"
-#include "algo/precondition_inference.h"
 #include "algo/separate_tasks_scheduler.h"
 #include "algo/tree_expander.h"
 #include "sat/encoding.h"
-#include <optional>
 
 typedef std::pair<std::vector<PlanItem>, std::vector<PlanItem>> Plan;
 
@@ -48,7 +46,6 @@ private:
     Position*& _root_position;
     std::vector<Position*>& _leaf_positions;
     FactAnalysis& _analysis;
-    MethodEffectAnalysis& _method_effects;
     Encoding _encoding;
     std::unique_ptr<RetroactivePruning> _pruning;
     PlanWriter _plan_writer;
@@ -58,7 +55,7 @@ private:
 
     // For optimal planning
     const bool _optimal;
-    std::optional<TDG> _tdg;
+    TDG* _tdg;
 
     const bool _separate_tasks;
     std::unique_ptr<SeparateTasksScheduler> _separate_tasks_scheduler;
@@ -66,7 +63,7 @@ private:
     float _optimization_factor;
 
 public:
-    Planner(Parameters& params, HtnInstance& htn);
+    Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, TDG* tdg);
     int findPlan();
     void optimizeCurrentPlan();
     void writeFormulaFile() { _encoding.writeFormulaFile(); }
@@ -87,8 +84,7 @@ private:
     SearchMode determineSearchMode() const;
 
     /**
-     * Configure the planner components that depend on the search mode
-     * (TDG, pruning, separate-tasks scheduler, mutex cleanup).
+     * Attach preprocessed heuristic data and construct search-specific helpers.
      */
     void configure();
 

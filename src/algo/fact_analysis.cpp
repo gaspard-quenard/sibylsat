@@ -24,25 +24,47 @@ FactAnalysis::FactAnalysis(HtnInstance& htn)
 
     Log::i("Found %zu exclusive negative facts.\n", exclusiveNegativeFacts.size());
     _cutoff_neg_facts = positiveFacts.size();
-    _htn.setGroundPosAndNegFacts(positiveFacts, exclusiveNegativeFacts);
+    for (int equalityPredicateId : _htn.getEqualityPredicateIds()) {
+        const std::vector<int>& sorts = _htn.getSorts(equalityPredicateId);
+        assert(sorts.size() == 2 && sorts[0] == sorts[1]);
+        for (int constant : _htn.getConstantsOfSort(sorts[0])) {
+            positiveFacts.emplace_back(equalityPredicateId, std::vector<int>{constant, constant});
+        }
+    }
+    _ground_facts.reset(std::move(positiveFacts), exclusiveNegativeFacts);
 
-    const int numGroundFacts = _htn.getNumPositiveGroundFacts();
+    const int numGroundFacts = getNumGroundFacts();
     _reachable_pos_facts = BitVec(numGroundFacts);
     _reachable_neg_facts = BitVec(numGroundFacts);
     _init_state_pos = BitVec(numGroundFacts);
     _init_state_neg = BitVec(numGroundFacts);
     _relevant_facts = BitVec(numGroundFacts);
     for (int factId = 0; factId < numGroundFacts; factId++) {
-        if (_init_state.count(_htn.getGroundPositiveFact(factId))) {
+        if (_init_state.count(getGroundFact(factId))) {
             _init_state_pos.set(factId);
         } else {
             _init_state_neg.set(factId);
         }
     }
+    _original_init_state_pos = _init_state_pos;
+    _original_init_state_neg = _init_state_neg;
 
     stats.endTiming(TimingStage::INIT_GROUNDING);
     Log::i("Grounding time: %f\n", stats.getTiming(TimingStage::INIT_GROUNDING));
     resetReachability();
+}
+
+BitVec FactAnalysis::findMatchingGroundFactIds(const USignature& signature, bool negated, const std::vector<int>& requestedSorts) {
+    const std::vector<int>& argumentSorts = requestedSorts.empty() ? _htn.getSorts(signature._name_id) : requestedSorts;
+    std::vector<int> restrictiveSorts(signature._args.size(), -1);
+    std::vector<int> fixedConstants(signature._args.size(), -1);
+    for (size_t argumentIndex = 0; argumentIndex < signature._args.size(); ++argumentIndex) {
+        const int argument = signature._args[argumentIndex];
+        if (_htn.isQConstant(argument)) restrictiveSorts[argumentIndex] = _htn.getPrimarySortOfQConstant(argument);
+        else if (!_htn.isVariable(argument)) fixedConstants[argumentIndex] = argument;
+    }
+    return _ground_facts.findMatchingFactIds(signature._name_id, negated, argumentSorts, restrictiveSorts,
+            fixedConstants, _htn.getConstantsBySort());
 }
 
 std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgumentDomains(const HtnOp& operation)
@@ -154,7 +176,7 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
             else
             {
                 if (!_htn.hasQConstants(preSig._usig) && _htn.isFullyGround(preSig._usig)) {
-                    int predId = _htn.getGroundFactId(preSig._usig, preSig._negated);
+                    int predId = getGroundFactId(preSig._usig, preSig._negated);
                     if (predId >= 0 && isReachable(predId, preSig._negated))
                     {
                         addTuple(preSig._usig);
@@ -163,11 +185,11 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
                 }
                 else
                 {
-                    BitVec result = _htn.findMatchingGroundFactIds(preSig._usig, preSig._negated, preSorts);
+                    BitVec result = findMatchingGroundFactIds(preSig._usig, preSig._negated, preSorts);
                     for (std::size_t pred_idx : result)
                     {
                         any = true;
-                        const USignature &decUSig = _htn.getGroundPositiveFact(pred_idx);
+                        const USignature &decUSig = getGroundFact(pred_idx);
                         // Log::i("___ Decoding %s of precondition %s\n", TOSTR(decUSig), TOSTR(preSig._usig));
                         if (!isReachable(pred_idx, preSig._negated))
                         {

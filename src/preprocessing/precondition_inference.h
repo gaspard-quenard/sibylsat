@@ -1,9 +1,8 @@
 
-#ifndef DOMPASCH_LILOTANE_PRECONDITION_INFERENCE_H
-#define DOMPASCH_LILOTANE_PRECONDITION_INFERENCE_H
+#ifndef SIBYLSAT_PRECONDITION_INFERENCE_H
+#define SIBYLSAT_PRECONDITION_INFERENCE_H
 
 #include "data/htn_instance.h"
-#include "algo/method_effect_analysis.h"
 #include "algo/network_traversal.h"
 
 class PreconditionInference {
@@ -29,12 +28,10 @@ private:
     };
 
     HtnInstance& _htn;
-    MethodEffectAnalysis& _method_effects;
     NetworkTraversal _traversal;
     NodeHashMap<int, InferredPreconditions> _inferred_preconditions;
 
-    PreconditionInference(HtnInstance& htn, MethodEffectAnalysis& methodEffects)
-        : _htn(htn), _method_effects(methodEffects), _traversal(htn) {}
+    explicit PreconditionInference(HtnInstance& htn) : _htn(htn), _traversal(htn) {}
 
     SigSet inferPreconditions(const USignature& op) {
         USigSet currentOps;
@@ -121,7 +118,7 @@ private:
             const Action action = _htn.toAction(child._name_id, child._args);
             return action.getEffects();
         }
-        return _method_effects.getPossibleEffects(child);
+        return _htn.getReductionTemplate(child._name_id).getPossibleEffectsForArguments(child._args);
     }
 
     USignature makeCanonicalSignature(const USignature& sig) {
@@ -171,10 +168,10 @@ private:
 
 public:
     enum MinePrecMode { NO_MINING, USE_FOR_INSTANTIATION, USE_EVERYWHERE };
-    static void infer(HtnInstance& htn, MethodEffectAnalysis& methodEffects, MinePrecMode mode) {
+    static void infer(HtnInstance& htn, MinePrecMode mode) {
         if (mode == NO_MINING) return;
 
-        PreconditionInference miner(htn, methodEffects);
+        PreconditionInference miner(htn);
         int precondsBefore = 0;
         int minedPreconds = 0;
         int initRedId = htn.getInitReduction().getSignature()._name_id;

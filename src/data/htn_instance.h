@@ -3,6 +3,7 @@
 #define DOMPASCH_TREE_REXX_HTN_INSTANCE_H
 
 #include <assert.h>
+#include <memory>
 #include <optional>
 
 #include "data/action.h"
@@ -14,34 +15,23 @@
 #include "util/bitvec.h"
 #include "util/statistics.h"
 #include "data/op_table.h"
+#include "data/q_constant_registry.h"
 
 #include "algo/arg_iterator.h"
 #include "algo/sample_arg_iterator.h"
-#include "data/sas_plus.h"
+#include "data/mutex_groups.h"
 
-// Forward definitions
-class ParsedProblem;
-struct predicate_definition;
-struct task;
-struct method;
-struct literal;
+class MacroActionCompiler;
+class HtnInstanceBuilder;
+class HtnStatistics;
 
 class HtnInstance {
 
 private:
     Parameters& _params;
 
-    Statistics& _stats;
+    std::unique_ptr<MacroActionCompiler> _macro_action_compiler;
 
-    // The raw parsed problem.
-    ParsedProblem& _p;
-
-    // Test with ground facts
-    std::vector<USignature> _ground_pos_facts;
-    int _cutoff_neg_facts = -1;
-    BitVec all_preds_pos; // All one except all value after the cutoff
-    NodeHashMap<const USignature, int, USignatureHasher> _ground_facts_map;
-    
     // Maps a string to its name ID within the problem.
     FlatHashMap<std::string, int> _name_table;
     // Maps a name ID to its string within the problem.
@@ -55,27 +45,20 @@ private:
     FlatHashSet<int> _predicate_ids;
     // Set of equality predicate name IDs.
     FlatHashSet<int> _equality_predicates;
-    // Set of all q-constant IDs.
-    FlatHashMap<int, size_t> _q_constant_origin_position_ids;
-
-    NodeHashMap<int, NodeHashMap<USignature, std::vector<int>, USignatureHasher>> _q_const_to_op_domains;  
+    QConstantRegistry _q_constants;
 
     // Maps a {predicate,task,method} name ID to a list of sorts IDs.
     NodeHashMap<int, std::vector<int>> _signature_sorts_table;
+    // Sort metadata for variables whose IDs include their declaring operation.
+    FlatHashMap<int, int> _sort_by_variable_id;
 
     // Maps a sort name ID to a set of constants of that sort.
     NodeHashMap<int, FlatHashSet<int>> _constants_by_sort;
+    FlatHashSet<int> _declared_sort_ids;
+    std::unordered_map<std::string, std::string> _predicate_names_by_lowercase;
 
-    // Maps each q-constant to the sort it was created with.
-    FlatHashMap<int, int> _primary_sort_of_q_constants;
-    // Maps each q-constant to a list of sorts it is constrained with.
-    NodeHashMap<int, FlatHashSet<int>> _sorts_of_q_constants;
-    
     // Maps each {action,reduction} name ID to the number of task variables it originally had.
     FlatHashMap<int, int> _original_n_taskvars;
-
-    // Lookup table for the possible decodings of a fact signature with normalized arguments.    
-    NodeHashMap<USignature, std::vector<USignature>, USignatureHasher> _fact_sig_decodings;
 
     // Maps an action name ID to its action object.
     NodeHashMap<int, Action> _operators;
@@ -99,45 +82,31 @@ private:
 
     FlatHashMap<int, int> _repeated_to_actual_action;
 
-    // The initial reduction of the problem.
-    Reduction _init_reduction;
-    // Signature of the BLANK virtual action.
+    USigSet _init_state;
+    SigSet _goals;
+    // Name ID of the initial reduction in _methods.
+    int _init_reduction_id = -1;
+    Action _blank_action;
+    Action _goal_action;
     USignature _blank_action_sig;
     
     const bool _share_q_constants;
 
     FlatHashSet<int> _name_id_recursive_methods;
 
-    // For macro actions (with flag -macroActions)
-    FlatHashMap<std::string, task> _macro_name_to_task;
-    FlatHashMap<std::string, std::vector<task>> _macro_name_to_primitives;
-
-    std::unordered_map<int, BitVec> _filter_by_name_id;
-    std::unordered_map<std::string, BitVec> _filter_by_sort_at_idx_args;
-    std::unordered_map<std::string, BitVec> _filter_by_constant_at_idx_args;
-
 public:
-
-    SASPlus* _sas_plus = nullptr;
-
-    // Special action representing a virtual "No-op".
-    static Action BLANK_ACTION;
-
-    HtnInstance(Parameters& params);
     ~HtnInstance();
-
-    ParsedProblem* parse(std::string domainFile, std::string problemFile);
-
 
     // Get the params 
     Parameters& getParams() const {
         return _params;
     }
 
-    const bool isEqualityPredicate(int nameId) const {
+    bool isEqualityPredicate(int nameId) const {
         return _equality_predicates.count(nameId);
     }
-    const bool isStaticPredicate(int nameId) const {
+    const FlatHashSet<int>& getEqualityPredicateIds() const { return _equality_predicates; }
+    bool isStaticPredicate(int nameId) const {
         return _static_predicates.count(nameId);
     }
 
@@ -145,13 +114,18 @@ public:
     int numActionsInMacro(int nameId) const;
     std::vector<USignature> getActionsFromMacro(const USignature& macroAction) const;
 
-    USigSet getInitState();
-    const Reduction& getInitReduction();
+    /** Return whether mutex groups were requested and loaded. */
+    bool hasMutexGroups() const { return _mutex_groups != nullptr; }
+    /** Return the loaded mutex-group representation. */
+    MutexGroups& getMutexGroups() { assert(_mutex_groups); return *_mutex_groups; }
+    const MutexGroups& getMutexGroups() const { assert(_mutex_groups); return *_mutex_groups; }
+    /** Install mutex groups computed after the core HTN model has been built. */
+    void setMutexGroups(std::unique_ptr<MutexGroups> mutexGroups) { _mutex_groups = std::move(mutexGroups); }
+
+    const USigSet& getInitState() const { return _init_state; }
+    const Reduction& getInitReduction() const;
     const USignature& getBlankActionSig();
-    Action getGoalAction();
-    void printStatistics();
-    size_t getNumFreeArguments(const Reduction& r);
-    
+    const Action& getGoalAction() const { return _goal_action; }
     const NodeHashMap<int, Action>& getActionTemplates() const;
     NodeHashMap<int, Reduction>& getReductionTemplates();
 
@@ -175,10 +149,11 @@ public:
     const Action& getActionFromRepetition(int vChildId) const;
 
     const std::vector<int>& getSorts(int nameId) const;
-    const std::vector<int> getSortsParamsFromSigForFA(const USignature& eff) const;
+    /** Return the declared sort of each argument without parsing generated variable names. */
+    std::vector<int> getArgumentSorts(const USignature& signature) const;
     const FlatHashSet<int>& getConstantsOfSort(int sort) const;
-    const int getPrimarySortOfQConstant(int qconst) const;
-    const FlatHashSet<int>& getSortsOfQConstant(int qconst);
+    int getPrimarySortOfQConstant(int qconst) const;
+    const FlatHashSet<int>& getSortsOfQConstant(int qconst) const;
     size_t getOriginPositionIdOfQConstant(int qconst) const;
     const FlatHashSet<int>& getDomainOfQConstant(int qconst) const;
     std::optional<std::vector<int>> takeQConstantDomainForOperation(int qconst, const USignature& op);
@@ -188,7 +163,7 @@ public:
      * argument in the operation.
      *
      * Example: operation (?x:A, ?y:B), condition p(?y, ?x) -> {B, A}.
-     * Sort entries for fixed constants are not used during decoding.
+     * Fixed constants retain the corresponding predicate argument sort.
      */
     std::vector<int> getConditionSortsFromOperation(const USignature& condition, const USignature& operation);
 
@@ -206,9 +181,8 @@ public:
     std::optional<Action> instantiateWithQConstants(const Action& action, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
     std::optional<Reduction> instantiateWithQConstants(const Reduction& reduction, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
 
-    USignature getNormalizedLifted(const USignature& opSig, std::vector<int>& placeholderArgs);
-    
-    USignature cutNonoriginalTaskArguments(const USignature& sig);
+    /** Remove parser-introduced auxiliary arguments before printing the original task. */
+    USignature restoreOriginalTaskArity(const USignature& signature) const;
     /** Return whether an action is the compiled replacement of a single-subtask reduction. */
     bool isPrimitivizedAction(int actionNameId) const;
     /** Return the original reduction and child action represented by a primitivized action. */
@@ -219,105 +193,21 @@ public:
     int nameId(const std::string& name);
     std::string toString(int id) const;
 
-    inline bool isVariable(int c) const {
-        if (c < 0) return true;
-        assert(_name_back_table.count(c) || Log::d("%i not in name_back_table !\n", c));
-        return _var_ids.count(c);
-    }
+    /** Create a traversal-local argument name and preserve variable sort metadata. */
+    int createRenamedArgument(int argumentId, const std::string& suffix);
+
+    bool isVariable(int argument) const;
 
     inline bool isQConstant(int c) const {
-        return c > _name_table_running_id;
+        return _q_constants.contains(c);
     }
 
-    inline bool hasQConstants(const USignature& sig) const {
-        for (const int& arg : sig._args) if (isQConstant(arg)) return true;
-        return false;
-    }
-
-    bool isUnifiable(const Signature& from, const Signature& to, FlatHashMap<int, int>* substitution = nullptr) {
-        if (from._negated != to._negated) return false;
-        return isUnifiable(from._usig, to._usig, substitution);
-    }
-
-    bool isUnifiable(const USignature& from, const USignature& to, FlatHashMap<int, int>* substitution = nullptr) {
-        if (from._name_id != to._name_id) return false;
-        if (from._args.size() != to._args.size()) return false;
-
-        for (size_t i = 0; i < from._args.size(); i++) {
-
-            if (!isVariable(from._args[i])) {
-                // Constant parameter: must be equal
-                if (from._args[i] != to._args[i]) return false;
-
-            } else if (isVariable(to._args[i])) {
-                // Both are variables: fine
-                if (substitution != nullptr) {
-                    (*substitution)[from._args[i]] = to._args[i];
-                }
-            
-            } else {
-                // Variable to constant: fine
-                if (substitution != nullptr) {
-                    (*substitution)[from._args[i]] = to._args[i];
-                }
-            }
-        }
-        return true;
-    }
-
-    std::vector<int> getFreeArgPositions(const std::vector<int>& sigArgs) {
-        std::vector<int> argPositions;
-        for (size_t i = 0; i < sigArgs.size(); i++) {
-            int arg = sigArgs[i];
-            if (isVariable(arg)) argPositions.push_back(i);
-        }
-        return argPositions;
-    }
-
-    inline bool isFullyGround(const USignature& sig) {
-        for (int arg : sig._args) if (isVariable(arg)) return false;
-        return true;
-    }
-
-    inline bool hasSomeInstantiation(const USignature& sig) {
-        const std::vector<int>& types = getSorts(sig._name_id);
-        //log("%s , %i\n", TOSTR(sig), types.size());
-        assert(types.size() == sig._args.size());
-        for (size_t argPos = 0; argPos < sig._args.size(); argPos++) {
-            int sort = types[argPos];
-            if (getConstantsOfSort(sort).empty()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    bool hasConsistentlyTypedArgs(const USignature& sig) {
-        const std::vector<int>& taskSorts = getSorts(sig._name_id);
-        for (size_t argPos = 0; argPos < sig._args.size(); argPos++) {
-            int sort = taskSorts[argPos];
-            int arg = sig._args[argPos];
-            if (isVariable(arg)) continue; // skip variable
-            bool valid = false;
-            if (isQConstant(arg)) {
-                // q constant: TODO check if SOME SUBSTITUTEABLE CONSTANT has the correct sort
-                for (int cnst : getDomainOfQConstant(arg)) {
-                    if (getConstantsOfSort(sort).count(cnst)) {
-                        valid = true;
-                        break;
-                    }
-                }
-            } else {
-                // normal constant: check if it is contained in the correct sort
-                valid = getConstantsOfSort(sort).count(arg);
-            }
-            if (!valid) {
-                //log("arg %s not of sort %s => %s invalid\n", TOSTR(arg), TOSTR(sort), TOSTR(sig));
-                return false;
-            } 
-        }
-        return true;
-    }
+    bool hasQConstants(const USignature& signature) const;
+    bool isUnifiable(const Signature& from, const Signature& to, FlatHashMap<int, int>* substitution = nullptr) const;
+    bool isUnifiable(const USignature& from, const USignature& to, FlatHashMap<int, int>* substitution = nullptr) const;
+    bool isFullyGround(const USignature& signature) const;
+    bool hasSomeInstantiation(const USignature& signature) const;
+    bool hasConsistentlyTypedArgs(const USignature& signature) const;
 
     inline bool isPredicate(int nameId) const {
         return _predicate_ids.count(nameId);
@@ -332,50 +222,10 @@ public:
     }
 
     inline size_t getNumberOfQConstants() const {
-        return _q_constant_origin_position_ids.size();
+        return _q_constants.size();
     }
 
-    std::vector<TypeConstraint> getQConstantTypeConstraints(const USignature& sig) {
-
-        std::vector<TypeConstraint> constraints;
-
-        const std::vector<int>& taskSorts = getSorts(sig._name_id);
-        for (size_t argPos = 0; argPos < sig._args.size(); argPos++) {
-            int sigSort = taskSorts[argPos];
-            int arg = sig._args[argPos];
-            
-            // Not a q-constant here
-            if (!isQConstant(arg)) {
-                // Must be of valid type
-                assert(getConstantsOfSort(sigSort).count(arg));
-                continue;
-            }
-
-            // Type is fine no matter which substitution is chosen
-            if (getSortsOfQConstant(arg).count(sigSort)) continue;
-
-            // Type is NOT fine, at least for some substitutions
-            std::vector<int> good;
-            std::vector<int> bad;
-            const FlatHashSet<int>& validConstants = getConstantsOfSort(sigSort);
-            // For each value the qconstant can assume:
-            for (int c : getDomainOfQConstant(arg)) {
-                // Is that constant of correct type?
-                if (validConstants.count(c)) good.push_back(c);
-                else bad.push_back(c);
-            }
-
-            if (good.size() >= bad.size()) {
-                // arg must be EITHER of the GOOD ones
-                constraints.emplace_back(arg, true, std::move(good));
-            } else {
-                // arg must be NEITHER of the BAD ones
-                constraints.emplace_back(arg, false, std::move(bad));
-            }
-        }
-
-        return constraints;
-    }
+    std::vector<TypeConstraint> getQConstantTypeConstraints(const USignature& signature) const;
 
     inline void addRecursiveMethod(int nameId) {
         _name_id_recursive_methods.insert(nameId);
@@ -390,108 +240,17 @@ public:
     NodeHashMap<int, FlatHashSet<int>>& getConstantsBySort() {return _constants_by_sort;}
     std::string getPredicateInCorrectCase(std::string pred) const;
 
-
-
-    void setGroundPosAndNegFacts(const std::vector<USignature>& posFacts, const std::vector<USignature>& negFacts) {
-        _ground_pos_facts = posFacts;
-
-        // Add all equality predicates to the set of ground pos facts
-        for (int eqPredId : _equality_predicates) {
-
-            // For each pair of constants of correct sorts
-            const std::vector<int>& sorts = getSorts(eqPredId);
-            assert(sorts[0] == sorts[1]);
-            for (int c1 : _constants_by_sort[sorts[0]]) {
-                for (int c2 : _constants_by_sort[sorts[1]]) {
-
-                    // Add equality lit to state if the two are equal
-                    if (c1 != c2) continue;
-                    std::vector<int> args;
-                    args.push_back(c1); args.push_back(c2);
-                    USignature eqPredSig(eqPredId, std::move(args));
-                    _ground_pos_facts.push_back(eqPredSig);
-                }
-            }
-        }
-
-        // Add all the negative facts at the end
-        for (const USignature& negFact : negFacts) {
-            _ground_pos_facts.push_back(negFact);
-        }
-
-
-        _cutoff_neg_facts = _ground_pos_facts.size() - negFacts.size();
-
-        all_preds_pos = BitVec(_ground_pos_facts.size(), true);
-        for (size_t i = _cutoff_neg_facts; i < _ground_pos_facts.size(); ++i) {
-            all_preds_pos.clear(i);
-        }
-
-
-        // Create the map for fast access
-        _ground_facts_map.clear();
-        for (size_t i = 0; i < _ground_pos_facts.size(); ++i) {
-            const USignature& fact = _ground_pos_facts[i];
-            _ground_facts_map[fact] = i;
-        }
-    }
-
-    int getGroundFactId(const USignature& sig, bool negated) const {
-        auto it = _ground_facts_map.find(sig);
-        if (it != _ground_facts_map.end()) {
-            int id = it->second;
-            if (!negated && id > _cutoff_neg_facts) {
-                // If the fact is positive and outside the cutoff, return -1
-                return -1;
-            } 
-            return id; // Found
-        }
-        return -1; // Not found
-    }
-
-    int getNumPositiveGroundFacts() const {
-        return _ground_pos_facts.size();
-    }
-    const USignature& getGroundPositiveFact(int idx) const {
-        assert(idx >= 0 && idx < _ground_pos_facts.size() || Log::e("Index out of bounds: %i, size: %zu\n", idx, _ground_pos_facts.size()));
-        return _ground_pos_facts[idx];
-    }
-    /** Finds only matching signatures already present in the indexed ground-fact table. */
-    BitVec findMatchingGroundFactIds(const USignature& signature, bool negated, const std::vector<int>& argumentSorts = {});
-
 private:
+    friend class HtnInstanceBuilder;
+    friend class HtnStatistics;
 
-    BitVec filterGroundFactIds(int name_id, bool negated, const std::vector<int>& sorts_per_args, const std::vector<int>& restrictive_sorts_per_args = std::vector<int>(), const std::vector<int>& fixed_constant = std::vector<int>());
-    inline std::string key_sort(int sort, int idx)   { return "S_" + std::to_string(sort) + '_' + std::to_string(idx); }
-    inline std::string key_const(int cst,  int idx)  { return "C_" + std::to_string(cst)  + '_' + std::to_string(idx); }
-
-    void primitivizeSimpleReductions();
-    
-    std::vector<int> convertArguments(int predNameId, const std::vector<std::pair<std::string, std::string>>& vars);
-    std::vector<int> convertArguments(int predNameId, const std::vector<std::string>& vars);
-    USignature convertSignature(const task& task);
-    USignature convertSignature(const method& method);
-    Signature  convertSignature(int parentNameId, const literal& literal);
-
-    void extractPredSorts(const predicate_definition& p);
-    void extractTaskSorts(const task& t);
-    void extractMethodSorts(const method& m);
-    void extractConstants();
-    void extractStaticPredicates();
-    SigSet extractEqualityConstraints(int opId, const std::vector<literal>& lits, const std::vector<std::pair<std::string, std::string>>& vars);
-    SigSet extractGoals();
-
-    Reduction& createReduction(method& method);
-    Action& createAction(const task& task);
+    /** Construct an empty internal model; HtnInstanceBuilder populates it. */
+    explicit HtnInstance(Parameters& params);
 
     std::optional<std::vector<int>> instantiateArgumentsWithQConstants(const HtnOp& operation, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
     int createQConstant(const std::string& name, const FlatHashSet<int>& domain, size_t originPositionId);
-    void initQConstantSorts(int id, const FlatHashSet<int>& domain);
 
-    void loadMutexes();
-    std::vector<std::string> topologicalSort(const std::unordered_map<std::string, std::vector<std::string>>& graph, std::vector<std::string>& nodes);
-    void handleMacroActions();
-    
+    std::unique_ptr<MutexGroups> _mutex_groups;
 };
 
 #endif

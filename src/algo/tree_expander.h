@@ -8,7 +8,6 @@
 #include "data/position.h"
 #include "data/htn_instance.h"
 #include "algo/fact_analysis.h"
-#include "algo/method_effect_analysis.h"
 #include "algo/retroactive_pruning.h"
 #include "algo/domination_resolver.h"
 #include "data/tdg.h"
@@ -20,8 +19,7 @@ private:
     Statistics& _stats;
     Position* _root_position = nullptr;
     std::vector<Position*> _leaf_positions;
-    FactAnalysis _analysis;
-    MethodEffectAnalysis _method_effects;
+    FactAnalysis& _analysis;
     RetroactivePruning* _pruning = nullptr;
     DominationResolver _domination_resolver;
     TDG* _tdg = nullptr;
@@ -37,7 +35,7 @@ private:
     size_t _num_instantiated_reductions = 0;
 
 public:
-    TreeExpander(Parameters& params, HtnInstance& htn);
+    TreeExpander(Parameters& params, HtnInstance& htn, FactAnalysis& analysis);
 
     void attachPruning(RetroactivePruning& pruning) { _pruning = &pruning; }
     void attachTDG(TDG& tdg) { _tdg = &tdg; }
@@ -60,7 +58,6 @@ public:
     Position*& getRootPositionRef() { return _root_position; }
     std::vector<Position*>& getLeafPositions() { return _leaf_positions; }
     FactAnalysis& getAnalysis() { return _analysis; }
-    MethodEffectAnalysis& getMethodEffects() { return _method_effects; }
     size_t getNumRetroactivePrunings() const;
     size_t getNumRetroactivelyPrunedOps() const;
 
@@ -92,9 +89,9 @@ private:
     void addGroundEffect(OutgoingEffects& effects, const USignature& opSig, int factId, bool negated, EffectMode mode);
     void addGroundEffect(OutgoingEffects& effects, const USignature& opSig, BitVec facts, bool negated, EffectMode mode);
     /**
-     * Grounds an effect containing Q-constants, filters its decodings through
-     * the operation's substitution constraints, and registers the remaining
-     * decodings. Returns false when no valid ground decoding exists.
+     * Match a possibly lifted effect against indexed ground facts, filter any
+     * Q-constant assignments through the operation's constraints, and register
+     * the remaining decodings. Returns false when no valid decoding exists.
      */
     bool addInstantiatedEffect(OutgoingEffects& effects, Position& position, const USignature& opSig, const Signature& effect, EffectMode mode);
     bool isEffectDecodingAllowed(const std::vector<IntPair>& assignmentPath, const std::vector<const SubstitutionConstraint*>& sameQConstantConstraints, const std::vector<const SubstitutionConstraint*>& relatedConstraints) const;

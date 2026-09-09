@@ -6,19 +6,19 @@
 #include "util/names.h"
 #include "sat/plan_optimizer.h"
 
-Planner::Planner(Parameters& params, HtnInstance& htn)
+Planner::Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, TDG* tdg)
         : _params(params),
           _htn_instance(htn),
-          _tree_expander(_params, _htn_instance),
+          _tree_expander(_params, _htn_instance, analysis),
           _root_position(_tree_expander.getRootPositionRef()),
           _leaf_positions(_tree_expander.getLeafPositions()),
-          _analysis(_tree_expander.getAnalysis()),
-          _method_effects(_tree_expander.getMethodEffects()),
+          _analysis(analysis),
           _encoding(_params, _htn_instance, _analysis, _root_position, _leaf_positions),
           _pruning(std::make_unique<RetroactivePruning>(_encoding)),
           _plan_writer(_htn_instance, _params),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _optimal(_params.isNonzero("optimal")),
+          _tdg(tdg),
           _separate_tasks(_params.isNonzero("separateTasks")
                   && _htn_instance.getInitReduction().getSubtasks().size() > 1
                   && _use_sibylsat_expansion
@@ -28,19 +28,10 @@ Planner::Planner(Parameters& params, HtnInstance& htn)
 }
 
 void Planner::configure() {
-    PreconditionInference::infer(_htn_instance, _method_effects,
-            PreconditionInference::MinePrecMode(_params.getIntParam("mp")));
-    if (_htn_instance.getParams().isNonzero("mutex")) {
-        _htn_instance._sas_plus->cleanMutexGroupsWithPandaPiGrounderPreprocessingFacts(
-                _analysis.getGroundPosFacts());
-    }
-    if (_optimal) {
-        _tdg.emplace(_htn_instance);
-        _tree_expander.attachTDG(*_tdg);
-    }
+    if (_tdg != nullptr) _tree_expander.attachTDG(*_tdg);
     _tree_expander.attachPruning(*_pruning);
     if (_separate_tasks) {
-        _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn_instance);
+        _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn_instance, _analysis);
     }
 }
 

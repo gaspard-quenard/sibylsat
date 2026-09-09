@@ -12,6 +12,7 @@
 
 #include "data/htn_instance.h"
 #include "algo/planner.h"
+#include "preprocessing/problem_preprocessor.h"
 #include "util/timer.h"
 #include "util/signal_manager.h"
 #include "util/random.h"
@@ -74,10 +75,8 @@ void run(Parameters& params) {
 
     Statistics::getInstance().beginTiming(TimingStage::TOTAL);
 
-    HtnInstance htn(params);
-    // Planner planner(params, htn);
-
-    std::unique_ptr<Planner> planner = std::make_unique<Planner>(params, htn);
+    PlanningContext context = preprocessProblem(params);
+    std::unique_ptr<Planner> planner = std::make_unique<Planner>(params, *context.htn, *context.factAnalysis, context.tdg.get());
     int result = planner->findPlan();
     Log::i("End after result %d\n", result);
 
@@ -86,8 +85,10 @@ void run(Parameters& params) {
         // Clean singleton statistics before creating the new planner.
         Statistics::getInstance().reset();
 
-        // Resetting the unique_ptr will delete the current planner and create a new one.
-        planner = std::make_unique<Planner>(params, htn);
+        // Reuse immutable preprocessing results and reset only search-specific analysis state.
+        planner.reset();
+        context.resetForNewSearch();
+        planner = std::make_unique<Planner>(params, *context.htn, *context.factAnalysis, context.tdg.get());
         result = planner->findPlan();
         Log::i("End after result %d\n", result);
     }

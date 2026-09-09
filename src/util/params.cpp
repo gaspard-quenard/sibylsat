@@ -138,10 +138,10 @@ void Parameters::printUsage() {
     Log::setForcePrint(false);
 }
 
-std::string Parameters::getDomainFilename() {
+const std::string& Parameters::getDomainFilename() const {
   return _domain_filename;
 }
-std::string Parameters::getProblemFilename() {
+const std::string& Parameters::getProblemFilename() const {
   return _problem_filename;
 }
 

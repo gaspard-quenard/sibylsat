@@ -3,7 +3,7 @@
 
 #include "algo/separate_tasks_scheduler.h"
 
-SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn)
+SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& facts)
     : _num_init_tasks_resolved(0),
       _init_task_network_size(htn.getInitReduction().getSubtasks().size()),
       _current_task_index(1),
@@ -14,6 +14,7 @@ SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn)
       _num_pos_done(0),
       _restart_planner(false),
       _htn(htn),
+      _facts(facts),
       _domain_name(getDomaineNameFromDomainFile(htn.getParams().getDomainFilename()))
 {
     if (!_settings_manager.has_setting(_domain_name, "independent_init_tasks")) {
@@ -24,10 +25,10 @@ SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn)
     _init_time_spend_to_solve_tasks = std::chrono::high_resolution_clock::now();
 
     const USigSet& initState = _htn.getInitState();
-    _init_state_pos = BitVec(_htn.getNumPositiveGroundFacts());
-    _init_state_neg = BitVec(_htn.getNumPositiveGroundFacts());
-    for (int i = 0; i < _htn.getNumPositiveGroundFacts(); ++i) {
-        const USignature& iSig = _htn.getGroundPositiveFact(i);
+    _init_state_pos = BitVec(_facts.getNumGroundFacts());
+    _init_state_neg = BitVec(_facts.getNumGroundFacts());
+    for (int i = 0; i < _facts.getNumGroundFacts(); ++i) {
+        const USignature& iSig = _facts.getGroundFact(i);
         // Log::i("Init Fact %d: %s\n", i, TOSTR(iSig));
         if (initState.count(iSig)) {
             _init_state_pos.set(i);
@@ -186,7 +187,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                 if (posPrecondition._negated)
                     continue; // Only consider positive preconditions
 
-                int predId = _htn.getGroundFactId(posPrecondition._usig, /*negated=*/false);
+                int predId = _facts.getGroundFactId(posPrecondition._usig, /*negated=*/false);
                 if (predId < 0 || !_reachable_state_pos_facts_after_tasks_accomplished.test(predId))
                 {
                     int varAction = leaf.getVariableOrZero(VarType::OP, aSig);
@@ -206,7 +207,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                     continue; // Only consider negative effects
 
                 Log::d("  Adding negative effect %s to reachable state after tasks accomplished\n", TOSTR(negEffect._usig));
-                int predId = _htn.getGroundFactId(negEffect._usig, /*negated=*/true);
+                int predId = _facts.getGroundFactId(negEffect._usig, /*negated=*/true);
                 if (predId >= 0) {
                     _reachable_state_pos_facts_after_tasks_accomplished.clear(predId);
                     _reachable_state_neg_facts_after_tasks_accomplished.set(predId);
@@ -219,7 +220,7 @@ void SeparateTasksScheduler::updateReachableStateAfterTasksAccomplished(Encoding
                     continue; // Only consider positive effects
 
                 Log::d("  Adding positive effect %s to reachable state after tasks accomplished\n", TOSTR(posEffect._usig));
-                int predId = _htn.getGroundFactId(posEffect._usig, /*negated=*/false);
+                int predId = _facts.getGroundFactId(posEffect._usig, /*negated=*/false);
                 if (predId >= 0) {
                     _reachable_state_neg_facts_after_tasks_accomplished.clear(predId);
                     _reachable_state_pos_facts_after_tasks_accomplished.set(predId);

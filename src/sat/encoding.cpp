@@ -341,10 +341,10 @@ void Encoding::encodeOperationVariables(Position& newPos) {
 }
 
 BitVec Encoding::encodeRelevantFactsAtFrontierStart(Position& position) {
-    BitVec newlyRelevantFactIds(_htn.getNumPositiveGroundFacts());
+    BitVec newlyRelevantFactIds(_analysis.getNumGroundFacts());
 
     for (const int predId : _analysis.getRelevantFacts()) {
-        const USignature& fact = _htn.getGroundPositiveFact(predId);
+        const USignature& fact = _analysis.getGroundFact(predId);
         if (position.hasVariable(VarType::FACT, fact)) continue;
 
         const int factVar = _vars.getOrCreateVariable(VarType::FACT, position, fact);
@@ -428,7 +428,7 @@ void Encoding::encodeFrameAxioms(Position& source, Position& destination, const 
         }
     } else {
         for (const int factId : *selectedFactIds) {
-            const USignature& fact = _htn.getGroundPositiveFact(factId);
+            const USignature& fact = _analysis.getGroundFact(factId);
             const int sourceFactVar = source.getVariableOrZero(VarType::FACT, fact);
             if (sourceFactVar == 0) {
                 Log::e("Newly relevant fact %s has no variable at source position %zu\n", TOSTR(fact), source.getPositionId());
@@ -466,7 +466,7 @@ Encoding::EffectSupports Encoding::findEffectSupports(OutgoingEffects& effects, 
 }
 
 void Encoding::encodeFrameAxiomForFact(Position& source, Position& destination, const Encoding::EncodingEnvironment& env, const USignature& fact, int sourceFactVar, bool nonprimFactSupport, bool sourceHasPrimitiveCandidates, int sourceVarPrim, bool skipRedundantFrameAxioms, USigSet& positiveFacts) {
-    const int factId = _htn.getGroundFactId(fact, true);
+    const int factId = _analysis.getGroundFactId(fact, true);
     if (factId < 0) {
         Log::e("factId: %i, fact: %s, var: %i\n", factId, TOSTR(fact), sourceFactVar);
         exit(1);
@@ -518,7 +518,7 @@ void Encoding::encodeFrameAxiomForFact(Position& source, Position& destination, 
             // Non-primitiveness wildcard
             if (!nonprimFactSupport && sourceVarPrim != 0) cls.push_back(-sourceVarPrim);
 
-            if (_mutex_predicates && change.makesFactTrue && (_htn._sas_plus != nullptr && _htn._sas_plus->isInMutexGroup(fact))) {
+            if (_mutex_predicates && change.makesFactTrue && _htn.hasMutexGroups() && _htn.getMutexGroups().containsFact(fact)) {
                 positiveFacts.insert(fact);
             }
 
@@ -1078,11 +1078,11 @@ void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvi
 
     // Only groups containing a fact that may become true need consideration.
     for (const USignature& fact : possibleEffects) {
-        for (int groupId : _htn._sas_plus->getGroupsMutexesOfPred(fact)) {
+        for (int groupId : _htn.getMutexGroups().getGroupIdsForFact(fact)) {
             if (encodedGroupIds.count(groupId)) continue;
 
             mutexFactVars.clear();
-            const USigSet& factsInGroup = _htn._sas_plus->getPredsInGroup(groupId);
+            const USigSet& factsInGroup = _htn.getMutexGroups().getFactsInGroup(groupId);
             mutexFactVars.reserve(factsInGroup.size());
 
             bool groupIsFullyDefined = true;

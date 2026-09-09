@@ -28,8 +28,8 @@ public:
 	void init(int argc, char** argv);
 	void printUsage();
 	void setDefaults();
-	std::string getDomainFilename();
-	std::string getProblemFilename();
+	const std::string& getDomainFilename() const;
+	const std::string& getProblemFilename() const;
 	void printParams();
 	void setParam(const char* name);
 	void setParam(const char* name, const char* value);

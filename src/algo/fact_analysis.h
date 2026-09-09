@@ -4,6 +4,7 @@
 
 #include <optional>
 
+#include "data/ground_fact_index.h"
 #include "data/htn_instance.h"
 #include "util/bitvec.h"
 
@@ -12,11 +13,14 @@ class FactAnalysis {
 private:
 
     HtnInstance& _htn;
+    GroundFactIndex _ground_facts;
 
     USigSet _init_state;
 
     BitVec _init_state_pos;
     BitVec _init_state_neg;
+    BitVec _original_init_state_pos;
+    BitVec _original_init_state_neg;
     BitVec _reachable_pos_facts;
     BitVec _reachable_neg_facts;
     BitVec _relevant_facts;
@@ -56,6 +60,15 @@ public:
         _reachable_neg_facts = _init_state_neg;
     }
 
+    /** Restore mutable reachability and relevance state before a fresh search. */
+    void resetForNewSearch() {
+        _init_state_pos = _original_init_state_pos;
+        _init_state_neg = _original_init_state_neg;
+        _reachable_pos_facts = _init_state_pos;
+        _reachable_neg_facts = _init_state_neg;
+        _relevant_facts = BitVec(getNumGroundFacts());
+    }
+
     // Update the "initial state" used by resetReachability(). Call this when the effective
     // starting state of the search shifts (e.g. after a batch of tasks is accomplished).
     void updateInitialState(const BitVec& pos, const BitVec& neg) {
@@ -86,7 +99,7 @@ public:
     }
 
     bool isInitiallyReachable(const int predId, bool negated) const {
-        const USignature& fact = _htn.getGroundPositiveFact(predId);
+        const USignature& fact = getGroundFact(predId);
         if (_htn.isEqualityPredicate(fact._name_id)) {
             return negated ? fact._args[0] != fact._args[1] : fact._args[0] == fact._args[1];
         }
@@ -160,13 +173,13 @@ public:
         }
         
         if (!_htn.hasQConstants(sig)) {
-            int predId = _htn.getGroundFactId(sig, negated);
+            int predId = getGroundFactId(sig, negated);
             return predId >= 0 && isReachable(predId, negated);
         }
         // Q-Fact:
-        BitVec result = _htn.findMatchingGroundFactIds(sig, negated, _htn.getSorts(sig._name_id));
+        BitVec result = findMatchingGroundFactIds(sig, negated, _htn.getSorts(sig._name_id));
         // for (size_t predId : result) {
-            // Log::i("Sig %s can be grounded to %s\n", TOSTR(sig), TOSTR(_htn.getGroundPositiveFact(predId)));
+            // Log::i("Sig %s can be grounded to %s\n", TOSTR(sig), TOSTR(getGroundFact(predId)));
         // }
         // If any of the instantiations is reachable, return true
         const BitVec& facts = negated ? _reachable_neg_facts : _reachable_pos_facts;
@@ -190,14 +203,14 @@ public:
     // }
 
     bool isRelevant(const USignature& fact, bool negated) {
-        int predId = _htn.getGroundFactId(fact, negated);
+        int predId = getGroundFactId(fact, negated);
         return predId >= 0 && _relevant_facts.test(predId);
     }
 
     void printRelevantFacts() {
         Log::i("Relevant facts:\n");
         for (int predId: _relevant_facts) {
-            Log::i("  %s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
+            Log::i("  %s\n", TOSTR(getGroundFact(predId)));
         }
     }
 
@@ -212,12 +225,21 @@ public:
     void printReachableFacts() {
         Log::i("Reachable facts:\n");
         for (int predId: _reachable_pos_facts) {
-            Log::i("  +%s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
+            Log::i("  +%s\n", TOSTR(getGroundFact(predId)));
         }
         for (int predId: _reachable_neg_facts) {
-            Log::i("  -%s\n", TOSTR(_htn.getGroundPositiveFact(predId)));
+            Log::i("  -%s\n", TOSTR(getGroundFact(predId)));
         }
     }
+
+    /** Return the ID of a grounded fact with the requested polarity, or -1 when absent. */
+    int getGroundFactId(const USignature& fact, bool negated) const { return _ground_facts.findFactId(fact, negated); }
+    /** Return the number of indexed positive and explicitly represented negative facts. */
+    size_t getNumGroundFacts() const { return _ground_facts.size(); }
+    /** Return the grounded signature represented by a fact ID. */
+    const USignature& getGroundFact(size_t factId) const { return _ground_facts.getFact(factId); }
+    /** Find indexed facts compatible with a possibly lifted or pseudo-ground signature. */
+    BitVec findMatchingGroundFactIds(const USignature& signature, bool negated, const std::vector<int>& argumentSorts = {});
 
 private:
     /**

@@ -20,6 +20,7 @@ class SeparateTasksScheduler {
     bool   _tcp_exponential_resolving;   // Whether to adjust _num_tasks_to_solve exponentially.
     bool   _add_tasks_as_clauses;         // Whether to add tasks accomplished as clauses or assumptions.
     HtnInstance& _htn;            // Reference to the HTN instance.
+    FactAnalysis& _facts;
 
     BitVec _init_state_pos;       // Positive initial state fact ids.
     BitVec _init_state_neg;       // Negative initial state fact ids.
@@ -57,7 +58,7 @@ public:
      *
      * @param htn The HTN instance.
      */
-    SeparateTasksScheduler(HtnInstance& htn);
+    SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& facts);
 
     /**
      * Display an advancement/progress bar showing how many tasks have been solved.
