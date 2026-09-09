@@ -74,7 +74,7 @@ int Planner::findPlan() {
         }
 
         if (mode.separateTasks) {
-            _separate_tasks_scheduler->displayAdvancementBar();
+            _separate_tasks_scheduler->displayProgress();
         }
 
         // Grow the search tree and encode the new frontier.
@@ -205,10 +205,10 @@ bool Planner::findPrimitiveSolutionInSearchTree() {
 }
 
 bool Planner::solveWithSeparateTasks() {
-    _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_encoding);
+    _separate_tasks_scheduler->applySolvedTaskConstraints(_encoding);
 
     const int assumptionsUntil =
-            _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size());
+            _separate_tasks_scheduler->getPrimitiveAssumptionBoundary(_leaf_positions.size());
     _encoding.addAssumptionsPrimPlan(/*permanent=*/false, /*assumptions_until=*/assumptionsUntil);
     if (_encoding.solve() != 10) {
         return false;
@@ -219,16 +219,16 @@ bool Planner::solveWithSeparateTasks() {
         return true;
     }
 
-    if (_separate_tasks_scheduler->addTasksAsClauses()) {
+    if (_separate_tasks_scheduler->commitsSolvedTasksPermanently()) {
         // Shift the analysis "initial state" to the post-task boundary state so that
         // resetReachability() naturally starts from there in the next expansion.
         _analysis.updateInitialState(
-            _separate_tasks_scheduler->getReachableStatePosFactsAfterTasksAccomplished(),
-            _separate_tasks_scheduler->getReachableStateNegFactsAfterTasksAccomplished()
+            _separate_tasks_scheduler->getPositiveFactsAfterSolvedTasks(),
+            _separate_tasks_scheduler->getNegativeFactsAfterSolvedTasks()
         );
         // Tell the expander where to start the next expansion (boundary position).
         _tree_expander.setActiveFrontierStart(
-            _separate_tasks_scheduler->getPositionsDone()
+            _separate_tasks_scheduler->getSolvedPositionCount()
         );
     }
 
@@ -239,7 +239,7 @@ bool Planner::findAbstractPlanInSearchTree() {
     Log::i("Failed to find a primitive solution... Trying to find an abstract plan...\n");
 
     if (_separate_tasks) {
-        _separate_tasks_scheduler->addAssumptionsForSolvedTasks(_encoding);
+        _separate_tasks_scheduler->applySolvedTaskConstraints(_encoding);
     }
 
     bool foundAbstractPlan = _encoding.solve() == 10;
@@ -254,7 +254,7 @@ bool Planner::findAbstractPlanInSearchTree() {
 
     Log::i("Found an abstract plan\n");
     const int leafLimit =
-            _separate_tasks ? _separate_tasks_scheduler->getAssumptionsUntil(_leaf_positions.size()) : -1;
+            _separate_tasks ? _separate_tasks_scheduler->getPrimitiveAssumptionBoundary(_leaf_positions.size()) : -1;
     collectLeavesToDevelopFromAbstractPlan(
             _encoding.getDecoder().extractFrontierPlan(Decoder::FrontierPlanMode::AllSelectedOperations), leafLimit);
     Log::i("Number of leaves to develop: %zu\n", _sibylsat_nodes_to_develop.size());

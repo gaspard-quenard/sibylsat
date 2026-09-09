@@ -4,127 +4,84 @@
 #include <chrono>
 #include <string>
 #include <vector>
-#include "sat/encoding.h"
-#include "data/position.h"
-#include "util/domain_settings_manager.h" 
-#include "util/log.h"
 
+#include "util/bitvec.h"
+#include "util/domain_settings_manager.h"
+#include "util/hashmap.h"
+
+class Encoding;
+class FactAnalysis;
+class HtnInstance;
+class Position;
+
+/**
+ * Solves the initial task network incrementally in consecutive batches.
+ *
+ * After each successful batch, the scheduler remembers the selected SAT
+ * variables and the state at the new task boundary. Domain settings determine
+ * whether solved batches are committed permanently or retained as assumptions
+ * that may be relaxed after a later failure.
+ */
 class SeparateTasksScheduler {
-
-    private:
-    int    _num_init_tasks_resolved;      // How many tasks have been solved so far.
-    int    _init_task_network_size;       // Total number of initial tasks.
-    int    _current_task_index;          // Next task index to try.
-    int    _num_tasks_to_solve;           // Number of tasks to solve in the next iteration.
-    int    _num_pos_done;               // Number of positions already solved.
-    bool   _tcp_exponential_resolving;   // Whether to adjust _num_tasks_to_solve exponentially.
-    bool   _add_tasks_as_clauses;         // Whether to add tasks accomplished as clauses or assumptions.
-    HtnInstance& _htn;            // Reference to the HTN instance.
+private:
+    HtnInstance& _htn;
     FactAnalysis& _facts;
 
-    BitVec _init_state_pos;       // Positive initial state fact ids.
-    BitVec _init_state_neg;       // Negative initial state fact ids.
-    BitVec _reachable_state_pos_facts_after_tasks_accomplished; // Positive reachable fact ids after tasks accomplished.
-    BitVec _reachable_state_neg_facts_after_tasks_accomplished; // Negative reachable fact ids after tasks accomplished.
+    const int _initial_task_count;
+    int _solved_task_count = 0;
+    int _target_task_count = 1;
+    int _next_batch_size = 1;
+    int _solved_position_count = 0;
 
-    std::string _domain_name;           // Name of the domain.
-    DomainSettingsManager _settings_manager;  // Individual domain settings manager. Here, it indicate for each domain whether their tasks are independent or not.
-    
-    std::chrono::high_resolution_clock::time_point _init_time_spend_to_solve_tasks;
-    long long _last_time_spend_to_solve_tasks;
-    
-    std::vector<NodeHashSet<int>> _vars_tasks_accomplished;     // Snapshots of SAT variables (tasks solved).
-    std::vector<int> _num_pos_done_at_each_step;                // Positions done at each step.
-    std::vector<int> _num_tasks_solved_at_each_step;            // Number of tasks solved in each step.
-    
-    int    _num_failed_sat;             // Counter for failed SAT attempts.
-    bool   _restart_planner;           // Flag to indicate that the planner must be restarted.
+    std::string _domain_name;
+    DomainSettingsManager _settings_manager;
+    bool _commit_solved_tasks_permanently;
+    bool _restart_planner = false;
 
-//     enum class Phase { EXPLORE, SEARCH };   // current optimisation stage
-// Phase      _phase             = Phase::EXPLORE;
+    BitVec _initial_positive_facts;
+    BitVec _initial_negative_facts;
+    BitVec _positive_facts_after_solved_tasks;
+    BitVec _negative_facts_after_solved_tasks;
 
-// size_t     _lo_batch          = 1;      // lower edge of the current bracket
-// size_t     _hi_batch          = 1;      // upper edge of the current bracket
-// size_t     _best_batch        = 1;      // batch size that gave best throughput so far
-// double     _best_tp           = 0.0;    // “best throughput” (tasks / ms)
+    std::chrono::high_resolution_clock::time_point _batch_start_time;
+    long long _previous_batch_duration_ms = 0;
 
-// static constexpr double EPS   = 0.03;   // 3 % improvement threshold
-/* -------------------------------------------- */
+    std::vector<NodeHashSet<int>> _solved_task_snapshots;
+    std::vector<int> _solved_position_count_history;
+    std::vector<int> _batch_size_history;
 
+    void saveSolvedBatch(Encoding& encoding, const std::vector<Position*>& leaves, int solvedPositionCount);
+    void adaptNextBatchSize();
+    void updateBoundaryState(Encoding& encoding, const std::vector<Position*>& leaves, int solvedPositionCount);
+    void replaySelectedActions(Encoding& encoding, const std::vector<Position*>& leaves, int solvedPositionCount);
+    void accumulatePossibleEffects(const std::vector<Position*>& leaves, int solvedPositionCount);
 
 public:
-    /**
-     * Constructor.
-     *
-     * @param htn The HTN instance.
-     * @param facts Ground facts and mutable reachability state.
-     * @param domainFilename Domain file used to select domain-specific scheduling settings.
-     */
     SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& facts, const std::string& domainFilename);
 
-    /**
-     * Display an advancement/progress bar showing how many tasks have been solved.
-     */
-    void displayAdvancementBar() const;
+    /** Display progress through the initial task network. */
+    void displayProgress() const;
 
+    /** Reapply the latest solved-prefix snapshot as clauses or assumptions. */
+    void applySolvedTaskConstraints(Encoding& encoding);
 
-    void updateReachableStateAfterTasksAccomplished(Encoding &enc, const std::vector<Position*> &leafPositions, int solvePositions);
-
-    /**
-     * If there are previously saved snapshots of SAT variables (from solved tasks),
-     * add them as assumptions in the encoding.
-     *
-     * @param enc The encoding object.
-     */
-    void addAssumptionsForSolvedTasks(Encoding &enc);
+    /** Return the exclusive frontier boundary for primitive-plan assumptions. */
+    int getPrimitiveAssumptionBoundary(int frontierSize) const;
 
     /**
-     * Given the current frontier size, compute the position until which to add assumptions.
-     *
-     * @param frontierSize The size of the current frontier.
-     * @return The computed index (assumptions_until).
+     * Record a successfully solved batch and choose the next target.
+     * @return true when the entire initial task network has been solved.
      */
-    int getAssumptionsUntil(int frontierSize) const;
+    bool updateAfterSolved(Encoding& encoding, const std::vector<Position*>& leaves);
 
-    int getPositionsDone() const {
-        return _num_pos_done;
-    }
+    /** Relax saved batches after an abstract-plan failure, or request a restart for a permanently committed prefix. */
+    bool handleAbstractPlanFailure(Encoding& encoding);
 
-    const bool addTasksAsClauses() const {
-        return _add_tasks_as_clauses;
-    }
-
-    /**
-     * When a SAT call has solved the current batch of tasks, update the scheduler state.
-     * This method saves a snapshot of the SAT variables and adjusts the number of tasks to solve next.
-     *
-     * @param enc The encoding object (to extract the snapshot).
-     * @param leafPositions The current ordered leaf positions.
-     * @return True if all initial tasks have been solved; false otherwise.
-     */
-    bool updateAfterSolved(Encoding &enc, const std::vector<Position*> &leafPositions);
-
-
-    const BitVec& getReachableStatePosFactsAfterTasksAccomplished() const {
-        return _reachable_state_pos_facts_after_tasks_accomplished;
-    }
-    const BitVec& getReachableStateNegFactsAfterTasksAccomplished() const {
-        return _reachable_state_neg_facts_after_tasks_accomplished;
-    }
-
-    /**
-     * In case the abstract plan cannot be found, relax the previously added assumptions.
-     * Depending on the setting, this may trigger a restart of the full planner.
-     *
-     * @param enc The encoding object.
-     * @return True if a abstract plan was eventually found; false otherwise.
-     */
-    bool handleAbstractPlanFailure(Encoding &enc);
-
-    /**
-     * @return True if the scheduler indicates that the full planner must be restarted.
-     */
-    bool mustRestartPlanner() const;
+    int getSolvedPositionCount() const { return _solved_position_count; }
+    bool commitsSolvedTasksPermanently() const { return _commit_solved_tasks_permanently; }
+    const BitVec& getPositiveFactsAfterSolvedTasks() const { return _positive_facts_after_solved_tasks; }
+    const BitVec& getNegativeFactsAfterSolvedTasks() const { return _negative_facts_after_solved_tasks; }
+    bool mustRestartPlanner() const { return _restart_planner; }
 };
 
-#endif // SEPARATE_TASKS_SCHEDULER_H
+#endif
