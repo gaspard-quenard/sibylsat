@@ -82,13 +82,6 @@ USigSet HtnInstanceBuilder::extractInitialState(HtnInstance& htn, const LiftedPr
     for (const LiftedGroundLiteral& fact : problem.init) {
         if (fact.positive) result.emplace(htn.nameId(fact.predicate), convertArguments(htn, htn.nameId(fact.predicate), fact.args));
     }
-    for (int equalityPredicateId : htn._equality_predicates) {
-        const std::vector<int>& sorts = htn.getSorts(equalityPredicateId);
-        assert(sorts[0] == sorts[1]);
-        for (int constant : htn._constants_by_sort.at(sorts[0])) {
-            result.emplace(equalityPredicateId, std::vector<int>{constant, constant});
-        }
-    }
     return result;
 }
 

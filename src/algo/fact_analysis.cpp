@@ -32,8 +32,17 @@ FactAnalysis::FactAnalysis(HtnInstance& htn, QConstantManager& qConstants, Groun
     _init_state_neg = BitVec(numGroundFacts);
     _relevant_facts = BitVec(numGroundFacts);
     for (int factId = 0; factId < numGroundFacts; factId++) {
-        if (_init_state.count(getGroundFact(factId))) _init_state_pos.set(factId);
-        else _init_state_neg.set(factId);
+        const USignature& fact = getGroundFact(factId);
+        // Equality is interpreted by the planner and is therefore absent from the HDDL initial state.
+        if (_htn.isEqualityPredicate(fact._name_id)) {
+            assert(fact._args.size() == 2);
+            if (fact._args[0] == fact._args[1]) _init_state_pos.set(factId);
+            else _init_state_neg.set(factId);
+        } else if (_init_state.count(fact)) {
+            _init_state_pos.set(factId);
+        } else {
+            _init_state_neg.set(factId);
+        }
     }
     _original_init_state_pos = _init_state_pos;
     _original_init_state_neg = _init_state_neg;
