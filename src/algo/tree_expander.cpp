@@ -4,12 +4,13 @@
 #include "tree_expander.h"
 #include "util/log.h"
 
-TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn, FactAnalysis& analysis)
+TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis)
         : _params(params),
           _htn(htn),
+          _q_constants(qConstants),
           _stats(Statistics::getInstance()),
           _analysis(analysis),
-          _domination_resolver(_htn),
+          _domination_resolver(_q_constants),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _nonprimitive_support(_params.isNonzero("nps")),
           _optimal(_params.isNonzero("optimal")) {}
@@ -81,7 +82,7 @@ void TreeExpander::printStatistics() const {
     Log::i("# instantiated positions: %zu\n", _num_instantiated_positions);
     Log::i("# instantiated actions: %zu\n", _num_instantiated_actions);
     Log::i("# instantiated reductions: %zu\n", _num_instantiated_reductions);
-    Log::i("# introduced pseudo-constants: %zu\n", _htn.getNumberOfQConstants());
+    Log::i("# introduced pseudo-constants: %zu\n", _q_constants.size());
     Log::i("# retroactive prunings: %zu\n", getNumRetroactivePrunings());
     Log::i("# retroactively pruned operations: %zu\n", getNumRetroactivelyPrunedOps());
     Log::i("# dominated operations: %zu\n", _domination_resolver.getNumDominatedOps());
@@ -271,13 +272,13 @@ void TreeExpander::mergeCompatibleConstraints(Position& position, const USignatu
 
 std::optional<SubstitutionConstraint> TreeExpander::analyzePrecondition(Position& position, const USignature& operationSig, const Signature& precondition, bool registerDynamicQFact) {
     const USignature& unsignedPrecondition = precondition.getUnsigned();
-    if (!_htn.hasQConstants(unsignedPrecondition)) {
+    if (!_q_constants.containsAny(unsignedPrecondition)) {
         analyzeGroundPrecondition(precondition);
         return std::nullopt;
     }
 
     const std::vector<int> sorts = _htn.getConditionSortsFromOperation(unsignedPrecondition, operationSig);
-    const std::vector<int> qArgumentIndices = SubstitutionConstraint::getQArgumentIndicesByDomainSize(_htn, unsignedPrecondition._args, sorts);
+    const std::vector<int> qArgumentIndices = SubstitutionConstraint::getQArgumentIndicesByDomainSize(_q_constants, _htn, unsignedPrecondition._args, sorts);
 
     if (_htn.isEqualityPredicate(unsignedPrecondition._name_id)) {
         return buildEqualityPreconditionConstraint(precondition, sorts, qArgumentIndices);
@@ -285,7 +286,7 @@ std::optional<SubstitutionConstraint> TreeExpander::analyzePrecondition(Position
     if (_htn.isStaticPredicate(unsignedPrecondition._name_id)) {
         return buildStaticPreconditionConstraint(precondition, sorts, qArgumentIndices);
     }
-    const std::vector<std::vector<int>> eligibleArguments = _htn.getCandidateArgumentDomains(unsignedPrecondition, sorts);
+    const std::vector<std::vector<int>> eligibleArguments = _q_constants.getCandidateArgumentDomains(unsignedPrecondition, sorts);
     return buildFluentPreconditionConstraint(position, precondition, eligibleArguments, qArgumentIndices, registerDynamicQFact);
 }
 
@@ -316,7 +317,7 @@ SubstitutionConstraint TreeExpander::buildEqualityPreconditionConstraint(const S
     SubstitutionConstraint constraint(collectQConstants(fact, qArgumentIndices));
 
     // Equality needs every candidate assignment because equality facts are not fully grounded in the fact table.
-    for (const USignature& decoding : _htn.enumerateCandidateDecodings(fact, sorts)) {
+    for (const USignature& decoding : _q_constants.enumerateCandidateDecodings(fact, sorts)) {
         const bool holds = precondition._negated ? decoding._args[0] != decoding._args[1] : decoding._args[0] == decoding._args[1];
         const auto path = SubstitutionConstraint::toAssignmentPath(fact._args, decoding._args, qArgumentIndices);
         if (holds) constraint.allow(path);
@@ -356,7 +357,7 @@ SubstitutionConstraint TreeExpander::buildFluentPreconditionConstraint(Position&
     auto representation = SubstitutionConstraint::UNDECIDED;
     if (chooseRepresentationFromSample) {
         size_t numReachableSamples = 0;
-        for (const USignature& decoding : _htn.sampleCandidateDecodings(fact, eligibleArguments, sampleSize)) {
+        for (const USignature& decoding : _q_constants.sampleCandidateDecodings(fact, eligibleArguments, sampleSize)) {
             const int factId = _analysis.getGroundFactId(decoding, precondition._negated);
             if (factId >= 0 && _analysis.isReachable(factId, precondition._negated)) numReachableSamples++;
         }
@@ -365,7 +366,7 @@ SubstitutionConstraint TreeExpander::buildFluentPreconditionConstraint(Position&
     }
 
     // Reachability determines valid substitutions. Non-invariant decodings also need SAT fact variables.
-    for (const USignature& decoding : _htn.enumerateCandidateDecodings(fact, eligibleArguments)) {
+    for (const USignature& decoding : _q_constants.enumerateCandidateDecodings(fact, eligibleArguments)) {
         const int factId = _analysis.getGroundFactId(decoding, precondition._negated);
         const bool reachable = factId >= 0 && _analysis.isReachable(factId, precondition._negated);
         const auto path = SubstitutionConstraint::toAssignmentPath(fact._args, decoding._args, qArgumentIndices);
@@ -451,7 +452,7 @@ bool TreeExpander::hasNegativeEffectOnPredicate(const USignature& actionSig, int
 
 bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& position, const USignature& opSig, const Signature& effect, EffectMode mode) {
     const USignature& unsignedEffect = effect.getUnsigned();
-    const bool hasQConstants = _htn.hasQConstants(unsignedEffect);
+    const bool hasQConstants = _q_constants.containsAny(unsignedEffect);
     if (!hasQConstants && _htn.isFullyGround(unsignedEffect)) {
         const int factId = _analysis.getGroundFactId(unsignedEffect, effect._negated);
         if (factId < 0) return false;
@@ -477,7 +478,7 @@ bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& po
         return true;
     }
 
-    const std::vector<int> qArgumentIndices = SubstitutionConstraint::getQArgumentIndicesByDomainSize(_htn, unsignedEffect._args, effectSorts);
+    const std::vector<int> qArgumentIndices = SubstitutionConstraint::getQArgumentIndicesByDomainSize(_q_constants, _htn, unsignedEffect._args, effectSorts);
     const std::vector<int> effectQConstants = collectQConstants(unsignedEffect, qArgumentIndices);
 
     std::vector<const SubstitutionConstraint*> sameQConstantConstraints;
@@ -653,7 +654,7 @@ std::optional<USignature> TreeExpander::instantiateAndRegisterAction(const USign
     const USignature originalSig = action.getSignature();
     auto argumentDomains = _analysis.computeReachableArgumentDomains(action);
     if (!argumentDomains) return std::nullopt;
-    auto instantiatedAction = _htn.instantiateWithQConstants(action, argumentDomains.value(), originPositionId);
+    auto instantiatedAction = _q_constants.instantiate(action, argumentDomains.value(), originPositionId);
     if (!instantiatedAction) return std::nullopt;
     action = std::move(instantiatedAction.value());
 
@@ -661,7 +662,7 @@ std::optional<USignature> TreeExpander::instantiateAndRegisterAction(const USign
 
     assert(_htn.isFullyGround(action.getSignature()));
     if (!_htn.isFullyGround(action.getSignature())) return std::nullopt;
-    if (!_htn.hasConsistentlyTypedArgs(originalSig)) return std::nullopt;
+    if (!_q_constants.hasConsistentlyTypedArguments(originalSig)) return std::nullopt;
     if (!_analysis.hasValidPreconditions(action.getPreconditions())) return std::nullopt;
     if (!_analysis.hasValidPreconditions(action.getExtraPreconditions())) return std::nullopt;
 
@@ -718,12 +719,12 @@ std::vector<USignature> TreeExpander::instantiateReductionsOfTask(const USignatu
 }
 
 std::optional<USignature> TreeExpander::instantiateAndRegisterReduction(Reduction reduction, const std::optional<USignature>& expectedTask, size_t originPositionId) {
-    if (!_htn.hasConsistentlyTypedArgs(reduction.getSignature())) return std::nullopt;
+    if (!_q_constants.hasConsistentlyTypedArguments(reduction.getSignature())) return std::nullopt;
     if (!isPotentiallyApplicable(reduction)) return std::nullopt;
 
     auto argumentDomains = _analysis.computeReachableArgumentDomains(reduction);
     if (!argumentDomains) return std::nullopt;
-    auto instantiatedReduction = _htn.instantiateWithQConstants(reduction, argumentDomains.value(), originPositionId);
+    auto instantiatedReduction = _q_constants.instantiate(reduction, argumentDomains.value(), originPositionId);
     if (!instantiatedReduction) return std::nullopt;
     reduction = std::move(instantiatedReduction.value());
 
@@ -739,7 +740,7 @@ std::optional<USignature> TreeExpander::instantiateAndRegisterReduction(Reductio
 }
 
 void TreeExpander::addQConstantTypeConstraints(Position& position, const USignature& operationSig) {
-    const std::vector<TypeConstraint> constraints = _htn.getQConstantTypeConstraints(operationSig);
+    const std::vector<TypeConstraint> constraints = _q_constants.getTypeConstraints(operationSig);
     for (const TypeConstraint& constraint : constraints) {
         position.addQConstantTypeConstraint(operationSig, constraint);
     }

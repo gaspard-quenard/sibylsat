@@ -58,8 +58,11 @@ PlanningContext preprocessProblem(Parameters& params) {
     std::unique_ptr<HtnInstance> htn = HtnInstanceBuilder::build(*parsedProblem, params);
     Log::i("%zu operators and %zu methods created.\n", htn->getActionTemplates().size(), htn->getReductionTemplates().size());
 
+    // Own pseudo-constants introduced later during search.
+    auto qConstants = std::make_unique<QConstantManager>(*htn, params.isNonzero("sqq"));
+
     // Ground reachable predicates and initialize the model's ground-fact index.
-    auto factAnalysis = std::make_unique<FactAnalysis>(*htn, params.getDomainFilename(), params.getProblemFilename(), params.isNonzero("optimal"));
+    auto factAnalysis = std::make_unique<FactAnalysis>(*htn, *qConstants, params.getDomainFilename(), params.getProblemFilename(), params.isNonzero("optimal"));
 
     // Compute mutex groups and remove groups invalidated by grounded reachability.
     std::unique_ptr<MutexGroups> mutexGroups = computeMutexGroups(*htn, *factAnalysis, params);
@@ -72,9 +75,9 @@ PlanningContext preprocessProblem(Parameters& params) {
 
     // Build the task-decomposition heuristic only for optimal planning.
     std::unique_ptr<TDG> tdg;
-    if (params.isNonzero("optimal")) tdg = std::make_unique<TDG>(*htn);
+    if (params.isNonzero("optimal")) tdg = std::make_unique<TDG>(*htn, *qConstants);
 
-    return {std::move(htn), std::move(macroActions), std::move(factAnalysis), std::move(mutexGroups), std::move(tdg)};
+    return {std::move(htn), std::move(qConstants), std::move(macroActions), std::move(factAnalysis), std::move(mutexGroups), std::move(tdg)};
 }
 
 void PlanningContext::resetForNewSearch() {

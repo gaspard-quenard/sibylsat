@@ -76,7 +76,7 @@ void run(Parameters& params) {
     Statistics::getInstance().beginTiming(TimingStage::TOTAL);
 
     PlanningContext context = preprocessProblem(params);
-    std::unique_ptr<Planner> planner = std::make_unique<Planner>(params, *context.htn, *context.factAnalysis, context.mutexGroups.get(), context.tdg.get(), context.macroActions.get());
+    std::unique_ptr<Planner> planner = std::make_unique<Planner>(params, *context.htn, *context.qConstants, *context.factAnalysis, context.mutexGroups.get(), context.tdg.get(), context.macroActions.get());
     int result = planner->findPlan();
     Log::i("End after result %d\n", result);
 
@@ -88,7 +88,7 @@ void run(Parameters& params) {
         // Reuse immutable preprocessing results and reset only search-specific analysis state.
         planner.reset();
         context.resetForNewSearch();
-        planner = std::make_unique<Planner>(params, *context.htn, *context.factAnalysis, context.mutexGroups.get(), context.tdg.get(), context.macroActions.get());
+        planner = std::make_unique<Planner>(params, *context.htn, *context.qConstants, *context.factAnalysis, context.mutexGroups.get(), context.tdg.get(), context.macroActions.get());
         result = planner->findPlan();
         Log::i("End after result %d\n", result);
     }

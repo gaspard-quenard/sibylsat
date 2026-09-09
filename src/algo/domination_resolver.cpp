@@ -19,19 +19,19 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
         // TODO Every q-constant must have a globally invariant domain for this to work.
         if (arg == otherArg) continue; 
         
-        bool isQ = _htn.isQConstant(arg);
-        bool isOtherQ = _htn.isQConstant(otherArg);
+        bool isQ = _q_constants.contains(arg);
+        bool isOtherQ = _q_constants.contains(otherArg);
         if (!isQ && !isOtherQ) return res; // Different ground constants
 
-        if (isQ && isOtherQ && _htn.getOriginPositionIdOfQConstant(arg) != _htn.getOriginPositionIdOfQConstant(otherArg)) {
+        if (isQ && isOtherQ && _q_constants.getOriginPositionId(arg) != _q_constants.getOriginPositionId(otherArg)) {
             return res;
         }
         
         // Compare domains of pseudo-constants
         
-        const auto& domain = isQ ? _htn.getDomainOfQConstant(arg) : dummyDomain;
+        const auto& domain = isQ ? _q_constants.getDomain(arg) : dummyDomain;
         if (!isQ) dummyDomain.insert(arg);
-        const auto& otherDomain = isOtherQ ? _htn.getDomainOfQConstant(otherArg) : dummyDomain;
+        const auto& otherDomain = isOtherQ ? _q_constants.getDomain(otherArg) : dummyDomain;
         if (!isOtherQ) dummyDomain.insert(otherArg);
         assert(dummyDomain.size() <= 1);
 
@@ -80,7 +80,7 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
             }    
         }
         for (size_t argIdx = 0; argIdx < op._args.size(); argIdx++) {
-            if (_htn.isQConstant(status == DOMINATED ? other._args[argIdx] : op._args[argIdx])) {
+            if (_q_constants.contains(status == DOMINATED ? other._args[argIdx] : op._args[argIdx])) {
                 if (status == DOMINATED) res.qconstSubstitutions[op._args[argIdx]] = other._args[argIdx];
                 else res.qconstSubstitutions[other._args[argIdx]] = op._args[argIdx];
             } 

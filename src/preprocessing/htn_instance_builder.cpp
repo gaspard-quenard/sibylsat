@@ -14,7 +14,7 @@
 
 std::unique_ptr<HtnInstance> HtnInstanceBuilder::build(ParsedProblem& problem, Parameters& params) {
     USignatureHasher::seed = params.getIntParam("s");
-    std::unique_ptr<HtnInstance> result(new HtnInstance(params.isNonzero("sqq")));
+    std::unique_ptr<HtnInstance> result(new HtnInstance());
     HtnInstance& htn = *result;
     Names::init(htn._name_back_table);
     createBlankAction(htn);

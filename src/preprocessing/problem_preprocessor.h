@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "algo/fact_analysis.h"
+#include "algo/q_constant_manager.h"
 #include "data/htn_instance.h"
 #include "data/mutex_groups.h"
 #include "data/tdg.h"
@@ -15,6 +16,9 @@ class Parameters;
 struct PlanningContext {
     // Includes inferred method preconditions and possible method effects.
     std::unique_ptr<HtnInstance> htn;
+
+    // Owns pseudo-constants and their search-time domains.
+    std::unique_ptr<QConstantManager> qConstants;
 
     // Describes how compiled macro actions expand back into primitive actions.
     std::unique_ptr<MacroActionCompiler> macroActions;

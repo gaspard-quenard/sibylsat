@@ -2,6 +2,7 @@
 #define SIBYLSAT_VARIABLE_PROVIDER_H
 
 #include "data/htn_instance.h"
+#include "algo/q_constant_manager.h"
 #include "data/position.h"
 #include "sat/variable_allocator.h"
 
@@ -14,6 +15,7 @@
 class VariableProvider {
 private:
     HtnInstance& _htn;
+    const QConstantManager& _q_constants;
     VariableAllocator& _allocator;
     const USignature _primitive_signature;
     const int _substitution_name_id;
@@ -26,7 +28,7 @@ private:
     std::string substitutionVariableName(int qConstant, int groundObject) const;
 
 public:
-    VariableProvider(HtnInstance& htn, VariableAllocator& allocator);
+    VariableProvider(HtnInstance& htn, const QConstantManager& qConstants, VariableAllocator& allocator);
 
     bool hasVariable(VarType type, const Position& position, const USignature& signature) const;
     int getVariable(VarType type, const Position& position, const USignature& signature) const;

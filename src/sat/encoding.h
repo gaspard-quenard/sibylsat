@@ -1,6 +1,8 @@
 #ifndef DOMPASCH_TREE_REXX_ENCODING_H
 #define DOMPASCH_TREE_REXX_ENCODING_H
 
+#include <set>
+
 #include "util/params.h"
 #include "data/position.h"
 #include "data/signature.h"
@@ -10,6 +12,7 @@
 #include "sat/literal_tree.h"
 #include "sat/sat_interface.h"
 #include "algo/fact_analysis.h"
+#include "algo/q_constant_manager.h"
 #include "sat/variable_provider.h"
 #include "sat/decoder.h"
 
@@ -18,6 +21,7 @@ class Encoding {
 private:
     Parameters& _params;
     HtnInstance& _htn;
+    QConstantManager& _q_constants;
     FactAnalysis& _analysis;
     const MutexGroups* _mutex_groups;
     Position*& _root_position;
@@ -35,10 +39,10 @@ private:
     const bool _optimal;
 
 public:
-    Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, const MutexGroups* mutexGroups, Position*& rootPosition, std::vector<Position*>& leafPositions) :
-            _params(params), _htn(htn), _analysis(analysis), _mutex_groups(mutexGroups), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(Statistics::getInstance()),
-            _variable_allocator(params), _sat(params), _vars(_htn, _variable_allocator),
-            _decoder(_htn, _root_position, _leaf_positions, _sat, _vars),
+    Encoding(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, Position*& rootPosition, std::vector<Position*>& leafPositions) :
+            _params(params), _htn(htn), _q_constants(qConstants), _analysis(analysis), _mutex_groups(mutexGroups), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(Statistics::getInstance()),
+            _variable_allocator(params), _sat(params), _vars(_htn, _q_constants, _variable_allocator),
+            _decoder(_htn, _q_constants, _root_position, _leaf_positions, _sat, _vars),
             _use_sibylsat_expansion(params.isNonzero("sibylsat")),
             _optimal(params.isNonzero("optimal")) {}
 

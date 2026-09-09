@@ -8,8 +8,9 @@
 #include "util/process_utils.h"
 #include "util/statistics.h"
 
-FactAnalysis::FactAnalysis(HtnInstance& htn, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations)
+FactAnalysis::FactAnalysis(HtnInstance& htn, QConstantManager& qConstants, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations)
         : _htn(htn),
+          _q_constants(qConstants),
           _init_state(_htn.getInitState()) {
     Statistics& stats = Statistics::getInstance();
     stats.beginTiming(TimingStage::INIT_GROUNDING);
@@ -61,7 +62,7 @@ BitVec FactAnalysis::findMatchingGroundFactIds(const USignature& signature, bool
     std::vector<int> fixedConstants(signature._args.size(), -1);
     for (size_t argumentIndex = 0; argumentIndex < signature._args.size(); ++argumentIndex) {
         const int argument = signature._args[argumentIndex];
-        if (_htn.isQConstant(argument)) restrictiveSorts[argumentIndex] = _htn.getPrimarySortOfQConstant(argument);
+        if (_q_constants.contains(argument)) restrictiveSorts[argumentIndex] = _q_constants.getDomainSortId(argument);
         else if (!_htn.isVariable(argument)) fixedConstants[argumentIndex] = argument;
     }
     return _ground_facts.findMatchingFactIds(signature._name_id, negated, argumentSorts, restrictiveSorts,
@@ -155,7 +156,7 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
 
             if (_htn.isEqualityPredicate(preSig._usig._name_id))
             {
-                if (!_htn.hasQConstants(preSig._usig) && _htn.isFullyGround(preSig._usig))
+                if (!_q_constants.containsAny(preSig._usig) && _htn.isFullyGround(preSig._usig))
                 {
                     bool equality_correct = preSig._negated ? preSig._usig._args[0] != preSig._usig._args[1] : preSig._usig._args[0] == preSig._usig._args[1];
                     if (!equality_correct) continue;
@@ -164,7 +165,7 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
                 }
                 else
                 {
-                    for (const auto &decUSig : _htn.enumerateCandidateDecodings(preSig._usig, preSorts))
+                    for (const auto &decUSig : _q_constants.enumerateCandidateDecodings(preSig._usig, preSorts))
                     {
                         any = true;
                         bool equality_correct = preSig._negated ? decUSig._args[0] != decUSig._args[1] : decUSig._args[0] == decUSig._args[1];
@@ -176,7 +177,7 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
             }
             else
             {
-                if (!_htn.hasQConstants(preSig._usig) && _htn.isFullyGround(preSig._usig)) {
+                if (!_q_constants.containsAny(preSig._usig) && _htn.isFullyGround(preSig._usig)) {
                     int predId = getGroundFactId(preSig._usig, preSig._negated);
                     if (predId >= 0 && isReachable(predId, preSig._negated))
                     {

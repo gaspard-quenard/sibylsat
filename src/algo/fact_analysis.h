@@ -7,6 +7,7 @@
 
 #include "data/ground_fact_index.h"
 #include "data/htn_instance.h"
+#include "algo/q_constant_manager.h"
 #include "util/bitvec.h"
 
 class FactAnalysis {
@@ -14,6 +15,7 @@ class FactAnalysis {
 private:
 
     HtnInstance& _htn;
+    QConstantManager& _q_constants;
     GroundFactIndex _ground_facts;
 
     USigSet _init_state;
@@ -35,7 +37,7 @@ private:
 
 public:
 
-    FactAnalysis(HtnInstance& htn, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations);
+    FactAnalysis(HtnInstance& htn, QConstantManager& qConstants, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations);
 
     bool isInGroundFacts(const USignature& fact, bool negated) {
         if (negated) {
@@ -161,8 +163,8 @@ public:
             // Do it the old way for now
             // Q-Fact:
             bool any = false;
-            if (_htn.hasQConstants(sig)) {
-                for (const auto& decSig : _htn.enumerateCandidateDecodings(sig)) {
+            if (_q_constants.containsAny(sig)) {
+                for (const auto& decSig : _q_constants.enumerateCandidateDecodings(sig)) {
                     any = negated ? decSig._args[0] != decSig._args[1] : decSig._args[0] == decSig._args[1];
                     if (any) break;
                 }
@@ -173,7 +175,7 @@ public:
             }
         }
         
-        if (!_htn.hasQConstants(sig)) {
+        if (!_q_constants.containsAny(sig)) {
             int predId = getGroundFactId(sig, negated);
             return predId >= 0 && isReachable(predId, negated);
         }

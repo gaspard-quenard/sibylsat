@@ -21,7 +21,6 @@ ArgIterator ArgIterator::getFullInstantiation(const USignature& sig, HtnInstance
             int sort = sorts[pos];
             std::vector<int> eligibleConstants;
             for (int arg : _htn.getConstantsOfSort(sort)) {
-                if (_htn.isQConstant(arg)) continue;
                 // If constant allowed per sort is empty, all constants are allowed
                 if (constantsAllowedPerSorts.empty() || constantsAllowedPerSorts[pos].count(arg))
                     eligibleConstants.push_back(arg);

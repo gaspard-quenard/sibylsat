@@ -10,6 +10,7 @@
 
 #include "data/htn_instance.h"
 #include "data/plan.h"
+#include "algo/q_constant_manager.h"
 
 /**
  * Admissible task-decomposition heuristic built from the grounded TDG emitted
@@ -34,6 +35,7 @@ private:
     };
 
     HtnInstance& _htn;
+    QConstantManager& _q_constants;
     std::vector<Vertex> _vertices;
     NodeHashMap<USignature, VertexId, USignatureHasher> _vertex_ids;
     NodeHashMap<int, std::vector<VertexId>> _vertices_by_name;
@@ -66,7 +68,7 @@ private:
 
 public:
     /** Load the grounded task-decomposition graph and compute its heuristic. */
-    explicit TDG(HtnInstance& htn);
+    TDG(HtnInstance& htn, QConstantManager& qConstants);
 
     /** Return the heuristic cost of an exact grounded graph vertex. */
     int getHeuristicValue(const USignature& signature) const;

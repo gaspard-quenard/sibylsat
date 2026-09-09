@@ -358,7 +358,7 @@ void Encoding::reuseParentFactVariables(Position& position, const Encoding::Enco
     if (position.getCreationIteration() == 0 || env.reuseFactsFrom == nullptr) return;
 
     for (const auto& [fact, factVar] : env.reuseFactsFrom->getVariableTable(VarType::FACT)) {
-        if (!_htn.hasQConstants(fact)) position.setVariable(VarType::FACT, fact, factVar);
+        if (!_q_constants.containsAny(fact)) position.setVariable(VarType::FACT, fact, factVar);
     }
 }
 
@@ -423,7 +423,7 @@ void Encoding::encodeFrameAxioms(Position& source, Position& destination, const 
 
     if (selectedFactIds == nullptr) {
         for (const auto& [fact, sourceFactVar] : source.getVariableTable(VarType::FACT)) {
-            if (_htn.hasQConstants(fact)) continue;
+            if (_q_constants.containsAny(fact)) continue;
             encodeFrameAxiomForFact(source, destination, env, fact, sourceFactVar, nonprimFactSupport, sourceHasPrimitiveCandidates, sourceVarPrim, skipRedundantFrameAxioms, positiveFacts);
         }
     } else {
@@ -655,9 +655,9 @@ void Encoding::encodeOperationSelection(const std::vector<int>& operationVars) {
 }
 
 void Encoding::encodeSubstitutionVars(const USignature& opSig, int opVar, int arg) {
-    if (!_htn.isQConstant(arg)) return;
+    if (!_q_constants.contains(arg)) return;
 
-    std::optional<std::vector<int>> domain = _htn.takeQConstantDomainForOperation(arg, opSig);
+    std::optional<std::vector<int>> domain = _q_constants.takeOperationDomain(arg, opSig);
     if (!domain) return;
 
     std::vector<int> substitutionVars;
@@ -726,7 +726,7 @@ void Encoding::encodeQFactSemanticsWithReuseFiltering(Position& pos, const Encod
     std::vector<int> substitutionVars;
     substitutionVars.reserve(128);
     for (const USignature& qfactSig : stateQFacts.qFacts) {
-        assert(_htn.hasQConstants(qfactSig));
+        assert(_q_constants.containsAny(qfactSig));
         
         const int qfactVar = _vars.getVariable(VarType::FACT, pos, qfactSig);
 
@@ -764,7 +764,7 @@ void Encoding::encodeAllQFactSemantics(Position& pos, const StateQFacts& stateQF
     std::vector<int> substitutionVars;
     substitutionVars.reserve(128);
     for (const USignature& qfact : stateQFacts.qFacts) {
-        assert(_htn.hasQConstants(qfact));
+        assert(_q_constants.containsAny(qfact));
         const int qfactVar = _vars.getVariable(VarType::FACT, pos, qfact);
 
         for (const bool negated : {true, false}) {
@@ -851,13 +851,13 @@ std::optional<Encoding::EffectUnifier> Encoding::findEffectUnifier(const Signatu
         const int secondArgument = second._usig._args[argumentIndex];
         if (firstArgument == secondArgument) continue;
 
-        const bool firstIsQConstant = _htn.isQConstant(firstArgument);
-        const bool secondIsQConstant = _htn.isQConstant(secondArgument);
+        const bool firstIsQConstant = _q_constants.contains(firstArgument);
+        const bool secondIsQConstant = _q_constants.contains(secondArgument);
         if (firstIsQConstant && secondIsQConstant) {
             unifier.insert(encodeQConstEquality(firstArgument, secondArgument));
-        } else if (firstIsQConstant && _htn.getDomainOfQConstant(firstArgument).count(secondArgument)) {
+        } else if (firstIsQConstant && _q_constants.getDomain(firstArgument).count(secondArgument)) {
             unifier.insert(_vars.getOrCreateSubstitutionVariable(firstArgument, secondArgument));
-        } else if (secondIsQConstant && _htn.getDomainOfQConstant(secondArgument).count(firstArgument)) {
+        } else if (secondIsQConstant && _q_constants.getDomain(secondArgument).count(firstArgument)) {
             unifier.insert(_vars.getOrCreateSubstitutionVariable(secondArgument, firstArgument));
         } else {
             return std::nullopt;
@@ -900,7 +900,7 @@ void Encoding::encodeQConstantTypeConstraints(Position& pos) {
 
         for (const TypeConstraint& constraint : constraints) {
             const int qconstant = constraint.qconstant;
-            assert(_htn.isQConstant(qconstant));
+            assert(_q_constants.contains(qconstant));
 
             if (constraint.sign) {
                 // The operation requires one of the allowed substitutions.
@@ -991,11 +991,11 @@ void Encoding::encodeExpansionSubstitutions(Position& pos, const USignature& par
         if (childVar == 0) continue;
 
         for (const auto& [sourceArgument, childQConstant] : substitution) {
-            assert(_htn.isQConstant(childQConstant));
+            assert(_q_constants.contains(childQConstant));
 
             // The child's Q-constant may have a wider domain than the parent
             // argument, so selecting both operations links their values.
-            const int matchingValue = _htn.isQConstant(sourceArgument)
+            const int matchingValue = _q_constants.contains(sourceArgument)
                     ? encodeQConstEquality(childQConstant, sourceArgument)
                     : _vars.getOrCreateSubstitutionVariable(childQConstant, sourceArgument);
             _sat.addClause(-parentVar, -childVar, matchingValue);
@@ -1021,12 +1021,12 @@ int Encoding::encodeQConstEquality(int q1, int q2) {
         
         _stats.begin(STAGE_QCONSTEQUALITY);
         FlatHashSet<int> good, bad1, bad2;
-        for (int c : _htn.getDomainOfQConstant(q1)) {
-            if (!_htn.getDomainOfQConstant(q2).count(c)) bad1.insert(c);
+        for (int c : _q_constants.getDomain(q1)) {
+            if (!_q_constants.getDomain(q2).count(c)) bad1.insert(c);
             else good.insert(c);
         }
-        for (int c : _htn.getDomainOfQConstant(q2)) {
-            if (_htn.getDomainOfQConstant(q1).count(c)) continue;
+        for (int c : _q_constants.getDomain(q2)) {
+            if (_q_constants.getDomain(q1).count(c)) continue;
             bad2.insert(c);
         }
         int varEq = _vars.createQConstantEqualityVariable(q1, q2);
@@ -1186,8 +1186,8 @@ void Encoding::encodeMethodMustDifferFromAncestors(Position& position, const USi
             const int ancestorArg = ancestor.signature._args[argIndex];
             if (methodArg == ancestorArg) continue;
 
-            const bool methodArgIsQConstant = _htn.isQConstant(methodArg);
-            const bool ancestorArgIsQConstant = _htn.isQConstant(ancestorArg);
+            const bool methodArgIsQConstant = _q_constants.contains(methodArg);
+            const bool ancestorArgIsQConstant = _q_constants.contains(ancestorArg);
             if (!methodArgIsQConstant && !ancestorArgIsQConstant) {
                 alreadyDifferent = true;
                 break;
@@ -1213,7 +1213,7 @@ void Encoding::encodeMethodMustDifferFromAncestors(Position& position, const USi
 void Encoding::encodeRecursiveMethodAncestorDistinctness(Position& position) {
     for (const USignature& method : position.getReductions()) {
         if (!_htn.isRecursiveMethod(method._name_id)) continue;
-        if (!_htn.hasQConstants(method)) continue;
+        if (!_q_constants.containsAny(method)) continue;
 
         const std::vector<PositionedMethod> ancestors = findMethodAncestorsWithSameName(position, method);
         encodeMethodMustDifferFromAncestors(position, method, ancestors);

@@ -4,8 +4,8 @@
 
 #include "util/log.h"
 
-Decoder::Decoder(HtnInstance& htn, Position*& rootPosition, std::vector<Position*>& leafPositions, SatInterface& sat, VariableProvider& vars)
-    : _htn(htn), _root_position(rootPosition), _leaf_positions(leafPositions), _sat(sat), _vars(vars) {}
+Decoder::Decoder(HtnInstance& htn, const QConstantManager& qConstants, Position*& rootPosition, std::vector<Position*>& leafPositions, SatInterface& sat, VariableProvider& vars)
+    : _htn(htn), _q_constants(qConstants), _root_position(rootPosition), _leaf_positions(leafPositions), _sat(sat), _vars(vars) {}
 
 std::vector<PlanItem> Decoder::extractFrontierPlan(FrontierPlanMode mode) const {
     std::vector<PlanItem> plan(_leaf_positions.size());
@@ -71,7 +71,7 @@ USignature Decoder::getSelectedDecodedOperation(const Position& position) const 
 
 std::optional<int> Decoder::getSelectedQConstantValue(int qConstant) const {
     std::optional<int> selectedValue;
-    for (int groundArgument : _htn.getDomainOfQConstant(qConstant)) {
+    for (int groundArgument : _q_constants.getDomain(qConstant)) {
         const int substitutionVariable = _vars.getSubstitutionVariableOrZero(qConstant, groundArgument);
         if (substitutionVariable == 0 || !_sat.holds(substitutionVariable)) continue;
 
@@ -93,7 +93,7 @@ std::optional<int> Decoder::getSelectedQConstantValue(int qConstant) const {
 USignature Decoder::decodeQConstants(const Position& position, const USignature& signature) const {
     Substitution substitution;
     for (int argument : signature._args) {
-        if (!_htn.isQConstant(argument) || substitution.count(argument)) continue;
+        if (!_q_constants.contains(argument) || substitution.count(argument)) continue;
 
         const std::optional<int> selectedValue = getSelectedQConstantValue(argument);
         if (!selectedValue.has_value()) {

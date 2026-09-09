@@ -10,12 +10,14 @@
 #include "algo/fact_analysis.h"
 #include "algo/retroactive_pruning.h"
 #include "algo/domination_resolver.h"
+#include "algo/q_constant_manager.h"
 #include "data/tdg.h"
 
 class TreeExpander {
 private:
     Parameters& _params;
     HtnInstance& _htn;
+    QConstantManager& _q_constants;
     Statistics& _stats;
     Position* _root_position = nullptr;
     std::vector<Position*> _leaf_positions;
@@ -35,7 +37,7 @@ private:
     size_t _num_instantiated_reductions = 0;
 
 public:
-    TreeExpander(Parameters& params, HtnInstance& htn, FactAnalysis& analysis);
+    TreeExpander(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis);
 
     void attachPruning(RetroactivePruning& pruning) { _pruning = &pruning; }
     void attachTDG(TDG& tdg) { _tdg = &tdg; }

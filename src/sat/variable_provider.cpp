@@ -5,8 +5,9 @@
 
 #include "util/names.h"
 
-VariableProvider::VariableProvider(HtnInstance& htn, VariableAllocator& allocator)
+VariableProvider::VariableProvider(HtnInstance& htn, const QConstantManager& qConstants, VariableAllocator& allocator)
     : _htn(htn),
+      _q_constants(qConstants),
       _allocator(allocator),
       _primitive_signature(_htn.nameId("__PRIMITIVE___"), std::vector<int>()),
       _substitution_name_id(_htn.nameId("__SUBSTITUTE___")) {}
@@ -42,8 +43,8 @@ int VariableProvider::getOrCreateVariable(VarType type, Position& position, cons
 }
 
 int VariableProvider::getOrCreateSubstitutionVariable(int qConstant, int groundObject) {
-    assert(_htn.isQConstant(qConstant));
-    assert(!_htn.isQConstant(groundObject));
+    assert(_q_constants.contains(qConstant));
+    assert(!_q_constants.contains(groundObject));
 
     const IntPair key(qConstant, groundObject);
     const auto existing = _substitution_variables.find(key);

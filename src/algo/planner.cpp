@@ -7,14 +7,14 @@
 #include "sat/plan_optimizer.h"
 #include "preprocessing/macro_action_compiler.h"
 
-Planner::Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions)
+Planner::Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions)
         : _params(params),
           _htn_instance(htn),
-          _tree_expander(_params, _htn_instance, analysis),
+          _tree_expander(_params, _htn_instance, qConstants, analysis),
           _root_position(_tree_expander.getRootPositionRef()),
           _leaf_positions(_tree_expander.getLeafPositions()),
           _analysis(analysis),
-          _encoding(_params, _htn_instance, _analysis, mutexGroups, _root_position, _leaf_positions),
+          _encoding(_params, _htn_instance, qConstants, _analysis, mutexGroups, _root_position, _leaf_positions),
           _pruning(std::make_unique<RetroactivePruning>(_encoding)),
           _plan_writer(_htn_instance, macroActions, _params.getDomainFilename(), _params.getProblemFilename(), _params.isNonzero("vp"), _params.isNonzero("wp")),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),

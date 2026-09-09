@@ -3,6 +3,7 @@
 #define DOMPASCH_LILOTANE_SUBSTITUTION_CONSTRAINT_H
 
 #include "data/htn_instance.h"
+#include "algo/q_constant_manager.h"
 #include "sat/literal_tree.h"
 #include "util/log.h"
 
@@ -112,12 +113,12 @@ public:
 
     const std::vector<int>& getQConstants() const {return _q_constants;}
 
-    static std::vector<int> getQArgumentIndicesByDomainSize(HtnInstance& htn, const std::vector<int>& arguments, const std::vector<int>& sorts) {
+    static std::vector<int> getQArgumentIndicesByDomainSize(const QConstantManager& qConstants, const HtnInstance& htn, const std::vector<int>& arguments, const std::vector<int>& sorts) {
 
         // Collect indices of arguments which will be substituted
         std::vector<int> argIndices;
         for (size_t i = 0; i < arguments.size(); i++) {
-            if (htn.isQConstant(arguments[i])) argIndices.push_back(i);
+            if (qConstants.contains(arguments[i])) argIndices.push_back(i);
         }
 
         // Sort argument indices by the potential size of their domain

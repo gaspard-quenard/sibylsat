@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "data/htn_instance.h"
+#include "algo/q_constant_manager.h"
 #include "data/plan.h"
 #include "data/position.h"
 #include "sat/sat_interface.h"
@@ -12,6 +13,7 @@
 class Decoder {
 private:
     HtnInstance& _htn;
+    const QConstantManager& _q_constants;
     Position*& _root_position;
     std::vector<Position*>& _leaf_positions;
     SatInterface& _sat;
@@ -39,7 +41,7 @@ public:
         AllSelectedOperations
     };
 
-    Decoder(HtnInstance& htn, Position*& rootPosition, std::vector<Position*>& leafPositions, SatInterface& sat, VariableProvider& vars);
+    Decoder(HtnInstance& htn, const QConstantManager& qConstants, Position*& rootPosition, std::vector<Position*>& leafPositions, SatInterface& sat, VariableProvider& vars);
 
     std::vector<PlanItem> extractFrontierPlan(FrontierPlanMode mode = FrontierPlanMode::PrimitiveActionsOnly) const;
     Plan extractPlan() const;

@@ -3,8 +3,6 @@
 #define DOMPASCH_TREE_REXX_HTN_INSTANCE_H
 
 #include <assert.h>
-#include <optional>
-
 #include "data/action.h"
 #include "data/reduction.h"
 #include "data/signature.h"
@@ -13,13 +11,9 @@
 #include "util/bitvec.h"
 #include "util/statistics.h"
 #include "data/op_table.h"
-#include "data/q_constant_registry.h"
-
-#include "algo/arg_iterator.h"
-#include "algo/sample_arg_iterator.h"
-
 class HtnInstanceBuilder;
 class HtnStatistics;
+class QConstantManager;
 
 class HtnInstance {
 
@@ -37,8 +31,6 @@ private:
     FlatHashSet<int> _predicate_ids;
     // Set of equality predicate name IDs.
     FlatHashSet<int> _equality_predicates;
-    QConstantRegistry _q_constants;
-
     // Maps a {predicate,task,method} name ID to a list of sorts IDs.
     NodeHashMap<int, std::vector<int>> _signature_sorts_table;
     // Sort metadata for variables whose IDs include their declaring operation.
@@ -82,8 +74,6 @@ private:
     Action _goal_action;
     USignature _blank_action_sig;
     
-    const bool _share_q_constants;
-
     FlatHashSet<int> _name_id_recursive_methods;
 
 public:
@@ -127,12 +117,6 @@ public:
     /** Return the declared sort of each argument without parsing generated variable names. */
     std::vector<int> getArgumentSorts(const USignature& signature) const;
     const FlatHashSet<int>& getConstantsOfSort(int sort) const;
-    int getPrimarySortOfQConstant(int qconst) const;
-    const FlatHashSet<int>& getSortsOfQConstant(int qconst) const;
-    size_t getOriginPositionIdOfQConstant(int qconst) const;
-    const FlatHashSet<int>& getDomainOfQConstant(int qconst) const;
-    std::optional<std::vector<int>> takeQConstantDomainForOperation(int qconst, const USignature& op);
-
     /**
      * Returns one sort per condition argument, derived from the corresponding
      * argument in the operation.
@@ -141,20 +125,6 @@ public:
      * Fixed constants retain the corresponding predicate argument sort.
      */
     std::vector<int> getConditionSortsFromOperation(const USignature& condition, const USignature& operation);
-
-    /** Returns the candidate constants for every argument of a signature. */
-    std::vector<std::vector<int>> getCandidateArgumentDomains(const USignature& signature, const std::vector<int>& restrictiveSorts = {});
-    /** Enumerates every candidate decoding, including signatures absent from the ground-fact table. */
-    ArgIterator enumerateCandidateDecodings(const USignature& signature, const std::vector<int>& restrictiveSorts = {});
-    /** Enumerates candidates from domains already computed by the caller. */
-    ArgIterator enumerateCandidateDecodings(const USignature& signature, std::vector<std::vector<int>> candidateDomains);
-    /** Samples candidate decodings derived from the supplied argument sorts. */
-    SampleArgIterator sampleCandidateDecodings(const USignature& signature, const std::vector<int>& restrictiveSorts, size_t numSamples);
-    /** Samples candidates from domains already computed by the caller. */
-    SampleArgIterator sampleCandidateDecodings(const USignature& signature, std::vector<std::vector<int>> candidateDomains, size_t numSamples);
-
-    std::optional<Action> instantiateWithQConstants(const Action& action, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
-    std::optional<Reduction> instantiateWithQConstants(const Reduction& reduction, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
 
     /** Remove parser-introduced auxiliary arguments before printing the original task. */
     USignature restoreOriginalTaskArity(const USignature& signature) const;
@@ -173,16 +143,10 @@ public:
 
     bool isVariable(int argument) const;
 
-    inline bool isQConstant(int c) const {
-        return _q_constants.contains(c);
-    }
-
-    bool hasQConstants(const USignature& signature) const;
     bool isUnifiable(const Signature& from, const Signature& to, FlatHashMap<int, int>* substitution = nullptr) const;
     bool isUnifiable(const USignature& from, const USignature& to, FlatHashMap<int, int>* substitution = nullptr) const;
     bool isFullyGround(const USignature& signature) const;
     bool hasSomeInstantiation(const USignature& signature) const;
-    bool hasConsistentlyTypedArgs(const USignature& signature) const;
 
     inline bool isPredicate(int nameId) const {
         return _predicate_ids.count(nameId);
@@ -195,12 +159,6 @@ public:
     inline bool isReduction(const USignature& sig) const {
         return _methods.count(sig._name_id);
     }
-
-    inline size_t getNumberOfQConstants() const {
-        return _q_constants.size();
-    }
-
-    std::vector<TypeConstraint> getQConstantTypeConstraints(const USignature& signature) const;
 
     inline void addRecursiveMethod(int nameId) {
         _name_id_recursive_methods.insert(nameId);
@@ -218,12 +176,10 @@ public:
 private:
     friend class HtnInstanceBuilder;
     friend class HtnStatistics;
+    friend class QConstantManager;
 
     /** Construct an empty internal model; HtnInstanceBuilder populates it. */
-    explicit HtnInstance(bool shareQConstants);
-
-    std::optional<std::vector<int>> instantiateArgumentsWithQConstants(const HtnOp& operation, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
-    int createQConstant(const std::string& name, const FlatHashSet<int>& domain, size_t originPositionId);
+    HtnInstance() = default;
 
 };
 

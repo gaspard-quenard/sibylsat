@@ -64,7 +64,7 @@ private:
     float _optimization_factor;
 
 public:
-    Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions);
+    Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions);
     int findPlan();
     void optimizeCurrentPlan();
     void writeFormulaFile() { _encoding.writeFormulaFile(); }

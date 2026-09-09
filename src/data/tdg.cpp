@@ -46,7 +46,7 @@ int parseInteger(const std::string& line, size_t lineNumber, const std::string& 
 
 } // namespace
 
-TDG::TDG(HtnInstance& htn) : _htn(htn) {
+TDG::TDG(HtnInstance& htn, QConstantManager& qConstants) : _htn(htn), _q_constants(qConstants) {
     Log::i("Create TDG\n");
     loadGroundedGraph(getProblemProcessingDir() / "problem.sas");
     recordGroundedArities();
@@ -399,13 +399,13 @@ bool TDG::isCompatibleGrounding(const USignature& grounding, const std::vector<s
 }
 
 int TDG::getBestHeuristicValue(const USignature& signature) {
-    if (!_htn.hasQConstants(signature) && _htn.isFullyGround(signature)) return getHeuristicValue(signature);
+    if (!_q_constants.containsAny(signature) && _htn.isFullyGround(signature)) return getHeuristicValue(signature);
 
     auto namedVertices = _vertices_by_name.find(signature._name_id);
     if (namedVertices == _vertices_by_name.end()) return UNREACHABLE_COST;
 
     const std::vector<int> sorts = _htn.getSorts(signature._name_id);
-    const std::vector<std::vector<int>> eligibleArguments = _htn.getCandidateArgumentDomains(signature, sorts);
+    const std::vector<std::vector<int>> eligibleArguments = _q_constants.getCandidateArgumentDomains(signature, sorts);
     const int minimumPossibleCost = _minimum_cost_by_name.at(signature._name_id);
 
     int bestCost = UNREACHABLE_COST;
