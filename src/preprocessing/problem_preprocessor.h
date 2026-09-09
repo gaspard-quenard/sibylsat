@@ -6,14 +6,17 @@
 #include "algo/fact_analysis.h"
 #include "data/htn_instance.h"
 #include "data/tdg.h"
+#include "preprocessing/macro_action_compiler.h"
 
 class Parameters;
 
 /** Owns the model and analysis data that remain valid throughout planning. */
 struct PlanningContext {
-    // Includes inferred method preconditions, possible method effects, mutexes,
-    // and macro-action decoding metadata.
+    // Includes inferred method preconditions, possible method effects, and mutexes.
     std::unique_ptr<HtnInstance> htn;
+
+    // Describes how compiled macro actions expand back into primitive actions.
+    std::unique_ptr<MacroActionCompiler> macroActions;
 
     // Owns the immutable ground universe plus mutable search reachability state.
     std::unique_ptr<FactAnalysis> factAnalysis;

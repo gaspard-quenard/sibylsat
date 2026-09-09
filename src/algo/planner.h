@@ -56,6 +56,7 @@ private:
     // For optimal planning
     const bool _optimal;
     TDG* _tdg;
+    const MacroActionCompiler* _macro_actions;
 
     const bool _separate_tasks;
     std::unique_ptr<SeparateTasksScheduler> _separate_tasks_scheduler;
@@ -63,7 +64,7 @@ private:
     float _optimization_factor;
 
 public:
-    Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, TDG* tdg);
+    Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, TDG* tdg, const MacroActionCompiler* macroActions);
     int findPlan();
     void optimizeCurrentPlan();
     void writeFormulaFile() { _encoding.writeFormulaFile(); }

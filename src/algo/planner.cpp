@@ -5,8 +5,9 @@
 #include "util/log.h"
 #include "util/names.h"
 #include "sat/plan_optimizer.h"
+#include "preprocessing/macro_action_compiler.h"
 
-Planner::Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, TDG* tdg)
+Planner::Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, TDG* tdg, const MacroActionCompiler* macroActions)
         : _params(params),
           _htn_instance(htn),
           _tree_expander(_params, _htn_instance, analysis),
@@ -15,10 +16,11 @@ Planner::Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, T
           _analysis(analysis),
           _encoding(_params, _htn_instance, _analysis, _root_position, _leaf_positions),
           _pruning(std::make_unique<RetroactivePruning>(_encoding)),
-          _plan_writer(_htn_instance, _params.getDomainFilename(), _params.getProblemFilename(), _params.isNonzero("vp"), _params.isNonzero("wp")),
+          _plan_writer(_htn_instance, macroActions, _params.getDomainFilename(), _params.getProblemFilename(), _params.isNonzero("vp"), _params.isNonzero("wp")),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _optimal(_params.isNonzero("optimal")),
           _tdg(tdg),
+          _macro_actions(macroActions),
           _separate_tasks(_params.isNonzero("separateTasks")
                   && _htn_instance.getInitReduction().getSubtasks().size() > 1
                   && _use_sibylsat_expansion
@@ -308,8 +310,8 @@ void Planner::setSoftLitsForCurrentLeaves() {
             // If it is an action, set the weight to 1 since for now, we cannot indicate specific weight for actions in HDDL
             if (_htn_instance.isAction(op)) {
                 // If it is a macro action, then its heuristic value is the number of actions in the macro action
-                if (_htn_instance.isMacroTask(op._name_id)) {
-                    heuristicValue = _htn_instance.numActionsInMacro(op._name_id);
+                if (_macro_actions != nullptr && _macro_actions->isMacroAction(_htn_instance.toString(op._name_id))) {
+                    heuristicValue = _macro_actions->getExpansion(_htn_instance.toString(op._name_id)).primitiveSteps.size();
                 } else {
                     // Otherwise, it is 1
                     heuristicValue = 1;

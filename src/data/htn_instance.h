@@ -20,15 +20,12 @@
 #include "algo/sample_arg_iterator.h"
 #include "data/mutex_groups.h"
 
-class MacroActionCompiler;
 class HtnInstanceBuilder;
 class HtnStatistics;
 
 class HtnInstance {
 
 private:
-    std::unique_ptr<MacroActionCompiler> _macro_action_compiler;
-
     // Maps a string to its name ID within the problem.
     FlatHashMap<std::string, int> _name_table;
     // Maps a name ID to its string within the problem.
@@ -101,10 +98,6 @@ public:
     bool isStaticPredicate(int nameId) const {
         return _static_predicates.count(nameId);
     }
-
-    bool isMacroTask(int nameId) const;
-    int numActionsInMacro(int nameId) const;
-    std::vector<USignature> getActionsFromMacro(const USignature& macroAction) const;
 
     /** Return whether mutex groups were requested and loaded. */
     bool hasMutexGroups() const { return _mutex_groups != nullptr; }

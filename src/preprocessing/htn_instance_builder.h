@@ -9,7 +9,6 @@
 #include "data/signature.h"
 
 class HtnInstance;
-class MacroActionCompiler;
 class Parameters;
 class Action;
 class Reduction;
@@ -23,7 +22,7 @@ struct literal;
 class HtnInstanceBuilder {
 public:
     /** Build SibylSat's internal model from a normalized lifted problem. */
-    static std::unique_ptr<HtnInstance> build(ParsedProblem& problem, std::unique_ptr<MacroActionCompiler> macroActions, Parameters& params);
+    static std::unique_ptr<HtnInstance> build(ParsedProblem& problem, Parameters& params);
 
 private:
     static std::vector<int> convertArguments(HtnInstance& htn, int operationId, const std::vector<std::pair<std::string, std::string>>& arguments);

@@ -54,7 +54,7 @@ PlanningContext preprocessProblem(Parameters& params) {
     std::unique_ptr<MacroActionCompiler> macroActions = compileMacroActions(*parsedProblem, properties, params);
 
     // Convert the lifted parser representation into SibylSat's internal model.
-    std::unique_ptr<HtnInstance> htn = HtnInstanceBuilder::build(*parsedProblem, std::move(macroActions), params);
+    std::unique_ptr<HtnInstance> htn = HtnInstanceBuilder::build(*parsedProblem, params);
     Log::i("%zu operators and %zu methods created.\n", htn->getActionTemplates().size(), htn->getReductionTemplates().size());
 
     // Ground reachable predicates and initialize the model's ground-fact index.
@@ -73,7 +73,7 @@ PlanningContext preprocessProblem(Parameters& params) {
     std::unique_ptr<TDG> tdg;
     if (params.isNonzero("optimal")) tdg = std::make_unique<TDG>(*htn);
 
-    return {std::move(htn), std::move(factAnalysis), std::move(tdg)};
+    return {std::move(htn), std::move(macroActions), std::move(factAnalysis), std::move(tdg)};
 }
 
 void PlanningContext::resetForNewSearch() {

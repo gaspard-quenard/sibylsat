@@ -7,18 +7,15 @@
 #include "data/htn_instance.h"
 #include "data/htn_statistics.h"
 #include "libpanda.hpp"
-#include "preprocessing/macro_action_compiler.h"
 #include "util/log.h"
 #include "util/names.h"
 #include "util/params.h"
 #include "util/regex.h"
 
-std::unique_ptr<HtnInstance> HtnInstanceBuilder::build(ParsedProblem& problem, std::unique_ptr<MacroActionCompiler> macroActions, Parameters& params) {
+std::unique_ptr<HtnInstance> HtnInstanceBuilder::build(ParsedProblem& problem, Parameters& params) {
     USignatureHasher::seed = params.getIntParam("s");
     std::unique_ptr<HtnInstance> result(new HtnInstance(params.isNonzero("sqq")));
     HtnInstance& htn = *result;
-    htn._macro_action_compiler = std::move(macroActions);
-
     Names::init(htn._name_back_table);
     createBlankAction(htn);
 

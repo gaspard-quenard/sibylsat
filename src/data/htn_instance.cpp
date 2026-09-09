@@ -4,7 +4,6 @@
 #include <unordered_map>
 
 #include "data/htn_instance.h"
-#include "preprocessing/macro_action_compiler.h"
 
 HtnInstance::HtnInstance(bool shareQConstants) : _share_q_constants(shareQConstants) {}
 
@@ -456,28 +455,5 @@ std::string HtnInstance::getPredicateInCorrectCase(std::string pred) const {
     exit(1);
 }
 
-
-int HtnInstance::numActionsInMacro(int nameId) const {
-    return _macro_action_compiler->getExpansion(toString(nameId)).primitiveSteps.size();
-}
-
-std::vector<USignature> HtnInstance::getActionsFromMacro(const USignature& macroAction) const {
-    std::vector<USignature> actions;
-    if (!isMacroTask(macroAction._name_id)) return actions;
-
-    const MacroActionExpansion& expansion = _macro_action_compiler->getExpansion(toString(macroAction._name_id));
-    actions.reserve(expansion.primitiveSteps.size());
-    for (const MacroPrimitiveStep& step : expansion.primitiveSteps) {
-        std::vector<int> arguments;
-        arguments.reserve(step.macroArgumentIndices.size());
-        for (size_t argumentIndex : step.macroArgumentIndices) arguments.push_back(macroAction._args.at(argumentIndex));
-        actions.emplace_back(_name_table.at(step.actionName), std::move(arguments));
-    }
-    return actions;
-}
-
-bool HtnInstance::isMacroTask(int nameId) const {
-    return _macro_action_compiler && _macro_action_compiler->isMacroAction(toString(nameId));
-}
 
 HtnInstance::~HtnInstance() = default;

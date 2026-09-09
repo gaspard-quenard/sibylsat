@@ -9,6 +9,7 @@
 #include <stdexcept>
 
 #include "algo/plan_writer.h"
+#include "preprocessing/macro_action_compiler.h"
 #include "util/log.h"
 #include "util/process_utils.h"
 #include "util/project_utils.h"
@@ -22,6 +23,23 @@ int PlanWriter::findNextPlanItemId(const Plan& plan) const {
         }
     }
     return nextPlanItemId;
+}
+
+bool PlanWriter::isMacroAction(const USignature& action) const {
+    return _macro_actions != nullptr && _macro_actions->isMacroAction(_htn.toString(action._name_id));
+}
+
+std::vector<USignature> PlanWriter::expandMacroAction(const USignature& macroAction) {
+    const MacroActionExpansion& expansion = _macro_actions->getExpansion(_htn.toString(macroAction._name_id));
+    std::vector<USignature> actions;
+    actions.reserve(expansion.primitiveSteps.size());
+    for (const MacroPrimitiveStep& step : expansion.primitiveSteps) {
+        std::vector<int> arguments;
+        arguments.reserve(step.macroArgumentIndices.size());
+        for (size_t argumentIndex : step.macroArgumentIndices) arguments.push_back(macroAction._args.at(argumentIndex));
+        actions.emplace_back(_htn.nameId(step.actionName), std::move(arguments));
+    }
+    return actions;
 }
 
 Plan PlanWriter::normalizePlanForOutput(const Plan& decodedPlan) {
@@ -61,9 +79,9 @@ Plan PlanWriter::normalizePlanForOutput(const Plan& decodedPlan) {
             normalizedAction.reduction = normalizedAction.abstractTask;
         }
 
-        if (_htn.isMacroTask(normalizedAction.abstractTask._name_id)) {
+        if (isMacroAction(normalizedAction.abstractTask)) {
             std::vector<int>& replacementIds = actionIdReplacements[normalizedAction.id];
-            for (const USignature& action : _htn.getActionsFromMacro(normalizedAction.abstractTask)) {
+            for (const USignature& action : expandMacroAction(normalizedAction.abstractTask)) {
                 const int actionId = nextPlanItemId++;
                 normalizedActions.emplace_back(actionId, action, action, std::vector<int>());
                 replacementIds.push_back(actionId);

@@ -9,18 +9,21 @@
 #include "data/htn_instance.h"
 #include "data/plan.h"
 
+class MacroActionCompiler;
+
 class PlanWriter {
 
 private:
     HtnInstance& _htn;
+    const MacroActionCompiler* _macro_actions;
     const std::string _domain_filename;
     const std::string _problem_filename;
     const bool _verify_plan;
     const bool _write_plan;
 
 public:
-    PlanWriter(HtnInstance& htn, std::string domainFilename, std::string problemFilename, bool verifyPlan, bool writePlan)
-        : _htn(htn), _domain_filename(std::move(domainFilename)), _problem_filename(std::move(problemFilename)), _verify_plan(verifyPlan), _write_plan(writePlan) {}
+    PlanWriter(HtnInstance& htn, const MacroActionCompiler* macroActions, std::string domainFilename, std::string problemFilename, bool verifyPlan, bool writePlan)
+        : _htn(htn), _macro_actions(macroActions), _domain_filename(std::move(domainFilename)), _problem_filename(std::move(problemFilename)), _verify_plan(verifyPlan), _write_plan(writePlan) {}
 
     /** Normalize the decoded plan, convert it to the original problem, optionally verify and save it, and print it. */
     void outputPlan(const Plan& decodedPlan);
@@ -28,6 +31,12 @@ public:
 private:
     /** Return an ID greater than every item and subtask ID already present in the plan. */
     int findNextPlanItemId(const Plan& plan) const;
+
+    /** Return whether an internal action was produced by macro compilation. */
+    bool isMacroAction(const USignature& action) const;
+
+    /** Reconstruct the primitive sequence represented by a selected macro action. */
+    std::vector<USignature> expandMacroAction(const USignature& macroAction);
 
     /**
      * Convert the decoded internal plan into printable operations: discard the
