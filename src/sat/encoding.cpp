@@ -516,7 +516,7 @@ void Encoding::encodeFrameAxiomForFact(Position& source, Position& destination, 
             // Non-primitiveness wildcard
             if (!nonprimFactSupport && sourceVarPrim != 0) cls.push_back(-sourceVarPrim);
 
-            if (_mutex_groups != nullptr && change.makesFactTrue && _mutex_groups->containsFact(fact)) {
+            if (_mutex_groups != nullptr && change.makesFactTrue && _mutex_groups->containsFact(factId)) {
                 positiveFacts.insert(fact);
             }
 
@@ -1077,15 +1077,18 @@ void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvi
 
     // Only groups containing a fact that may become true need consideration.
     for (const USignature& fact : possibleEffects) {
-        for (int groupId : _mutex_groups->getGroupIdsForFact(fact)) {
+        const int factId = _analysis.getGroundFactId(fact, false);
+        if (!_mutex_groups->containsFact(factId)) continue;
+        for (int groupId : _mutex_groups->getGroupIdsForFact(factId)) {
             if (encodedGroupIds.count(groupId)) continue;
 
             mutexFactVars.clear();
-            const USigSet& factsInGroup = _mutex_groups->getFactsInGroup(groupId);
-            mutexFactVars.reserve(factsInGroup.size());
+            const std::vector<int>& factIdsInGroup = _mutex_groups->getFactIdsInGroup(groupId);
+            mutexFactVars.reserve(factIdsInGroup.size());
 
             bool groupIsFullyDefined = true;
-            for (const USignature& groupFact : factsInGroup) {
+            for (int groupFactId : factIdsInGroup) {
+                const USignature& groupFact = _analysis.getGroundFact(groupFactId);
                 const int factVar = pos.getVariableOrZero(VarType::FACT, groupFact);
                 if (factVar == 0) {
                     groupIsFullyDefined = false;

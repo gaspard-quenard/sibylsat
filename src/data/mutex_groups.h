@@ -2,65 +2,31 @@
 #define SIBYLSAT_MUTEX_GROUPS_H
 
 
-#include <unordered_map>
+#include <cstddef>
 #include <vector>
 
-#include "data/signature.h"
-
-// Forward declaration
-class HtnInstance;
-class MutexLoader;
-
-/** Ground fact groups whose members cannot hold simultaneously. */
+/**
+ * Immutable index of grounded mutex groups.
+ *
+ * Facts are represented by FactAnalysis IDs so the planner does not retain a
+ * second copy of every fact signature. Construction from lifted invariants is
+ * handled by the preprocessing layer.
+ */
 class MutexGroups {
 private:
-    struct LiftedMutexParameter {
-        std::string hddl_type;
-        bool is_counted_var;
-        bool is_constant = false;
-        int val;
-    };
-
-    struct LiftedMutexPredicate {
-        std::string name;
-        std::vector<int> idx_params;
-    };
-
-    struct LiftedMutexGroup {
-        std::vector<LiftedMutexPredicate> preds;
-        std::vector<LiftedMutexParameter> params;
-    };
-
-    friend class MutexLoader;
-
-    std::vector<LiftedMutexGroup> _lifted_fam_groups;
-    HtnInstance& _htn;
-    std::vector<USigSet> _groups;
-    FlatHashMap<USignature, FlatHashSet<int>, USignatureHasher> _group_ids_by_fact;
-
-    void parseNextLiftedFamGroup(const std::string& line, LiftedMutexGroup& group);
-    void parseNextPredicateInLiftedFamGroup(LiftedMutexGroup& group, const std::string& line, int& currentPos, std::unordered_map<std::string, int>& variableIndices);
-    void printAllLiftedFamGroups();
-    void printLiftedFamGroup(const LiftedMutexGroup& group) const;
-    void generateFixedVariableCombinations(LiftedMutexGroup& group, size_t parameterIndex);
-    void generateCountedVariableCombinations(LiftedMutexGroup& group, LiftedMutexPredicate& predicate, size_t parameterIndex, USigSet& facts);
-    void groundLiftedGroup(LiftedMutexGroup& group);
-    void retainReachableFacts(const USigSet& reachableFacts);
+    std::vector<std::vector<int>> _fact_ids_by_group;
+    std::vector<std::vector<int>> _group_ids_by_fact;
 
 public:
-    /**
-     * Load and ground the lifted FAM groups written by pandaPIgrounder.
-     * `V` parameters select one ground group and `C` parameters enumerate
-     * all facts within that group.
-     */
-    MutexGroups(const std::string& mutexFile, HtnInstance& htn);
+    /** Build the two-way lookup and discard groups that cannot impose a mutex. */
+    MutexGroups(std::vector<std::vector<int>> factIdsByGroup, size_t numGroundFacts);
 
-    /** Return the IDs of all mutex groups containing this fact. */
-    const FlatHashSet<int>& getGroupIdsForFact(const USignature& fact) const;
-    /** Return all facts belonging to one grounded mutex group. */
-    const USigSet& getFactsInGroup(int groupId) const;
-    /** Return whether the fact belongs to at least one mutex group. */
-    bool containsFact(const USignature& fact) const { return _group_ids_by_fact.count(fact); }
+    /** Return the IDs of all mutex groups containing the ground fact. */
+    const std::vector<int>& getGroupIdsForFact(int factId) const;
+    /** Return the ground-fact IDs belonging to one mutex group. */
+    const std::vector<int>& getFactIdsInGroup(int groupId) const;
+    /** Return whether the ground fact belongs to at least one nontrivial group. */
+    bool containsFact(int factId) const;
 };
 
 

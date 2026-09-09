@@ -6,11 +6,12 @@
 #include "algo/fact_analysis.h"
 #include "data/htn_instance.h"
 #include "data/mutex_groups.h"
+#include "preprocessing/lifted_mutex_group_grounder.h"
 #include "util/log.h"
 #include "util/process_utils.h"
 #include "util/project_utils.h"
 
-std::unique_ptr<MutexGroups> MutexLoader::compute(HtnInstance& htn, const FactAnalysis& facts, const std::filesystem::path& pandaProblemFile) {
+std::unique_ptr<MutexGroups> MutexLoader::compute(HtnInstance& htn, FactAnalysis& facts, const std::filesystem::path& pandaProblemFile) {
     const std::filesystem::path projectRoot = getProjectRootDir();
     const std::filesystem::path mutexFile = getProblemProcessingDir() / "lfg.txt";
 
@@ -24,7 +25,6 @@ std::unique_ptr<MutexGroups> MutexLoader::compute(HtnInstance& htn, const FactAn
     }
 
     Log::i("Loading and grounding lifted mutex groups.\n");
-    auto mutexGroups = std::make_unique<MutexGroups>(mutexFile.string(), htn);
-    mutexGroups->retainReachableFacts(facts.getGroundPosFacts());
-    return mutexGroups;
+    std::vector<std::vector<int>> factIdsByGroup = LiftedMutexGroupGrounder::groundFile(mutexFile, htn, facts);
+    return std::make_unique<MutexGroups>(std::move(factIdsByGroup), facts.getNumGroundFacts());
 }

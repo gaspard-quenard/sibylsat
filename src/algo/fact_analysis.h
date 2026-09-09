@@ -44,10 +44,6 @@ public:
         }
     }
 
-    const USigSet& getGroundPosFacts() const {
-        return _ground_pos_facts;
-    }
-
     bool isInGroundFacts(const Signature& fact) {
         return isInGroundFacts(fact._usig, fact._negated);
     }
@@ -233,6 +229,9 @@ public:
     const USignature& getGroundFact(size_t factId) const { return _ground_facts.getFact(factId); }
     /** Find indexed facts compatible with a possibly lifted or pseudo-ground signature. */
     BitVec findMatchingGroundFactIds(const USignature& signature, bool negated, const std::vector<int>& argumentSorts = {});
+
+    /** Return positive fact IDs matching a predicate and its fixed arguments; -1 arguments are wildcards. */
+    BitVec findMatchingPositiveFactIds(int predicateId, const std::vector<int>& fixedArguments);
 
 };
 

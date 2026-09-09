@@ -61,3 +61,10 @@ BitVec FactAnalysis::findMatchingGroundFactIds(const USignature& signature, bool
     return _ground_facts.findMatchingFactIds(signature._name_id, negated, argumentSorts, restrictiveSorts,
             fixedConstants, _htn.getConstantsBySort());
 }
+
+BitVec FactAnalysis::findMatchingPositiveFactIds(int predicateId, const std::vector<int>& fixedArguments) {
+    const std::vector<int>& argumentSorts = _htn.getSorts(predicateId);
+    assert(fixedArguments.size() == argumentSorts.size());
+    const std::vector<int> restrictiveSorts(fixedArguments.size(), -1);
+    return _ground_facts.findMatchingFactIds(predicateId, false, argumentSorts, restrictiveSorts, fixedArguments, _htn.getConstantsBySort());
+}

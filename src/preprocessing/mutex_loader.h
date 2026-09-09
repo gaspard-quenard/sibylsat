@@ -12,7 +12,7 @@ class MutexGroups;
 class MutexLoader {
 public:
     /** Compute, ground, and reachability-filter mutex groups for the configured problem. */
-    static std::unique_ptr<MutexGroups> compute(HtnInstance& htn, const FactAnalysis& facts, const std::filesystem::path& pandaProblemFile);
+    static std::unique_ptr<MutexGroups> compute(HtnInstance& htn, FactAnalysis& facts, const std::filesystem::path& pandaProblemFile);
 };
 
 #endif
