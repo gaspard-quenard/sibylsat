@@ -1,87 +1,79 @@
 #ifndef SIBYLSAT_TDG_H
 #define SIBYLSAT_TDG_H
 
-#include <stack>
-#include <unordered_set>
+#include <cstddef>
+#include <filesystem>
+#include <istream>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "data/htn_instance.h"
-#include "algo/network_traversal.h"
 #include "data/plan.h"
-#include "algo/fact_analysis.h"
 
-const int MAX_WEIGHT = 10000;
-
-// Create a class for the vertices of the TDG with outgoing/incoming edges + the label of the vertice
-class TDGVertexInfo
-{
-    // Let the TDG class access the private members of this class
-    friend class TDG;
-
-    int _heuristic_value = MAX_WEIGHT;
-    int _temp_heuristic_value = MAX_WEIGHT;
-    std::vector<USignature*> _outgoing_edges;
-    std::vector<USignature*> _incoming_edges;
-};
-
-class TDG
-{
-
+/**
+ * Admissible task-decomposition heuristic built from the grounded TDG emitted
+ * by pandaPIgrounder.
+ *
+ * Primitive tasks cost one, methods cost the sum of their subtasks, and
+ * abstract tasks cost the cheapest applicable method. Recursive components are
+ * evaluated to a fixed point.
+ */
+class TDG {
 private:
+    using VertexId = size_t;
+    static constexpr int UNREACHABLE_COST = 10000;
+
+    class Vertex {
+    public:
+        explicit Vertex(USignature signature) : signature(std::move(signature)) {}
+
+        USignature signature;
+        std::vector<VertexId> children;
+        int cost = UNREACHABLE_COST;
+    };
+
     HtnInstance& _htn;
-    NodeHashMap<USignature, TDGVertexInfo, USignatureHasher> _vertices; // The key is the label of the vertice (a ground task or method), the value is the info on the vertice
+    std::vector<Vertex> _vertices;
+    NodeHashMap<USignature, VertexId, USignatureHasher> _vertex_ids;
+    NodeHashMap<int, std::vector<VertexId>> _vertices_by_name;
+    NodeHashMap<int, int> _minimum_cost_by_name;
+    NodeHashMap<int, size_t> _grounded_arity_by_name;
+    std::vector<std::vector<VertexId>> _strongly_connected_components;
+    int _noop_action_id = -1;
 
-    NodeHashMap<int, int> _min_heuristic_values_for_name_id; // The key is the name_id of the vertice (correspond to unique method or task name), the value is the best heuristic value of the vertice
+    void loadGroundedGraph(const std::filesystem::path& filename);
+    std::vector<VertexId> loadTasks(std::istream& input, size_t& lineNumber);
+    void loadMethods(std::istream& input, size_t& lineNumber, const std::vector<VertexId>& taskVertices);
+    void recordGroundedArities();
 
-    NodeHashMap<int, int> _number_params_to_keep_for_name_id; // If the TDG has less parameters than the operator in _htn, this map stores the number of parameters to keep to convert the operator in 
-    // _htn to the operator in the TDG
+    VertexId getOrCreateVertex(USignature signature);
+    void addEdge(VertexId source, VertexId destination);
+    USignature parseTask(const std::string& line, size_t lineNumber);
+    USignature parseMethod(const std::string& line, size_t lineNumber);
+    USignature parseSignature(const std::string& line, size_t nameStart, size_t nameEnd, size_t argumentsStart, size_t lineNumber);
+    bool shouldIgnoreCompiledPrecondition(VertexId task, size_t subtaskNumber) const;
 
-    int special_noop_action_id = -1; // The id of the special noop action if it exists (panda use it for tasks that have no methods which can accomplish them)
+    void computeHeuristicValues();
+    void visitForStronglyConnectedComponents(VertexId vertex, int& nextIndex, std::vector<int>& indices, std::vector<int>& lowLinks, std::vector<bool>& onStack, std::vector<VertexId>& stack);
+    void orderStronglyConnectedComponents();
+    void visitComponent(size_t component, const std::vector<std::vector<size_t>>& componentEdges, std::vector<bool>& visited, std::vector<size_t>& order) const;
+    int evaluateVertexCost(VertexId vertex) const;
+    int addCosts(int left, int right) const;
 
-    NetworkTraversal _traversal;
-
-    USigSet _init_state;
-
-    // All the operators
-    std::vector<USignature> _methods;
-    std::vector<USignature> _tasks; // The first <nb_primitive_tasks> tasks are primitive tasks, the rest are compound tasks
-    int _nb_primitive_tasks;
-
-    std::vector<FlatHashSet<const USignature*, USignaturePtrHasher, USignaturePtrEqual>> _sccs;
-
-    void tarjanDFS(const USignature& u, int& index, std::stack<const USignature*>& stack, 
-                   std::unordered_map<const USignature* , int, USignaturePtrHasher, USignaturePtrEqual>& indices, 
-                   std::unordered_map<const USignature* , int, USignaturePtrHasher, USignaturePtrEqual>& lowLinks, 
-                   std::unordered_map<const USignature* , bool, USignaturePtrHasher, USignaturePtrEqual>& onStack, 
-                   std::vector<FlatHashSet<const USignature*, USignaturePtrHasher, USignaturePtrEqual>>& sccs);
-
-    void topologicalSortUtil(int v, std::unordered_map<int, std::unordered_set<int>>& condensedGraph, 
-                             std::unordered_set<int>& visited, std::stack<int>& Stack);
-
-    void computeLiftedTDG();
-
-    std::vector<USignature> getAllGrounding(const USignature& u);
+    USignature normalizeToGroundedArity(const USignature& signature) const;
+    bool isCompatibleGrounding(const USignature& grounding, const std::vector<std::vector<int>>& eligibleArguments) const;
 
 public:
-
-
-
-    /**
-     * Constructor.
-     * Construct the TDG as defined in the paper: "An Admissible HTN Planning Heuristic"
-     * @param htn The HTN instance
-    */
+    /** Load the grounded task-decomposition graph and compute its heuristic. */
     explicit TDG(HtnInstance& htn);
 
-    void pandaPiGrounderExtractAvailableMethods(std::ifstream& file, int& lineIdx);
-    void pandaPiGrounderExtractAvailableTasks(std::ifstream& file, int& lineIdx);
-    void computeHeuristicValues();
-    void computeSCCs();
-    void sortSCCsInTopologicalOrder();
-    int getHeuristicValue(const USignature& u) const;
-    int getBestHeuristicValue(const USignature& u);
+    /** Return the heuristic cost of an exact grounded graph vertex. */
+    int getHeuristicValue(const USignature& signature) const;
+    /** Return the cheapest graph vertex compatible with a lifted or pseudo-ground operation. */
+    int getBestHeuristicValue(const USignature& signature);
+    /** Sum the admissible costs of a decoded abstract frontier plan. */
     int getVirtualPlanHeuristicValue(const std::vector<PlanItem>& virtualPlan) const;
-    // int getStateDependantHeuristicValue(const USignature& u, const USigSet& pos_facts, const USigSet& neg_facts, int node_budget, FactAnalysis& _analysis);
-    const int getMaxWeight() const { return MAX_WEIGHT; }
 };
 
-#endif // SIBYLSAT_TDG_H
+#endif
