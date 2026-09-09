@@ -5,6 +5,7 @@
 #include "data/position.h"
 #include "data/signature.h"
 #include "data/htn_instance.h"
+#include "data/mutex_groups.h"
 #include "data/action.h"
 #include "sat/literal_tree.h"
 #include "sat/sat_interface.h"
@@ -18,6 +19,7 @@ private:
     Parameters& _params;
     HtnInstance& _htn;
     FactAnalysis& _analysis;
+    const MutexGroups* _mutex_groups;
     Position*& _root_position;
     std::vector<Position*>& _leaf_positions;
     Statistics& _stats;
@@ -32,16 +34,13 @@ private:
 
     const bool _optimal;
 
-    const bool _mutex_predicates;
-
 public:
-    Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, Position*& rootPosition, std::vector<Position*>& leafPositions) : 
-            _params(params), _htn(htn), _analysis(analysis), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(Statistics::getInstance()),
+    Encoding(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, const MutexGroups* mutexGroups, Position*& rootPosition, std::vector<Position*>& leafPositions) :
+            _params(params), _htn(htn), _analysis(analysis), _mutex_groups(mutexGroups), _root_position(rootPosition), _leaf_positions(leafPositions), _stats(Statistics::getInstance()),
             _variable_allocator(params), _sat(params), _vars(_htn, _variable_allocator),
             _decoder(_htn, _root_position, _leaf_positions, _sat, _vars),
             _use_sibylsat_expansion(params.isNonzero("sibylsat")),
-            _optimal(params.isNonzero("optimal")),
-            _mutex_predicates(_params.isNonzero("mutex")) {}
+            _optimal(params.isNonzero("optimal")) {}
 
     /**
      * Encode the current frontier, including initial-state facts and any

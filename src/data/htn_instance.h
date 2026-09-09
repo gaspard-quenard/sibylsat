@@ -3,7 +3,6 @@
 #define DOMPASCH_TREE_REXX_HTN_INSTANCE_H
 
 #include <assert.h>
-#include <memory>
 #include <optional>
 
 #include "data/action.h"
@@ -18,7 +17,6 @@
 
 #include "algo/arg_iterator.h"
 #include "algo/sample_arg_iterator.h"
-#include "data/mutex_groups.h"
 
 class HtnInstanceBuilder;
 class HtnStatistics;
@@ -98,14 +96,6 @@ public:
     bool isStaticPredicate(int nameId) const {
         return _static_predicates.count(nameId);
     }
-
-    /** Return whether mutex groups were requested and loaded. */
-    bool hasMutexGroups() const { return _mutex_groups != nullptr; }
-    /** Return the loaded mutex-group representation. */
-    MutexGroups& getMutexGroups() { assert(_mutex_groups); return *_mutex_groups; }
-    const MutexGroups& getMutexGroups() const { assert(_mutex_groups); return *_mutex_groups; }
-    /** Install mutex groups computed after the core HTN model has been built. */
-    void setMutexGroups(std::unique_ptr<MutexGroups> mutexGroups) { _mutex_groups = std::move(mutexGroups); }
 
     const USigSet& getInitState() const { return _init_state; }
     const Reduction& getInitReduction() const;
@@ -235,7 +225,6 @@ private:
     std::optional<std::vector<int>> instantiateArgumentsWithQConstants(const HtnOp& operation, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
     int createQConstant(const std::string& name, const FlatHashSet<int>& domain, size_t originPositionId);
 
-    std::unique_ptr<MutexGroups> _mutex_groups;
 };
 
 #endif

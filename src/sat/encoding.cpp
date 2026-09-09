@@ -439,7 +439,7 @@ void Encoding::encodeFrameAxioms(Position& source, Position& destination, const 
     }
     _stats.end(STAGE_DIRECTFRAMEAXIOMS);
 
-    if (_mutex_predicates) {
+    if (_mutex_groups != nullptr) {
         encodeMutexPredicates(destination, env, positiveFacts);
     }
 }
@@ -518,7 +518,7 @@ void Encoding::encodeFrameAxiomForFact(Position& source, Position& destination, 
             // Non-primitiveness wildcard
             if (!nonprimFactSupport && sourceVarPrim != 0) cls.push_back(-sourceVarPrim);
 
-            if (_mutex_predicates && change.makesFactTrue && _htn.hasMutexGroups() && _htn.getMutexGroups().containsFact(fact)) {
+            if (_mutex_groups != nullptr && change.makesFactTrue && _mutex_groups->containsFact(fact)) {
                 positiveFacts.insert(fact);
             }
 
@@ -1067,6 +1067,7 @@ void Encoding::addAssumptionsPrimPlan(bool permanent, int assumptions_until) {
 }
 
 void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvironment& env, const USigSet& possibleEffects) {
+    assert(_mutex_groups != nullptr);
     _stats.begin(STAGE_MUTEX);
     std::vector<int> mutexFactVars;
     FlatHashSet<int> encodedGroupIds;
@@ -1078,11 +1079,11 @@ void Encoding::encodeMutexPredicates(Position& pos, const Encoding::EncodingEnvi
 
     // Only groups containing a fact that may become true need consideration.
     for (const USignature& fact : possibleEffects) {
-        for (int groupId : _htn.getMutexGroups().getGroupIdsForFact(fact)) {
+        for (int groupId : _mutex_groups->getGroupIdsForFact(fact)) {
             if (encodedGroupIds.count(groupId)) continue;
 
             mutexFactVars.clear();
-            const USigSet& factsInGroup = _htn.getMutexGroups().getFactsInGroup(groupId);
+            const USigSet& factsInGroup = _mutex_groups->getFactsInGroup(groupId);
             mutexFactVars.reserve(factsInGroup.size());
 
             bool groupIsFullyDefined = true;

@@ -29,13 +29,14 @@ std::unique_ptr<MacroActionCompiler> compileMacroActions(ParsedProblem& problem,
 }
 
 /** Compute mutex groups and immediately filter them through grounded facts. */
-void computeMutexGroups(HtnInstance& htn, FactAnalysis& facts, Parameters& params) {
-    if (!params.isNonzero("mutex")) return;
+std::unique_ptr<MutexGroups> computeMutexGroups(HtnInstance& htn, FactAnalysis& facts, Parameters& params) {
+    if (!params.isNonzero("mutex")) return nullptr;
 
     Statistics& statistics = Statistics::getInstance();
     statistics.beginTiming(TimingStage::INIT_MUTEXES);
-    htn.setMutexGroups(MutexLoader::compute(params, htn, facts));
+    std::unique_ptr<MutexGroups> mutexGroups = MutexLoader::compute(params, htn, facts);
     statistics.endTiming(TimingStage::INIT_MUTEXES);
+    return mutexGroups;
 }
 
 }
@@ -61,7 +62,7 @@ PlanningContext preprocessProblem(Parameters& params) {
     auto factAnalysis = std::make_unique<FactAnalysis>(*htn, params.getDomainFilename(), params.getProblemFilename(), params.isNonzero("optimal"));
 
     // Compute mutex groups and remove groups invalidated by grounded reachability.
-    computeMutexGroups(*htn, *factAnalysis, params);
+    std::unique_ptr<MutexGroups> mutexGroups = computeMutexGroups(*htn, *factAnalysis, params);
 
     // Compute and attach the possible effects of every method template.
     MethodEffectAnalyzer::analyze(*htn, *factAnalysis);
@@ -73,7 +74,7 @@ PlanningContext preprocessProblem(Parameters& params) {
     std::unique_ptr<TDG> tdg;
     if (params.isNonzero("optimal")) tdg = std::make_unique<TDG>(*htn);
 
-    return {std::move(htn), std::move(macroActions), std::move(factAnalysis), std::move(tdg)};
+    return {std::move(htn), std::move(macroActions), std::move(factAnalysis), std::move(mutexGroups), std::move(tdg)};
 }
 
 void PlanningContext::resetForNewSearch() {
