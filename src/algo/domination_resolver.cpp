@@ -16,7 +16,6 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
         int arg = op._args[argIdx];
         int otherArg = other._args[argIdx];
 
-        // TODO Every q-constant must have a globally invariant domain for this to work.
         if (arg == otherArg) continue; 
         
         bool isQ = _q_constants.contains(arg);
@@ -50,7 +49,7 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
             // This op may be dominated by the other op
 
             // Contradicts previous argument indices -> ops are different
-            if (status == DOMINATED) return res;
+            if (status == DOMINATING) return res;
             // Check if the other domain actually contains this domain
             for (int c : domain) if (!otherDomain.count(c)) return res;
             // Yes: Dominated w.r.t. this position
