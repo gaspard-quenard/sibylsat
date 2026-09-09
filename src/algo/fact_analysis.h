@@ -8,7 +8,7 @@
 #include "data/ground_fact_index.h"
 #include "data/htn_instance.h"
 #include "algo/q_constant_manager.h"
-#include "preprocessing/ground_problem_loader.h"
+#include "preprocessing/panda_ground_problem_loader.h"
 #include "util/bitvec.h"
 
 class FactAnalysis {

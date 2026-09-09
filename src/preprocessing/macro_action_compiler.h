@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-struct ParsedProblem;
+struct LiftedProblem;
 
 /** One primitive action represented inside a compiled macro action. */
 struct MacroPrimitiveStep {
@@ -29,7 +29,7 @@ private:
 
 public:
     /** Rewrite eligible primitive sequences in the parsed problem in place. */
-    void compile(ParsedProblem& problem);
+    void compile(LiftedProblem& problem);
 
     /** Return whether the named primitive task is a generated macro action. */
     bool isMacroAction(const std::string& actionName) const;

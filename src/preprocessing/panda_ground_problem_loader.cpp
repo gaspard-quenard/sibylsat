@@ -1,4 +1,4 @@
-#include "preprocessing/ground_problem_loader.h"
+#include "preprocessing/panda_ground_problem_loader.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -43,18 +43,11 @@ void runRequiredCommand(const std::string& description, const std::string& comma
 
 }
 
-GroundFacts GroundProblemLoader::load(HtnInstance& htn, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations) {
+GroundFacts PandaGroundProblemLoader::load(HtnInstance& htn, const std::filesystem::path& pandaProblemFile, bool includeGroundOperations) {
     const std::filesystem::path projectRoot = getProjectRootDir();
     const std::filesystem::path processingDirectory = getProblemProcessingDir();
-    const std::filesystem::path parserOutput = processingDirectory / "problem.parsed";
     const std::filesystem::path grounderOutput = processingDirectory / "problem.sas";
-    const std::filesystem::path parser = projectRoot / "lib" / (includeGroundOperations ? "pandaPIparser" : "pandaPIparserOriginal");
-    const std::filesystem::path grounder = projectRoot / "lib" / "pandaPIgrounder";
-
-    const std::string parserCommand = quoteShellArgument(parser.string()) + " "
-            + quoteShellArgument(domainFilename) + " " + quoteShellArgument(problemFilename) + " "
-            + quoteShellArgument(parserOutput.string());
-    runRequiredCommand("Parsing the domain and problem files for grounding", parserCommand);
+    const std::filesystem::path grounder = projectRoot / "lib" / "grounder" / "pandaPIgrounder";
 
     std::error_code removalError;
     std::filesystem::remove(grounderOutput, removalError);
@@ -63,7 +56,7 @@ GroundFacts GroundProblemLoader::load(HtnInstance& htn, const std::string& domai
             ? "--no-literal-pruning --no-abstract-expansion --write-full-methods-name --quiet"
             : "--no-literal-pruning --only-write-state-features --quick-compute-state-features --quiet";
     const std::string grounderCommand = quoteShellArgument(grounder.string()) + " " + options + " "
-            + quoteShellArgument(parserOutput.string()) + " " + quoteShellArgument(grounderOutput.string());
+            + quoteShellArgument(pandaProblemFile.string()) + " " + quoteShellArgument(grounderOutput.string());
     Log::i("Grounder command: %s\n", grounderCommand.c_str());
     runRequiredCommand("Grounding the parsed problem", grounderCommand);
 
@@ -73,7 +66,7 @@ GroundFacts GroundProblemLoader::load(HtnInstance& htn, const std::string& domai
     return facts;
 }
 
-GroundFacts GroundProblemLoader::parseStateFeatures(HtnInstance& htn, const std::string& filename) {
+GroundFacts PandaGroundProblemLoader::parseStateFeatures(HtnInstance& htn, const std::string& filename) {
     std::ifstream input(filename);
     if (!input) throw std::runtime_error("Could not open grounded problem: " + filename);
 

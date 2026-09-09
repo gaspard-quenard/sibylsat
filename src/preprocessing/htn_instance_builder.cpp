@@ -6,23 +6,28 @@
 
 #include "data/htn_instance.h"
 #include "data/htn_statistics.h"
-#include "libpanda.hpp"
+#include "parser/lifted_problem.h"
 #include "util/log.h"
 #include "util/names.h"
 #include "util/params.h"
-#include "util/regex.h"
 
-std::unique_ptr<HtnInstance> HtnInstanceBuilder::build(ParsedProblem& problem, Parameters& params) {
+namespace {
+
+constexpr const char* EQUALITY_PREDICATE = "__equal";
+
+}
+
+std::unique_ptr<HtnInstance> HtnInstanceBuilder::build(LiftedProblem& problem, Parameters& params) {
     USignatureHasher::seed = params.getIntParam("s");
     std::unique_ptr<HtnInstance> result(new HtnInstance());
     HtnInstance& htn = *result;
     Names::init(htn._name_back_table);
     createBlankAction(htn);
 
-    for (const predicate_definition& predicate : problem.predicate_definitions) extractPredicateSorts(htn, predicate);
-    for (const task& action : problem.primitive_tasks) extractTaskSorts(htn, action);
-    for (const task& abstractTask : problem.abstract_tasks) extractTaskSorts(htn, abstractTask);
-    for (const method& reduction : problem.methods) extractMethodSorts(htn, reduction);
+    for (const LiftedPredicate& predicate : problem.predicate_definitions) extractPredicateSorts(htn, predicate);
+    for (const LiftedTask& action : problem.primitive_tasks) extractTaskSorts(htn, action);
+    for (const LiftedTask& abstractTask : problem.abstract_tasks) extractTaskSorts(htn, abstractTask);
+    for (const LiftedMethod& reduction : problem.methods) extractMethodSorts(htn, reduction);
     extractConstants(htn, problem);
     htn._init_state = extractInitialState(htn, problem);
     htn._goals = extractGoals(htn, problem);
@@ -34,8 +39,8 @@ std::unique_ptr<HtnInstance> HtnInstanceBuilder::build(ParsedProblem& problem, P
         Log::d("\n");
     }
 
-    for (const task& action : problem.primitive_tasks) createAction(htn, action);
-    for (method& reduction : problem.methods) createReduction(htn, reduction, problem);
+    for (const LiftedTask& action : problem.primitive_tasks) createAction(htn, action);
+    for (LiftedMethod& reduction : problem.methods) createReduction(htn, reduction, problem);
     identifyStaticPredicates(htn, problem);
 
     if (params.isNonzero("stats")) {
@@ -66,15 +71,15 @@ std::vector<int> HtnInstanceBuilder::convertArguments(HtnInstance& htn, int oper
     return result;
 }
 
-Signature HtnInstanceBuilder::convertCondition(HtnInstance& htn, int operationId, const literal& condition) {
+Signature HtnInstanceBuilder::convertCondition(HtnInstance& htn, int operationId, const LiftedLiteral& condition) {
     Signature result(htn.nameId(condition.predicate), convertArguments(htn, operationId, condition.arguments));
     if (!condition.positive) result.negate();
     return result;
 }
 
-USigSet HtnInstanceBuilder::extractInitialState(HtnInstance& htn, const ParsedProblem& problem) {
+USigSet HtnInstanceBuilder::extractInitialState(HtnInstance& htn, const LiftedProblem& problem) {
     USigSet result;
-    for (const ground_literal& fact : problem.init) {
+    for (const LiftedGroundLiteral& fact : problem.init) {
         if (fact.positive) result.emplace(htn.nameId(fact.predicate), convertArguments(htn, htn.nameId(fact.predicate), fact.args));
     }
     for (int equalityPredicateId : htn._equality_predicates) {
@@ -87,9 +92,9 @@ USigSet HtnInstanceBuilder::extractInitialState(HtnInstance& htn, const ParsedPr
     return result;
 }
 
-SigSet HtnInstanceBuilder::extractGoals(HtnInstance& htn, const ParsedProblem& problem) {
+SigSet HtnInstanceBuilder::extractGoals(HtnInstance& htn, const LiftedProblem& problem) {
     SigSet result;
-    for (const ground_literal& goal : problem.goal) {
+    for (const LiftedGroundLiteral& goal : problem.goal) {
         Signature signature(htn.nameId(goal.predicate), convertArguments(htn, htn.nameId(goal.predicate), goal.args));
         if (!goal.positive) signature.negate();
         result.insert(std::move(signature));
@@ -115,7 +120,7 @@ void HtnInstanceBuilder::createGoalAction(HtnInstance& htn) {
     htn._signature_sorts_table[goalId];
 }
 
-void HtnInstanceBuilder::extractPredicateSorts(HtnInstance& htn, const predicate_definition& predicate) {
+void HtnInstanceBuilder::extractPredicateSorts(HtnInstance& htn, const LiftedPredicate& predicate) {
     const int predicateId = htn.nameId(predicate.name);
     htn._predicate_ids.insert(predicateId);
     std::string lowercaseName = predicate.name;
@@ -128,7 +133,7 @@ void HtnInstanceBuilder::extractPredicateSorts(HtnInstance& htn, const predicate
     htn._signature_sorts_table[predicateId] = std::move(sorts);
 }
 
-void HtnInstanceBuilder::extractTaskSorts(HtnInstance& htn, const task& task) {
+void HtnInstanceBuilder::extractTaskSorts(HtnInstance& htn, const LiftedTask& task) {
     std::vector<int> sorts;
     for (const auto& [parameter, sort] : task.vars) {
         (void) parameter;
@@ -140,7 +145,7 @@ void HtnInstanceBuilder::extractTaskSorts(HtnInstance& htn, const task& task) {
     htn._original_n_taskvars[taskId] = task.number_of_original_vars;
 }
 
-void HtnInstanceBuilder::extractMethodSorts(HtnInstance& htn, const method& method) {
+void HtnInstanceBuilder::extractMethodSorts(HtnInstance& htn, const LiftedMethod& method) {
     std::vector<int> sorts;
     for (const auto& [parameter, sort] : method.vars) {
         (void) parameter;
@@ -151,7 +156,7 @@ void HtnInstanceBuilder::extractMethodSorts(HtnInstance& htn, const method& meth
     htn._signature_sorts_table[methodId] = std::move(sorts);
 }
 
-void HtnInstanceBuilder::extractConstants(HtnInstance& htn, const ParsedProblem& problem) {
+void HtnInstanceBuilder::extractConstants(HtnInstance& htn, const LiftedProblem& problem) {
     for (const auto& [sortName, constantNames] : problem.sorts) {
         const int sortId = htn.nameId(sortName);
         htn._declared_sort_ids.insert(sortId);
@@ -160,19 +165,19 @@ void HtnInstanceBuilder::extractConstants(HtnInstance& htn, const ParsedProblem&
     }
 }
 
-void HtnInstanceBuilder::identifyStaticPredicates(HtnInstance& htn, const ParsedProblem& problem) {
+void HtnInstanceBuilder::identifyStaticPredicates(HtnInstance& htn, const LiftedProblem& problem) {
     FlatHashSet<int> affectedPredicates;
     for (const auto& [actionId, action] : htn._operators) {
         (void) actionId;
         for (const Signature& effect : action.getEffects()) affectedPredicates.insert(effect._usig._name_id);
     }
-    for (const predicate_definition& predicate : problem.predicate_definitions) {
+    for (const LiftedPredicate& predicate : problem.predicate_definitions) {
         const int predicateId = htn.nameId(predicate.name);
         if (!affectedPredicates.count(predicateId)) htn._static_predicates.insert(predicateId);
     }
 }
 
-Action& HtnInstanceBuilder::createAction(HtnInstance& htn, const task& task) {
+Action& HtnInstanceBuilder::createAction(HtnInstance& htn, const LiftedTask& task) {
     const int actionId = htn.nameId(task.name);
     assert(!htn._operators.count(actionId));
     htn._operators[actionId] = Action(actionId, convertArguments(htn, actionId, task.vars));
@@ -180,13 +185,13 @@ Action& HtnInstanceBuilder::createAction(HtnInstance& htn, const task& task) {
 
     for (Signature& constraint : extractEqualityConstraints(htn, actionId, task.constraints, task.vars)) action.addPrecondition(std::move(constraint));
     for (Signature& constraint : extractEqualityConstraints(htn, actionId, task.prec, task.vars)) action.addPrecondition(std::move(constraint));
-    for (const literal& precondition : task.prec) action.addPrecondition(convertCondition(htn, actionId, precondition));
-    for (const literal& effect : task.eff) action.addEffect(convertCondition(htn, actionId, effect));
+    for (const LiftedLiteral& precondition : task.prec) action.addPrecondition(convertCondition(htn, actionId, precondition));
+    for (const LiftedLiteral& effect : task.eff) action.addEffect(convertCondition(htn, actionId, effect));
     action.removeInconsistentEffects();
     return action;
 }
 
-Reduction& HtnInstanceBuilder::createReduction(HtnInstance& htn, method& method, const ParsedProblem& problem) {
+Reduction& HtnInstanceBuilder::createReduction(HtnInstance& htn, LiftedMethod& method, const LiftedProblem& problem) {
     const int reductionId = htn.nameId(method.name);
     const int taskId = htn.nameId(method.at);
     htn._task_id_to_reduction_ids[taskId].push_back(reductionId);
@@ -195,62 +200,34 @@ Reduction& HtnInstanceBuilder::createReduction(HtnInstance& htn, method& method,
             USignature(taskId, convertArguments(htn, reductionId, method.atargs)));
     Reduction& reduction = htn._methods.at(reductionId);
 
-    std::vector<literal> conditions;
-    for (const literal& constraint : method.constraints) {
+    std::vector<LiftedLiteral> conditions;
+    for (const LiftedLiteral& constraint : method.constraints) {
         assert(constraint.predicate == "__equal" || Log::e("Unknown constraint predicate \"%s\"!\n", constraint.predicate.c_str()));
         conditions.push_back(constraint);
     }
-    for (const plan_step& subtask : method.ps) {
-        std::string normalizedName = subtask.task;
-        Regex::extractCoreNameOfSplittingMethod(normalizedName);
-        if (normalizedName.rfind(method_precondition_action_name) != std::string::npos) {
-            importCompiledPreconditions(htn, method, reduction, findCompiledPreconditionTask(problem, normalizedName), conditions);
-        } else {
-            reduction.addSubtask(USignature(htn.nameId(subtask.task), convertArguments(htn, reductionId, subtask.args)));
-        }
+    conditions.insert(conditions.end(), method.preconditions.begin(), method.preconditions.end());
+    for (const LiftedSubtask& subtask : method.ps) {
+        reduction.addSubtask(USignature(htn.nameId(subtask.task), convertArguments(htn, reductionId, subtask.args)));
     }
 
     for (Signature& precondition : extractEqualityConstraints(htn, reductionId, conditions, method.vars)) reduction.addPrecondition(std::move(precondition));
-    for (const literal& condition : conditions) {
-        if (condition.predicate != dummy_equal_literal) reduction.addPrecondition(convertCondition(htn, reductionId, condition));
+    for (const LiftedLiteral& condition : conditions) {
+        if (condition.predicate != EQUALITY_PREDICATE) reduction.addPrecondition(convertCondition(htn, reductionId, condition));
     }
-    if (method.name.rfind("__top_method", 0) == 0) htn._init_reduction_id = reductionId;
+    if (method.at == problem.initial_task_name) {
+        assert(htn._init_reduction_id == -1);
+        htn._init_reduction_id = reductionId;
+    }
     return reduction;
 }
 
-const task& HtnInstanceBuilder::findCompiledPreconditionTask(const ParsedProblem& problem, const std::string& normalizedSubtaskName) {
-    const task* bestMatch = nullptr;
-    for (const task& candidate : problem.primitive_tasks) {
-        std::string normalizedCandidateName = candidate.name;
-        Regex::extractCoreNameOfSplittingMethod(normalizedCandidateName);
-        if (normalizedSubtaskName.rfind(normalizedCandidateName) == std::string::npos) continue;
-        if (bestMatch == nullptr || candidate.name.size() >= bestMatch->name.size()) bestMatch = &candidate;
-    }
-    assert(bestMatch != nullptr);
-    return *bestMatch;
-}
-
-void HtnInstanceBuilder::importCompiledPreconditions(HtnInstance& htn, method& source, Reduction& destination, const task& preconditionTask, std::vector<literal>& conditions) {
-    conditions.insert(conditions.end(), preconditionTask.prec.begin(), preconditionTask.prec.end());
-    conditions.insert(conditions.end(), preconditionTask.constraints.begin(), preconditionTask.constraints.end());
-    for (const auto& [name, sort] : preconditionTask.vars) {
-        if (name.empty() || name.front() != '?') continue;
-        const int parameterId = htn.nameId(name + "_" + std::to_string(destination.getNameId()));
-        if (std::find(destination.getArguments().begin(), destination.getArguments().end(), parameterId) != destination.getArguments().end()) continue;
-        destination.addArgument(parameterId);
-        htn._sort_by_variable_id[parameterId] = htn.nameId(sort);
-        htn._signature_sorts_table[destination.getNameId()].push_back(htn.nameId(sort));
-        source.vars.emplace_back(name, sort);
-    }
-}
-
-SigSet HtnInstanceBuilder::extractEqualityConstraints(HtnInstance& htn, int operationId, const std::vector<literal>& conditions, const std::vector<std::pair<std::string, std::string>>& parameters) {
+SigSet HtnInstanceBuilder::extractEqualityConstraints(HtnInstance& htn, int operationId, const std::vector<LiftedLiteral>& conditions, const std::vector<std::pair<std::string, std::string>>& parameters) {
     SigSet result;
     std::unordered_map<std::string, int> sortByParameter;
     for (const auto& [parameter, sort] : parameters) sortByParameter[parameter] = htn.nameId(sort);
 
-    for (const literal& condition : conditions) {
-        if (condition.predicate != dummy_equal_literal) continue;
+    for (const LiftedLiteral& condition : conditions) {
+        if (condition.predicate != EQUALITY_PREDICATE) continue;
         assert(condition.arguments.size() == 2);
         const int firstSort = sortByParameter.at(condition.arguments[0]);
         const int secondSort = sortByParameter.at(condition.arguments[1]);

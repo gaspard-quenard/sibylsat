@@ -54,7 +54,7 @@ private:
     /** Count the primitive action lines that will be printed from a normalized plan. */
     size_t countPrintableActions(const Plan& normalizedPlan) const;
 
-    /** Use PandaPIparser's conversion metadata to map an internal plan back to the original problem. */
+    /** Ask PandaPIparser to remove names introduced by its transformations from the internal plan. */
     std::string convertPlanToOriginalProblem(const std::string& internalPlan) const;
 
     /** Write a plan and its closing marker to a file. */

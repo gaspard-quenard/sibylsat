@@ -7,10 +7,12 @@
 #include <unordered_set>
 #include <vector>
 
-#include "libpanda.hpp"
+#include "parser/lifted_problem.h"
 #include "util/log.h"
 
 namespace {
+
+constexpr const char* EQUALITY_PREDICATE = "__equal";
 
 /**
  * Give every accomplished-task argument its own method parameter.
@@ -20,7 +22,7 @@ namespace {
  * `(= ?surface ?surface_2)`. Distinct formal parameters make later
  * substitutions unambiguous while the equality preserves the semantics.
  */
-void normalizeRepeatedTaskArguments(method& reduction) {
+void normalizeRepeatedTaskArguments(LiftedMethod& reduction) {
     std::unordered_map<std::string, std::string> parameterSorts;
     std::unordered_set<std::string> usedNames;
     for (const auto& [name, sort] : reduction.vars) {
@@ -40,9 +42,9 @@ void normalizeRepeatedTaskArguments(method& reduction) {
         reduction.atargs[argumentIndex] = renamed;
         reduction.vars.emplace_back(renamed, parameterSorts.at(originalName));
 
-        literal equality;
+        LiftedLiteral equality;
         equality.positive = true;
-        equality.predicate = dummy_equal_literal;
+        equality.predicate = EQUALITY_PREDICATE;
         equality.arguments = {originalName, renamed};
         reduction.constraints.push_back(std::move(equality));
     }
@@ -54,7 +56,7 @@ void normalizeRepeatedTaskArguments(method& reduction) {
  * More than one currently available subtask means that the constraints permit
  * multiple linearizations, so the method is not totally ordered.
  */
-bool orderSubtasks(method& reduction) {
+bool orderSubtasks(LiftedMethod& reduction) {
     const size_t numberOfSubtasks = reduction.ps.size();
     std::unordered_map<std::string, size_t> indexById;
     std::vector<std::vector<size_t>> successors(numberOfSubtasks);
@@ -87,7 +89,7 @@ bool orderSubtasks(method& reduction) {
     }
 
     bool isTotallyOrdered = true;
-    std::vector<plan_step> orderedSubtasks;
+    std::vector<LiftedSubtask> orderedSubtasks;
     orderedSubtasks.reserve(numberOfSubtasks);
     while (!ready.empty()) {
         if (ready.size() > 1) isTotallyOrdered = false;
@@ -110,9 +112,9 @@ bool orderSubtasks(method& reduction) {
 
 }
 
-LiftedProblemProperties LiftedProblemNormalizer::normalize(ParsedProblem& problem) {
+LiftedProblemProperties LiftedProblemNormalizer::normalize(LiftedProblem& problem) {
     LiftedProblemProperties properties;
-    for (method& reduction : problem.methods) {
+    for (LiftedMethod& reduction : problem.methods) {
         normalizeRepeatedTaskArguments(reduction);
         if (!orderSubtasks(reduction)) properties.isTotallyOrdered = false;
     }

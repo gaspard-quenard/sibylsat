@@ -1,6 +1,3 @@
-// PandaPIparser
-#include "plan.hpp"
-
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -156,10 +153,22 @@ size_t PlanWriter::countPrintableActions(const Plan& normalizedPlan) const {
 }
 
 std::string PlanWriter::convertPlanToOriginalProblem(const std::string& internalPlan) const {
-    std::istringstream input(internalPlan);
-    std::ostringstream output;
-    convert_plan(input, output);
-    return output.str();
+    TemporaryFile inputPlan("sibylsat-internal-plan-");
+    TemporaryFile outputPlan("sibylsat-original-plan-");
+    {
+        std::ofstream output(inputPlan.getPath());
+        if (!output) throw std::runtime_error("Could not write the temporary internal plan");
+        output << internalPlan;
+    }
+
+    const std::filesystem::path parser = getProjectRootDir() / "lib" / "parser" / "pandaPIparser";
+    const std::string command = quoteShellArgument(parser.string()) + " --panda-converter "
+            + quoteShellArgument(inputPlan.getPath().string()) + " " + quoteShellArgument(outputPlan.getPath().string());
+    if (!commandSucceeds(command)) throw std::runtime_error("PandaPIparser could not convert the generated plan");
+
+    std::ifstream input(outputPlan.getPath());
+    if (!input) throw std::runtime_error("Could not read the converted plan");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
 void PlanWriter::writePlanFile(const std::filesystem::path& path, const std::string& planText) const {
@@ -172,7 +181,7 @@ bool PlanWriter::verifyPlan(const std::string& planText) const {
     TemporaryFile temporaryPlan("sibylsat-plan-");
     writePlanFile(temporaryPlan.getPath(), planText);
 
-    const std::filesystem::path parser = getProjectRootDir() / "lib" / "pandaPIparserOriginal";
+    const std::filesystem::path parser = getProjectRootDir() / "lib" / "parser" / "pandaPIparser";
     const std::string command = quoteShellArgument(parser.string()) + " -C --verify "
             + quoteShellArgument(_domain_filename) + " "
             + quoteShellArgument(_problem_filename) + " "
