@@ -50,10 +50,10 @@ void TreeExpander::createInitialLeaves() {
     Log::i("Creating initial leaves of size %zu\n", initialLeafCount);
     _expansion_iteration = 0;
 
-    _root_position = new Position();
+    _root_position = &createPosition();
 
-    Position* rootReductionPosition = new Position(_expansion_iteration, _root_position);
-    Position* goalPosition = new Position(_expansion_iteration, _root_position);
+    Position* rootReductionPosition = &createPosition(_expansion_iteration, _root_position);
+    Position* goalPosition = &createPosition(_expansion_iteration, _root_position);
 
     _leaf_positions = {rootReductionPosition, goalPosition};
     for (size_t i = 0; i < _leaf_positions.size(); i++) {
@@ -138,7 +138,7 @@ void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {
 
 void TreeExpander::expandLeaf(Position& parent, size_t expansionSize) {
     for (size_t childIndex = 0; childIndex < expansionSize; childIndex++) {
-        Position* child = new Position(_expansion_iteration, &parent);
+        Position* child = &createPosition(_expansion_iteration, &parent);
         _leaf_positions.push_back(child);
         populateChildFromParent(*child, parent);
 

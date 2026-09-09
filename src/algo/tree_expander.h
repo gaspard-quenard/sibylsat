@@ -1,6 +1,8 @@
 #ifndef DOMPASCH_TREE_REXX_TREE_EXPANDER_H
 #define DOMPASCH_TREE_REXX_TREE_EXPANDER_H
 
+#include <memory>
+#include <utility>
 #include <vector>
 #include <optional>
 
@@ -19,6 +21,8 @@ private:
     HtnInstance& _htn;
     QConstantManager& _q_constants;
     Statistics& _stats;
+    // Own every node for the lifetime of the search; all other Position pointers are observers.
+    std::vector<std::unique_ptr<Position>> _owned_positions;
     Position* _root_position = nullptr;
     std::vector<Position*> _leaf_positions;
     FactAnalysis& _analysis;
@@ -64,6 +68,12 @@ public:
     size_t getNumRetroactivelyPrunedOps() const;
 
 private:
+    template<class... Args>
+    Position& createPosition(Args&&... args) {
+        _owned_positions.push_back(std::make_unique<Position>(std::forward<Args>(args)...));
+        return *_owned_positions.back();
+    }
+
     void recordInstantiatedPosition(const Position& position);
     bool isPotentiallyApplicable(const HtnOp& op);
     size_t computeExpansionSize(const Position& position) const;
