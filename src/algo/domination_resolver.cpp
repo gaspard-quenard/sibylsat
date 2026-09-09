@@ -1,7 +1,7 @@
 
 #include "algo/domination_resolver.h"
 
-DominationResolver::DominationResult DominationResolver::getDominationStatus(const USignature& op, const USignature& other, Position& p) {
+DominationResolver::DominationResult DominationResolver::getDominationStatus(const USignature& op, const USignature& other) {
     DominationResult res;
     res.status = DIFFERENT;
 
@@ -16,24 +16,21 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
         int arg = op._args[argIdx];
         int otherArg = other._args[argIdx];
 
-        // TODO Every q-constant must have a globally invariant domain for this to work.
         if (arg == otherArg) continue; 
         
-        bool isQ = _htn.isQConstant(arg);
-        bool isOtherQ = _htn.isQConstant(otherArg);
+        bool isQ = _q_constants.contains(arg);
+        bool isOtherQ = _q_constants.contains(otherArg);
         if (!isQ && !isOtherQ) return res; // Different ground constants
 
-        // Check whether both q-constants originate from the same position
-        IntPair position(p.getLayerIndex(), p.getPositionIndex());
-        if (isQ && isOtherQ && _htn.getOriginOfQConstant(arg) != _htn.getOriginOfQConstant(otherArg)) {
+        if (isQ && isOtherQ && _q_constants.getOriginPositionId(arg) != _q_constants.getOriginPositionId(otherArg)) {
             return res;
         }
         
         // Compare domains of pseudo-constants
         
-        const auto& domain = isQ ? _htn.getDomainOfQConstant(arg) : dummyDomain;
+        const auto& domain = isQ ? _q_constants.getDomain(arg) : dummyDomain;
         if (!isQ) dummyDomain.insert(arg);
-        const auto& otherDomain = isOtherQ ? _htn.getDomainOfQConstant(otherArg) : dummyDomain;
+        const auto& otherDomain = isOtherQ ? _q_constants.getDomain(otherArg) : dummyDomain;
         if (!isOtherQ) dummyDomain.insert(otherArg);
         assert(dummyDomain.size() <= 1);
 
@@ -52,7 +49,7 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
             // This op may be dominated by the other op
 
             // Contradicts previous argument indices -> ops are different
-            if (status == DOMINATED) return res;
+            if (status == DOMINATING) return res;
             // Check if the other domain actually contains this domain
             for (int c : domain) if (!otherDomain.count(c)) return res;
             // Yes: Dominated w.r.t. this position
@@ -82,7 +79,7 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
             }    
         }
         for (size_t argIdx = 0; argIdx < op._args.size(); argIdx++) {
-            if (_htn.isQConstant(status == DOMINATED ? other._args[argIdx] : op._args[argIdx])) {
+            if (_q_constants.contains(status == DOMINATED ? other._args[argIdx] : op._args[argIdx])) {
                 if (status == DOMINATED) res.qconstSubstitutions[op._args[argIdx]] = other._args[argIdx];
                 else res.qconstSubstitutions[other._args[argIdx]] = op._args[argIdx];
             } 
@@ -125,7 +122,7 @@ void DominationResolver::eliminateDominatedOperations(Position& newPos) {
             }
 
             for (auto& [other, dominatedByOther] : dominatingOps) {
-                auto result = getDominationStatus(op, other, newPos);
+                auto result = getDominationStatus(op, other);
                 if (result.status == DOMINATED) {
                     // This op is being dominated; mark for deletion
                     //Log::d("DOM %s << %s\n", TOSTR(op), TOSTR(other));

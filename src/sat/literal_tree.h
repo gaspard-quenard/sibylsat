@@ -2,22 +2,15 @@
 #ifndef DOMPASCH_LILOTANE_LITERAL_TREE_H
 #define DOMPASCH_LILOTANE_LITERAL_TREE_H
 
+#include <type_traits>
+#include <utility>
 #include <vector>
-#include <functional>
 
 #include "util/hashmap.h"
-#include "util/log.h"
 
-/*
-On an abstract level, this class template represents a set of sequences whereas some global order
-is imposed on the elements that may occur in a sequence, and all sequences are sorted accordingly.
-*/
+/** Store a set of ordered literal sequences as paths in a prefix tree. */
 template <typename T, typename THash = robin_hood::hash<T>>
 class LiteralTree {
-
-    template <typename, typename>
-    friend class LiteralTree;
-
     struct Node {
 
         FlatHashMap<T, Node*, THash> children;
@@ -31,22 +24,39 @@ class LiteralTree {
         }
         Node(Node&& other) : children(std::move(other.children)), validLeaf(other.validLeaf) {
             other.children.clear();
+            other.validLeaf = false;
         }
 
-        void operator=(const Node& other) {
+        Node& operator=(const Node& other) {
+            if (this == &other) return *this;
+            Node copy(other);
+            children.swap(copy.children);
+            std::swap(validLeaf, copy.validLeaf);
+            return *this;
+        }
+
+        Node& operator=(Node&& other) noexcept {
+            if (this == &other) return *this;
+            clear();
+            children = std::move(other.children);
             validLeaf = other.validLeaf;
-            for (const auto& [key, child] : other.children) {
-                children[key] = new Node(*child);
-            }
+            other.children.clear();
+            other.validLeaf = false;
+            return *this;
         }
 
-        ~Node() {
+        void clear() {
             for (const auto& [lit, child] : children) {
+                (void) lit;
                 delete child;
             }
+            children.clear();
+            validLeaf = false;
         }
+
+        ~Node() { clear(); }
         
-        void insert(const std::vector<T>& lits, size_t idx) {
+        void insertUnchecked(const std::vector<T>& lits, size_t idx) {
             if (idx == lits.size()) {
                 validLeaf = true;
                 return;
@@ -58,7 +68,7 @@ class LiteralTree {
                 children[lits[idx]] = child;
             } else child = it->second;
             // recursion
-            child->insert(lits, idx+1);
+            child->insertUnchecked(lits, idx+1);
         }
 
         bool contains(const std::vector<T>& lits, size_t idx) const {
@@ -78,11 +88,9 @@ class LiteralTree {
                 if (validLeaf) return true;
                 // If any (transitive) child is a valid leaf, return true
                 for (auto& [key, child] : children) {
-                    //Log::d("(1) i=%i n=%i Does child node (%s,%s) subsume %s?\n", 
-                    //    idx, lits.size(), TOSTR(key.first), TOSTR(key.second), TOSTR(lits));    
+                    (void) key;
                     if (child->subsumes(lits, idx)) return true;
                 }
-                //Log::d("(1) i=%i n=%i Node does not subsume %s\n", idx, lits.size(), TOSTR(lits));
                 return false;
             }
 
@@ -90,19 +98,15 @@ class LiteralTree {
             auto it = children.find(lits[idx]);
             if (it != children.end()) {
                 // Yes: check if it subsumes the remaining path
-                //Log::d("(2) i=%i n=%i Does child node (%s,%s) subsume %s?\n", 
-                //        idx, lits.size(), TOSTR(it->first.first), TOSTR(it->first.second), TOSTR(lits));
                 if (it->second->subsumes(lits, idx+1)) return true;
             }
 
             // No valid child node:
             // Any (transitive) child must subsume the same path
             for (auto& [key, child] : children) {
-                //Log::d("(3) i=%i n=%i Does child node (%s,%s) subsume %s?\n", 
-                //        idx, lits.size(), TOSTR(key.first), TOSTR(key.second), TOSTR(lits));    
+                (void) key;
                 if (child->subsumes(lits, idx)) return true;
             }
-            //Log::d("(2) i=%i n=%i Node does not subsume %s\n", idx, lits.size(), TOSTR(lits));
             return false;
         }
 
@@ -110,30 +114,55 @@ class LiteralTree {
         Returns true if the tree has a path which is a sub-path of <lits>.
         */
         bool hasPathSubsumedBy(const std::vector<T>& lits, size_t idx) const {
-                
-            // No literals left in the given path? -> Path completed.
-            if (idx == lits.size()) return validLeaf;
+            // Reaching a stored leaf means that all of its literals were found,
+            // even if the queried path contains additional literals.
+            if (validLeaf) return true;
 
-            // Direct valid child?
-            auto it = children.find(lits[idx]);
-            if (it != children.end() && it->second->hasPathSubsumedBy(lits, idx+1))
-                return true;
-
-            // No valid child: try a later position
-            for (size_t i = idx+1; i < lits.size(); i++) {
-                if (hasPathSubsumedBy(lits, i)) return true;
+            for (size_t i = idx; i < lits.size(); i++) {
+                auto child = children.find(lits[i]);
+                if (child != children.end() && child->second->hasPathSubsumedBy(lits, i + 1)) {
+                    return true;
+                }
             }
             return false;
         }
 
-        std::pair<size_t, size_t> getSizeOfEncoding() const {
+        bool removePathsSubsumedBy(const std::vector<T>& lits, size_t idx) {
+            if (idx == lits.size()) {
+                clear();
+                return true;
+            }
+
+            std::vector<T> keysToRemove;
+            for (auto& [key, child] : children) {
+                const size_t nextIdx = key == lits[idx] ? idx + 1 : idx;
+                if (child->removePathsSubsumedBy(lits, nextIdx)) {
+                    delete child;
+                    keysToRemove.push_back(key);
+                }
+            }
+            for (const T& key : keysToRemove) children.erase(key);
+            return !validLeaf && children.empty();
+        }
+
+        template<typename Visitor>
+        void visitPaths(std::vector<T>& path, Visitor& visitor) const {
+            if (validLeaf) visitor(path);
+            for (const auto& [literal, child] : children) {
+                path.push_back(literal);
+                child->visitPaths(path, visitor);
+                path.pop_back();
+            }
+        }
+
+        std::pair<size_t, size_t> getEncodingDimensions() const {
             std::pair<size_t, size_t> result;
             if (validLeaf) return result;
             auto& [cls, lits] = result;
             cls = 1;
             lits = children.size();
             for (const auto& [lit, child] : children) {
-                auto [cCls, cLits] = child->getSizeOfEncoding();
+                auto [cCls, cLits] = child->getEncodingDimensions();
                 cls += cCls;
                 lits += cLits + cCls;
             }
@@ -161,7 +190,7 @@ class LiteralTree {
             cls.push_back(std::move(orClause));
         }
 
-        std::pair<size_t, size_t> getSizeOfNegationEncoding() const {
+        std::pair<size_t, size_t> getNegationEncodingDimensions() const {
             std::pair<size_t, size_t> result;
             if (validLeaf) return result;
             auto& [cls, lits] = result;
@@ -172,7 +201,7 @@ class LiteralTree {
                     cls++;
                     lits++;
                 } else {
-                    auto [cCls, cLits] = child->getSizeOfNegationEncoding();
+                    auto [cCls, cLits] = child->getNegationEncodingDimensions();
                     cls += cCls;
                     lits += cLits + cCls;
                 }
@@ -203,16 +232,6 @@ class LiteralTree {
             }
         }
 
-        template <typename U, typename UHash = robin_hood::hash<U>>
-        typename LiteralTree<U, UHash>::Node* convert(std::function<U(const T&)> map) const {
-            using NNode = typename LiteralTree<U, UHash>::Node;
-            NNode *newNode = new NNode();
-            newNode->validLeaf = validLeaf;
-            for (const auto& [lit, child] : children) {
-                newNode->children[map(lit)] = child->convert(map);
-            }
-            return newNode;
-        }
     };
 
     Node _root;
@@ -223,43 +242,41 @@ public:
     LiteralTree(const LiteralTree& other) : _root(other._root) {}
     LiteralTree(LiteralTree&& other) : _root(std::move(other._root)) {}
 
-    void operator=(LiteralTree<T, THash>&& other) {
-        _root.children = std::move(other._root.children);
-        _root.validLeaf = other._root.validLeaf;
+    LiteralTree& operator=(LiteralTree<T, THash>&& other) noexcept {
+        _root = std::move(other._root);
+        return *this;
     }
 
-    void operator=(const LiteralTree<T, THash>& other) {
+    LiteralTree& operator=(const LiteralTree<T, THash>& other) {
         _root = other._root;
+        return *this;
     }
 
+    /**
+     * Insert a path while retaining only subset-minimal paths.
+     *
+     * These paths can represent alternative conjunctions. If an existing path
+     * is a subset of the new one, the new alternative is redundant. Conversely,
+     * the new path replaces every existing superset because A OR (A AND B) is A.
+     * Maintaining that invariant here also keeps the tree's structural CNF
+     * encoding from imposing constraints belonging only to a redundant branch.
+     */
     void insert(const std::vector<T>& lits) {
-        /*
-        Log::d("TREE INSERT ");
-        for (int lit : lits) Log::log_notime(Log::V4_DEBUG, "%i ", lit);
-        Log::log_notime(Log::V4_DEBUG, "\n");
-        */
-        _root.insert(lits, 0);
+        if (_root.hasPathSubsumedBy(lits, 0)) return;
+        _root.removePathsSubsumedBy(lits, 0);
+        _root.insertUnchecked(lits, 0);
     }
 
     void merge(LiteralTree<T, THash>&& other) {
-        std::vector<std::pair<Node*, Node*>> nodeStack;
-        nodeStack.emplace_back(&_root, &other._root);
-        while (!nodeStack.empty()) {
-            auto [node, otherNode] = nodeStack.back();
-            nodeStack.pop_back();
-            if (otherNode->validLeaf) node->validLeaf = true;
-            for (auto& [key, val] : otherNode->children) {
-                if (node->children.count(key)) {
-                    // Already contained: recurse
-                    nodeStack.emplace_back(node->children.at(key), val);
-                } else {
-                    // Key is not contained yet: just insert
-                    node->children[key] = val;
-                }
-            }
-            otherNode->children.clear();
-            if (node != &_root) delete otherNode;
+        if (this == &other) return;
+        if (!_root.validLeaf && _root.children.empty()) {
+            _root = std::move(other._root);
+            return;
         }
+
+        std::vector<T> path;
+        auto insertPath = [this](const std::vector<T>& otherPath) { insert(otherPath); };
+        other._root.visitPaths(path, insertPath);
     }
 
     void intersect(LiteralTree<T, THash>&& other) {
@@ -274,7 +291,6 @@ public:
                 if (!otherNode->children.count(key)) {
                     // Not contained in both: remove!
                     delete val;
-                    delete otherNode->children[key];
                     keysToRemove.push_back(key);
                 } else {
                     // Contained in both: Check children
@@ -282,20 +298,19 @@ public:
                 }
             }
             for (auto& key : keysToRemove) node->children.erase(key);
+            for (auto& [key, child] : otherNode->children) {
+                if (!node->children.count(key)) delete child;
+            }
             otherNode->children.clear();
             if (node != &_root) delete otherNode;
         }
     }
 
-    bool empty() const {
-        return _root.children.empty() && !_root.validLeaf;
+    size_t getEncodingLiteralCount() const {
+        return _root.getEncodingDimensions().second;
     }
-
-    size_t getSizeOfEncoding() const {
-        return _root.getSizeOfEncoding().second;
-    }
-    size_t getSizeOfNegationEncoding() const {
-        return _root.getSizeOfNegationEncoding().second;
+    size_t getNegationEncodingLiteralCount() const {
+        return _root.getNegationEncodingDimensions().second;
     }
 
     bool contains(const std::vector<T>& lits) const {
@@ -316,159 +331,16 @@ public:
 
     std::vector<std::vector<T>> encode(std::vector<T> headLits = std::vector<T>()) const {
         std::vector<std::vector<T>> cls;
-
-        //size_t headSize = headLits.size();
-
         _root.encode(cls, headLits);
-
-        /*
-        auto [predCls, predLits] = _root.getSizeOfEncoding();
-        predLits += headSize * predCls;
-        assert(cls.size() == predCls || Log::e("%i != %i\n", cls.size(), predCls));
-        size_t lits = 0;
-        for (const auto& c : cls) lits += c.size();
-        assert(lits == predLits || Log::e("%i != %i\n", lits, predLits));
-        */
-
-        /*
-        Log::d("TREE ENCODE ");
-        for (const auto& c : cls) {
-            if constexpr (std::is_arithmetic<T>())
-                for (const auto& lit : c) Log::log_notime(Log::V4_DEBUG, "%i ", lit);
-            else
-                for (const auto& lit : c) Log::log_notime(Log::V4_DEBUG, "(%s , %s) ", TOSTR(lit.first), TOSTR(lit.second));
-            Log::log_notime(Log::V4_DEBUG, "0 ");
-        }
-        Log::log_notime(Log::V4_DEBUG, "\n");
-        */
-
         return cls;
     }
 
     std::vector<std::vector<T>> encodeNegation(std::vector<T> headLits = std::vector<T>()) const {
         std::vector<std::vector<T>> cls;
-
-        //size_t headSize = headLits.size();
-
         _root.encodeNegation(cls, headLits);
-        
-        /*
-        auto [predCls, predLits] = _root.getSizeOfNegationEncoding();
-        predLits += headSize * predCls;
-        assert(cls.size() == predCls || Log::e("%i != %i\n", cls.size(), predCls));
-        size_t lits = 0;
-        for (const auto& c : cls) lits += c.size();
-        assert(lits == predLits || Log::e("%i != %i\n", lits, predLits));
-        */
-
-        /*
-        Log::d("TREE ENCODE_NEG ");
-        for (const auto& c : cls) {
-            if constexpr (std::is_arithmetic<T>())
-                for (const auto& lit : c) Log::log_notime(Log::V4_DEBUG, "%i ", lit);
-            else
-                for (const auto& lit : c) Log::log_notime(Log::V4_DEBUG, "(%s , %s) ", TOSTR(lit.first), TOSTR(lit.second));
-            Log::log_notime(Log::V4_DEBUG, "0 ");
-        }
-        Log::log_notime(Log::V4_DEBUG, "\n");
-        */
-
         return cls;
     }
 
-    template <typename U, typename UHash = robin_hood::hash<U>>
-    void convert(std::function<U(const T&)> map, LiteralTree<U, UHash>& result) const {
-        result._root = *_root.convert(map);
-    }
-
-
-    bool pathSubsumes(const std::vector<T>& path1, const std::vector<T>& path2) const {
-        if (path1.size() > path2.size()) return false;
-        
-        for (const auto& elem : path1) {
-            if (std::find(path2.begin(), path2.end(), elem) == path2.end()) {
-                return false;
-            }
-        }
-        
-        return true;
-    }
-
-    void collectPaths(const Node& node, std::vector<T>& currentPath, std::vector<std::vector<T>>& paths) const {
-        if (node.validLeaf) {
-            paths.push_back(currentPath);
-            return;
-        }
-        for (const auto& [key, child] : node.children) {
-            currentPath.push_back(key);
-            collectPaths(*child, currentPath, paths);
-            currentPath.pop_back();
-        }
-    }
-
-    void clearHelper(Node& node) {
-        for (auto& [key, child] : node.children) {
-            clearHelper(*child);
-            delete child;
-        }
-        node.children.clear();
-        node.validLeaf = false;
-    }
-
-    void clear() {
-        // Delete all nodes and reset the root
-        clearHelper(_root);
-        _root = Node();
-    }
-
-
-    /*
-     * Suppose that we have two paths:
-     * path1: var1 must take value x1 
-     * path2: var2 must take value x2, var1 must take value x1, var3 must take value x3
-     * 
-     * The path 2 must actually be removed because a possible solution is
-     * var1=x1, var2=x2, var3=x5 (it is ok with the first path)
-     * But if we do not prune the redondant paths, the encoding will prevent this solution
-    */
-    void pruneRedundantPaths() {
-        std::vector<std::vector<T>> paths;
-        std::vector<T> currentPath;
-        collectPaths(_root, currentPath, paths);
-
-        if (paths.size() <= 1) return;
-        
-        std::vector<bool> toRemove(paths.size(), false);
-
-        bool atLeastOneRemoved = false;
-        
-        for (size_t i = 0; i < paths.size(); ++i) {
-            if (toRemove[i]) continue;
-            for (size_t j = 0; j < paths.size(); ++j) {
-                if (i == j || toRemove[j]) continue;
-                if (pathSubsumes(paths[i], paths[j])) {
-                    Log::d("Removing path %s because it is subsumed by %s\n", TOSTR(paths[j]), TOSTR(paths[i]));
-                    toRemove[j] = true;
-                    atLeastOneRemoved = true;
-                }
-            }
-        }
-
-        if (!atLeastOneRemoved) return;
-        
-        std::vector<std::vector<T>> prunedPaths;
-        for (size_t i = 0; i < paths.size(); ++i) {
-            if (!toRemove[i]) {
-                prunedPaths.push_back(std::move(paths[i]));
-            }
-        }
-
-        // Rebuild the tree with pruned paths
-        clear();
-        for (const auto& path : prunedPaths) {
-            insert(path);
-        }
-    }
 };
 
 

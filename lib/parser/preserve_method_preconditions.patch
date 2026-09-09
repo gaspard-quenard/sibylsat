@@ -1,0 +1,23 @@
+diff --git a/src/parametersplitting.cpp b/src/parametersplitting.cpp
+index 4c71c8a..14ca561 100644
+--- a/src/parametersplitting.cpp
++++ b/src/parametersplitting.cpp
+@@ -12,7 +12,17 @@ void split_independent_parameters(){
+ 	for(method m : old){
+ 		// find variables that occur only in one of the plan steps
+ 		map<string,set<string>> variables_ps_id;
+-		for(plan_step ps : m.ps) for(string v : ps.args) variables_ps_id[v].insert(ps.id);
++		set<string> methodPreconditionVariables;
++		for(plan_step ps : m.ps) {
++			// SibylSat imports this artificial action as a method precondition, so
++			// do not turn it into an additional abstract-task hierarchy.
++			if (ps.task.rfind(method_precondition_action_name, 0) == 0) {
++				methodPreconditionVariables.insert(ps.args.begin(), ps.args.end());
++				continue;
++			}
++			for(string v : ps.args) variables_ps_id[v].insert(ps.id);
++		}
++		for (const string & v : methodPreconditionVariables) variables_ps_id.erase(v);
+ 		// don't consider variables that have at most one instantiation
+ 		for(auto v : m.vars) if (sorts[v.second].size() < 2) variables_ps_id.erase(v.first); 
+ 		// don't consider variables that are part of constraints

@@ -1,200 +1,218 @@
+#include <algorithm>
+#include <cstdlib>
+#include <fstream>
+#include <functional>
+#include <sstream>
+#include <stdexcept>
 
-// PandaPIparser
-#include "plan.hpp"
-#include "verify.hpp"
-#include <filesystem>
-
-#include "sat/variable_domain.h"
 #include "algo/plan_writer.h"
+#include "preprocessing/macro_action_compiler.h"
+#include "util/log.h"
+#include "util/process_utils.h"
 #include "util/project_utils.h"
 
-bool checkCommandOutput(const std::string& command, const std::string& searchString) {
-    std::array<char, 128> buffer;
-    std::string result;
-    std::shared_ptr<FILE> pipe(popen(command.c_str(), "r"), pclose);
-    if (!pipe) throw std::runtime_error("popen() failed!");
-
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
+int PlanWriter::findNextPlanItemId(const Plan& plan) const {
+    int nextPlanItemId = 1;
+    for (const auto& planPart : {std::cref(plan.first), std::cref(plan.second)}) {
+        for (const PlanItem& item : planPart.get()) {
+            nextPlanItemId = std::max(nextPlanItemId, item.id + 1);
+            for (int subtaskId : item.subtaskIds) nextPlanItemId = std::max(nextPlanItemId, subtaskId + 1);
+        }
     }
-
-    return result.find(searchString) != std::string::npos;
+    return nextPlanItemId;
 }
 
-void PlanWriter::outputPlan(Plan& _plan) {
+bool PlanWriter::isMacroAction(const USignature& action) const {
+    return _macro_actions != nullptr && _macro_actions->isMacroAction(_htn.toString(action._name_id));
+}
 
-    // Create stringstream which is being fed the plan
-    std::stringstream stream;
-
-    // Print plan into stream
-
-    // -- primitive part
-    stream << "==>\n";
-    FlatHashSet<int> actionIds;
-    FlatHashSet<int> idsToRemove;
-
-    FlatHashSet<int> primitivizationIds;
-    std::vector<PlanItem> decompsToInsert;
-    size_t decompsToInsertIdx = 0;
-    size_t length = 0;
-
-    // When using macroActions (with flag macroActions), we need to keep track of the macro actions and their corresponding actions
-    std::map<int, std::vector<int>> id_macro_action_to_id_actions;
-    
-    for (PlanItem& item : std::get<0>(_plan)) {
-
-        if (item.id < 0) continue;
-        
-        if (_htn.toString(item.abstractTask._name_id).rfind("__LLT_SECOND") != std::string::npos) {
-            // Second part of a split action: discard
-            idsToRemove.insert(item.id);
-            continue;
-        }
-        
-        if (_htn.toString(item.abstractTask._name_id).rfind("__SURROGATE") != std::string::npos) {
-            // Primitivized reduction: Replace with actual action, remember represented method to include in decomposition
-
-            [[maybe_unused]] const auto& [parentId, childId] = _htn.getReductionAndActionFromPrimitivization(item.abstractTask._name_id);
-            const Reduction& parentRed = _htn.toReduction(parentId, item.abstractTask._args);
-            primitivizationIds.insert(item.id);
-            
-            PlanItem parent;
-            parent.abstractTask = parentRed.getTaskSignature();  
-            parent.id = item.id-1;
-            parent.reduction = parentRed.getSignature();
-            parent.subtaskIds = std::vector<int>(1, item.id);
-            decompsToInsert.push_back(parent);
-
-            const USignature& childSig = parentRed.getSubtasks()[0];
-            item.abstractTask = childSig;
-        }
-
-        actionIds.insert(item.id);
-
-        // Do not write blank actions or the virtual goal action
-        if (item.abstractTask == _htn.getBlankActionSig()) continue;
-        if (item.abstractTask._name_id == _htn.nameId("<goal_action>")) continue;
-
-        if (_htn.isMacroTask(item.abstractTask._name_id)) {
-            // Reconstruct the sequences of actions from the macro
-            std::vector<USignature> actions = _htn.getActionsFromMacro(item.abstractTask);
-            id_macro_action_to_id_actions[item.id] = std::vector<int>();
-            for (const USignature& action: actions) {
-                int id = VariableDomain::nextVar();
-                stream << id << " " << Names::to_string_nobrackets(action) << "\n";
-                id_macro_action_to_id_actions[item.id].push_back(id);
-                length++;
-            }
-        } else {
-            stream << item.id << " " << Names::to_string_nobrackets(_htn.cutNonoriginalTaskArguments(item.abstractTask)) << "\n";
-            length++;
-        }
-        
+std::vector<USignature> PlanWriter::expandMacroAction(const USignature& macroAction) {
+    const MacroActionExpansion& expansion = _macro_actions->getExpansion(_htn.toString(macroAction._name_id));
+    std::vector<USignature> actions;
+    actions.reserve(expansion.primitiveSteps.size());
+    for (const MacroPrimitiveStep& step : expansion.primitiveSteps) {
+        std::vector<int> arguments;
+        arguments.reserve(step.macroArgumentIndices.size());
+        for (size_t argumentIndex : step.macroArgumentIndices) arguments.push_back(macroAction._args.at(argumentIndex));
+        actions.emplace_back(_htn.nameId(step.actionName), std::move(arguments));
     }
-    // -- decomposition part
-    bool root = true;
-    for (size_t itemIdx = 0; itemIdx < _plan.second.size() || decompsToInsertIdx < decompsToInsert.size(); itemIdx++) {
+    return actions;
+}
 
-        // Pick next plan item to print
-        PlanItem item;
-        if (decompsToInsertIdx < decompsToInsert.size() && (itemIdx >= _plan.second.size() || decompsToInsert[decompsToInsertIdx].id < _plan.second[itemIdx].id)) {
-            // Pick plan item from primitivized decompositions
-            item = decompsToInsert[decompsToInsertIdx];
-            decompsToInsertIdx++;
-            itemIdx--;
-        } else {
-            // Pick plan item from "normal" plan list
-            item = _plan.second[itemIdx];
+Plan PlanWriter::normalizePlanForOutput(const Plan& decodedPlan) {
+    Plan normalizedPlan;
+    auto& [normalizedActions, normalizedHierarchy] = normalizedPlan;
+    int nextPlanItemId = findNextPlanItemId(decodedPlan);
+
+    // Removed actions map to no IDs; macro actions map to their expanded action IDs.
+    FlatHashMap<int, std::vector<int>> actionIdReplacements;
+    // Other hierarchy nodes must refer to the restored reduction, while that
+    // reduction itself must continue to refer to its primitive child action.
+    FlatHashMap<int, int> primitivizedActionParents;
+    std::vector<PlanItem> restoredReductions;
+
+    for (const PlanItem& decodedAction : decodedPlan.first) {
+        if (decodedAction.id < 0) continue;
+
+        if (_htn.isSecondSplitAction(decodedAction.abstractTask._name_id)) {
+            actionIdReplacements[decodedAction.id] = {};
+            continue;
         }
+
+        PlanItem normalizedAction = decodedAction;
+        if (_htn.isPrimitivizedAction(normalizedAction.abstractTask._name_id)) {
+            const int reductionId = _htn.getReductionAndActionFromPrimitivization(normalizedAction.abstractTask._name_id).first;
+            const Reduction reduction = _htn.toReduction(reductionId, normalizedAction.abstractTask._args);
+
+            PlanItem restoredReduction;
+            restoredReduction.id = nextPlanItemId++;
+            restoredReduction.abstractTask = reduction.getTaskSignature();
+            restoredReduction.reduction = reduction.getSignature();
+            restoredReduction.subtaskIds = {normalizedAction.id};
+            restoredReductions.push_back(std::move(restoredReduction));
+            primitivizedActionParents[normalizedAction.id] = restoredReductions.back().id;
+
+            normalizedAction.abstractTask = reduction.getSubtasks().front();
+            normalizedAction.reduction = normalizedAction.abstractTask;
+        }
+
+        if (isMacroAction(normalizedAction.abstractTask)) {
+            std::vector<int>& replacementIds = actionIdReplacements[normalizedAction.id];
+            for (const USignature& action : expandMacroAction(normalizedAction.abstractTask)) {
+                const int actionId = nextPlanItemId++;
+                normalizedActions.emplace_back(actionId, action, action, std::vector<int>());
+                replacementIds.push_back(actionId);
+            }
+        } else {
+            normalizedActions.push_back(std::move(normalizedAction));
+        }
+    }
+
+    std::vector<PlanItem> hierarchy = decodedPlan.second;
+    hierarchy.insert(hierarchy.end(), restoredReductions.begin(), restoredReductions.end());
+    normalizedHierarchy.reserve(hierarchy.size());
+
+    for (PlanItem& item : hierarchy) {
         if (item.id < 0) continue;
 
-        std::string subtaskIdStr = "";
+        std::vector<int> normalizedSubtaskIds;
         for (int subtaskId : item.subtaskIds) {
-            if (item.id+1 != subtaskId && primitivizationIds.count(subtaskId)) subtaskId--;
-            if (!idsToRemove.count(subtaskId)) {
-                if (id_macro_action_to_id_actions.count(subtaskId)) {
-                    for (int id_action: id_macro_action_to_id_actions[subtaskId]) {
-                        subtaskIdStr += " " + std::to_string(id_action);
-                    }
-                } else {
-                    subtaskIdStr += " " + std::to_string(subtaskId);
-                }
-            }
+            const auto parent = primitivizedActionParents.find(subtaskId);
+            if (parent != primitivizedActionParents.end() && item.id != parent->second) subtaskId = parent->second;
+
+            const auto replacements = actionIdReplacements.find(subtaskId);
+            if (replacements == actionIdReplacements.end()) normalizedSubtaskIds.push_back(subtaskId);
+            else normalizedSubtaskIds.insert(normalizedSubtaskIds.end(), replacements->second.begin(), replacements->second.end());
         }
-        
-        if (root) {
-            stream << "root " << subtaskIdStr << "\n";
-            root = false;
+        item.subtaskIds = std::move(normalizedSubtaskIds);
+        normalizedHierarchy.push_back(std::move(item));
+    }
+
+    return normalizedPlan;
+}
+
+std::string PlanWriter::serializeNormalizedPlan(const Plan& normalizedPlan) {
+    std::ostringstream stream;
+    stream << "==>\n";
+
+    FlatHashSet<int> actionIds;
+    for (const PlanItem& action : normalizedPlan.first) {
+        actionIds.insert(action.id);
+        if (!isPrintableAction(action)) continue;
+        stream << action.id << " " << Names::to_string_nobrackets(_htn.restoreOriginalTaskArity(action.abstractTask)) << "\n";
+    }
+
+    bool writeRoot = true;
+    for (const PlanItem& item : normalizedPlan.second) {
+        if (writeRoot) {
+            stream << "root";
+            for (int subtaskId : item.subtaskIds) stream << " " << subtaskId;
+            stream << "\n";
+            writeRoot = false;
             continue;
-        } else if (item.id <= 0 || actionIds.count(item.id)) continue;
-        
-        stream << item.id << " " << Names::to_string_nobrackets(_htn.cutNonoriginalTaskArguments(item.abstractTask)) << " -> " 
-            << Names::to_string_nobrackets(item.reduction) << subtaskIdStr << "\n";
+        }
+        if (item.id <= 0 || actionIds.count(item.id)) continue;
+
+        stream << item.id << " " << Names::to_string_nobrackets(_htn.restoreOriginalTaskArity(item.abstractTask))
+                << " -> " << Names::to_string_nobrackets(item.reduction);
+        for (int subtaskId : item.subtaskIds) stream << " " << subtaskId;
+        stream << "\n";
     }
     stream << "<==\n";
+    return stream.str();
+}
 
-    // Feed plan into parser to convert it into a plan to the original problem
-    // (w.r.t. previous compilations the parser did)
-    std::ostringstream outstream;
-    convert_plan(stream, outstream);
-    std::string planStr = outstream.str();
+bool PlanWriter::isPrintableAction(const PlanItem& action) const {
+    return action.abstractTask != _htn.getBlankActionSig()
+            && action.abstractTask._name_id != _htn.nameId("<goal_action>");
+}
 
-    if (_params.isNonzero("vp")) {
-        // Verify plan (by copying converted plan stream and putting it back into panda)
-        // std::stringstream verifyStream;
-        // verifyStream << planStr << std::endl;
-        // bool ok = verify_plan(verifyStream, /*useOrderingInfo=*/true, /*lenientMode=*/false, /*debugMode=*/0);
-        // if (!ok) {
-        //     Log::e("ERROR: Plan declared invalid by pandaPIparser! Exiting.\n");
-        //     exit(1);
-        // }
+size_t PlanWriter::countPrintableActions(const Plan& normalizedPlan) const {
+    return std::count_if(normalizedPlan.first.begin(), normalizedPlan.first.end(),
+            [this](const PlanItem& action) { return isPrintableAction(action); });
+}
 
-        // There is a problem with using the above function for some domain (e.g assembly hierarchical... So we use the executable instead)
-        // Explanation: see libmain.cpp in pandaLib. When we parse the problem, we simplify some of its sorts.
-        // But in the file, they verify the plan before the simplification... So we cannot use the function
-        // verify_plan unless we redo the parsing without the simplification...
+std::string PlanWriter::convertPlanToOriginalProblem(const std::string& internalPlan) const {
+    TemporaryFile inputPlan("sibylsat-internal-plan-");
+    TemporaryFile outputPlan("sibylsat-original-plan-");
+    {
+        std::ofstream output(inputPlan.getPath());
+        if (!output) throw std::runtime_error("Could not write the temporary internal plan");
+        output << internalPlan;
+    }
 
-        std::ofstream file("plan.txt");
-        file << planStr;
-        file << "<==\n";
-        file.flush();
+    const std::filesystem::path parser = getProjectRootDir() / "lib" / "parser" / "pandaPIparser";
+    const std::string command = quoteShellArgument(parser.string()) + " --panda-converter "
+            + quoteShellArgument(inputPlan.getPath().string()) + " " + quoteShellArgument(outputPlan.getPath().string());
+    if (!commandSucceeds(command)) throw std::runtime_error("PandaPIparser could not convert the generated plan");
 
-        // Now run pandaPiParser with the plan.txt file
-        std::filesystem::path current_path = getProjectRootDir();
+    std::ifstream input(outputPlan.getPath());
+    if (!input) throw std::runtime_error("Could not read the converted plan");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
 
-        // Path parser
-        filesystem::path filesystem_full_path_parser = current_path / "lib" / "pandaPIparserOriginal";
-        std::string full_path_parser = filesystem_full_path_parser.string();
+void PlanWriter::writePlanFile(const std::filesystem::path& path, const std::string& planText) const {
+    std::ofstream file(path);
+    if (!file) throw std::runtime_error("Could not open plan file: " + path.string());
+    file << planText << "<==\n";
+}
 
-        // -C for no color output
-        std::string command = full_path_parser + " -C --verify " + _htn.getParams().getDomainFilename() + " " + _htn.getParams().getProblemFilename() + " plan.txt";
+bool PlanWriter::verifyPlan(const std::string& planText) const {
+    TemporaryFile temporaryPlan("sibylsat-plan-");
+    writePlanFile(temporaryPlan.getPath(), planText);
 
-        // Check if the output contains the desired string
-        if (checkCommandOutput(command, "Plan verification result: true")) {
-            Log::i("Plan has been verified by pandaPIparser\n");
-        } else {
+    const std::filesystem::path parser = getProjectRootDir() / "lib" / "parser" / "pandaPIparser";
+    const std::string command = quoteShellArgument(parser.string()) + " -C --verify "
+            + quoteShellArgument(_domain_filename) + " "
+            + quoteShellArgument(_problem_filename) + " "
+            + quoteShellArgument(temporaryPlan.getPath().string());
+    return commandSucceedsAndOutputContains(command, "Plan verification result: true");
+}
+
+
+void PlanWriter::outputPlan(const Plan& decodedPlan) {
+    const Plan normalizedPlan = normalizePlanForOutput(decodedPlan);
+    const std::string internalPlan = serializeNormalizedPlan(normalizedPlan);
+    const std::string originalPlan = convertPlanToOriginalProblem(internalPlan);
+
+    if (_verify_plan) {
+        if (!verifyPlan(originalPlan)) {
             Log::e("ERROR: Plan declared invalid by pandaPIparser! Exiting.\n");
-            exit(1);
+            std::exit(1);
         }
-
-        // remove the plan.txt file
-        std::remove("plan.txt");
+        Log::i("Plan has been verified by pandaPIparser\n");
     }
 
-    // Write plan to file
-    if (_params.isNonzero("wp")) {
-        std::string planFile = "plan.txt";
-        Log::i("Writing plan to file %s\n", planFile.c_str());
-        std::ofstream file(planFile);
-        file << planStr;
-        file << "<==\n";
-        file.flush();
-        file.close();
+
+    if (_write_plan) {
+        const std::filesystem::path planPath = "plan.txt";
+        Log::i("Writing plan to file %s\n", planPath.string().c_str());
+        writePlanFile(planPath, originalPlan);
     }
-    
-    // Print plan
-    Log::log_notime(Log::V0_ESSENTIAL, planStr.c_str());
+
+    size_t planLength = countPrintableActions(normalizedPlan);
+
+    Log::log_notime(Log::V0_ESSENTIAL, "%s", originalPlan.c_str());
     Log::log_notime(Log::V0_ESSENTIAL, "<==\n");
-    
-    Log::i("End of solution plan. (counted length of %i)\n", length);
+    Log::i("End of solution plan. (counted length of %zu)\n", planLength);
 }

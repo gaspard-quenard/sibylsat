@@ -63,7 +63,7 @@ void NetworkTraversal::traverse(const USignature& opSig, TraverseOrder order, st
                         s[arg] = arg;   
                         continue;
                     }
-                    s[arg] = _htn->nameId(_htn->toString(arg) + "_");
+                    s[arg] = _htn->createRenamedArgument(arg, "_");
                 }
             }
             frontier.push_back(child.substitute(s));

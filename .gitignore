@@ -3,6 +3,14 @@ _*
 *.o
 *.a
 lib/*
+!lib/parser/
+lib/parser/*
+!lib/parser/fetch_and_build.sh
+!lib/parser/preserve_method_preconditions.patch
+!lib/grounder/
+lib/grounder/*
+!lib/grounder/fetch_and_build.sh
+!lib/grounder/pandaPiGrounding_modifications.patch
 lilotane
 .vscode
 OUT
@@ -13,5 +21,3 @@ picosat
 PANDA.jar
 logs/
 build/
-pandaPIparser
-src/pandaPIparser/

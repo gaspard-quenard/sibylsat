@@ -3,37 +3,38 @@
 
 void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition mode) {
 
-    int layerIdx = _layers.size()-1;
-    Layer& l = *_layers.at(layerIdx);
+    const int expansionIteration = _leaf_positions.empty()
+            ? 0
+            : _leaf_positions.front()->getCreationIteration();
     int currentPlanLength = upperBound;
     Log::v("PLO BEGIN %i\n", currentPlanLength);
 
     // Add counting mechanism
-    _stats.begin(STAGE_PLANLENGTHCOUNTING);
+    _stats.begin(EncodingStage::PLAN_LENGTH_COUNTING);
     int minPlanLength = 0;
     int maxPlanLength = 0;
-    std::vector<int> planLengthVars(1, VariableDomain::nextVar());
-    Log::d("VARNAME %i (plan_length_equals %i %i)\n", planLengthVars[0], 0, 0);
+    std::vector<int> planLengthVars(1, _variables.allocateVariable("(plan_length_equals 0 0)"));
     // At position zero, the plan length is always equal to zero
     _sat.addClause(planLengthVars[0]);
-    for (size_t pos = 0; pos+1 < l.size(); pos++) {
+    for (size_t pos = 0; pos + 1 < _leaf_positions.size(); pos++) {
+        Position& leaf = *_leaf_positions[pos];
 
         // Collect sets of potential operations
         FlatHashSet<int> emptyActions, actualActions;
-        for (const auto& aSig : l.at(pos).getActions()) {
+        for (const auto& aSig : leaf.getActions()) {
             Log::d("PLO %i %s?\n", pos, TOSTR(aSig));
-            int aVar = l.at(pos).getVariable(VarType::OP, aSig);
+            int aVar = leaf.getVariable(VarType::OP, aSig);
             if (isEmptyAction(aSig)) {
                 emptyActions.insert(aVar);
             } else {
                 actualActions.insert(aVar);
             }
         }
-        for (const auto& rSig : l.at(pos).getReductions()) {
+        for (const auto& rSig : leaf.getReductions()) {
             Log::d("PLO %i %s?\n", pos, TOSTR(rSig));
             if (_htn.getOpTable().getReduction(rSig).getSubtasks().size() == 0) {
                 // Empty reduction
-                emptyActions.insert(l.at(pos).getVariable(VarType::OP, rSig));
+                emptyActions.insert(leaf.getVariable(VarType::OP, rSig));
             }
         }
 
@@ -63,7 +64,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
             bool encodeActualsOnly = emptyActions.size() > actualActions.size();
             if (!encodeDirectly) {
                 // Encode with a helper variable
-                emptySpotVar = VariableDomain::nextVar();
+                emptySpotVar = _variables.allocateVariable("(__empty_plan_position " + std::to_string(pos) + ")");
 
                 // Define for each action var whether it implies an empty spot or not
                 for (int v : emptyActions) {
@@ -79,7 +80,8 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
             // create new variables and constraints.
             std::vector<int> newPlanLengthVars(planLengthVars.size()+(increaseUpperBound?1:0));
             for (size_t i = 0; i < newPlanLengthVars.size(); i++) {
-                newPlanLengthVars[i] = VariableDomain::nextVar();
+                newPlanLengthVars[i] = _variables.allocateVariable(
+                        "(plan_length_equals " + std::to_string(pos + 1) + " " + std::to_string(i) + ")");
             }
 
             // Propagate plan length from previous position to new position
@@ -147,14 +149,15 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
         Log::v("Position %i: Plan length bounds [%i,%i]\n", pos, minPlanLength, maxPlanLength);
     }
 
-    Log::i("Tightened initial plan length bounds at layer %i: [0,%i] => [%i,%i]\n",
-            layerIdx, l.size()-1, minPlanLength, maxPlanLength);
+    Log::i("Tightened initial plan length bounds at expansion iteration %i: [0,%zu] => [%i,%i]\n",
+            expansionIteration, _leaf_positions.empty() ? 0U : _leaf_positions.size() - 1,
+            minPlanLength, maxPlanLength);
     assert((int)planLengthVars.size() == maxPlanLength-minPlanLength+1 || Log::e("%i != %i-%i+1\n", planLengthVars.size(), maxPlanLength, minPlanLength));
     
     // Add primitiveness of all positions at the final layer
     // as unit literals (instead of assumptions)
-    _enc.addAssumptionsPrimPlan(layerIdx, /*permanent=*/mode == ConstraintAddition::PERMANENT);
-    _stats.end(STAGE_PLANLENGTHCOUNTING);
+    _enc.addAssumptionsPrimPlan(/*permanent=*/mode == ConstraintAddition::PERMANENT);
+    _stats.end(EncodingStage::PLAN_LENGTH_COUNTING);
 
     int curr = currentPlanLength;
     currentPlanLength = findMinBySat(minPlanLength, std::min(maxPlanLength, currentPlanLength), 
@@ -165,7 +168,7 @@ void PlanOptimizer::optimizePlan(int upperBound, Plan& plan, ConstraintAddition 
         // Bound update on SAT 
         [&]() {
             // SAT: Shorter plan found!
-            plan = _enc.extractPlan();
+            plan = _enc.getDecoder().extractPlan();
             int newPlanLength = getPlanLength(std::get<0>(plan));
             Log::i("Shorter plan (length %i) found\n", newPlanLength);
             assert(newPlanLength < curr);
@@ -199,7 +202,7 @@ int PlanOptimizer::findMinBySat(int lower, int upper, std::function<int(int)> va
         }
 
         // Assume a shorter plan by one
-        _stats.begin(STAGE_PLANLENGTHCOUNTING);
+        _stats.begin(EncodingStage::PLAN_LENGTH_COUNTING);
 
         // Permanently forbid any plan lengths greater than / equal to the last found plan
         if (mode == TRANSIENT) {
@@ -220,7 +223,7 @@ int PlanOptimizer::findMinBySat(int lower, int upper, std::function<int(int)> va
         if (mode == TRANSIENT) _sat.assume(-probedVar);
         else _sat.addClause(-probedVar);
 
-        _stats.end(STAGE_PLANLENGTHCOUNTING);
+        _stats.end(EncodingStage::PLAN_LENGTH_COUNTING);
 
         Log::i("Searching for a plan of length < %i\n", upper);
         int result = _enc.solve();
@@ -239,6 +242,18 @@ int PlanOptimizer::findMinBySat(int lower, int upper, std::function<int(int)> va
             Log::v("PLO END %i\n", current);
             break;
         }
+    }
+
+    if (mode == TRANSIENT) {
+        _stats.begin(EncodingStage::PLAN_LENGTH_COUNTING);
+        for (int bound = originalUpper; bound > current; bound--) {
+            _sat.assume(-varMap(bound));
+        }
+        _stats.end(EncodingStage::PLAN_LENGTH_COUNTING);
+
+        Log::i("Recovering an optimal plan of length <= %i\n", current);
+        const int result = _enc.solve();
+        assert(result == 10);
     }
 
     return current;

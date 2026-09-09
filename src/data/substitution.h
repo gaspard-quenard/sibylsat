@@ -2,8 +2,9 @@
 #ifndef DOMPASCH_LILOTANE_SUBSTITUTION_H
 #define DOMPASCH_LILOTANE_SUBSTITUTION_H
 
-#include <vector>
 #include <forward_list>
+#include <optional>
+#include <vector>
 
 #include "util/hashmap.h"
 #include "util/hash.h"
@@ -41,7 +42,7 @@ public:
     std::forward_list<Entry>::const_iterator begin() const;
     std::forward_list<Entry>::const_iterator end() const;
 
-    //static Substitution get(const std::vector<int>& src, const std::vector<int>& dest);
+    static std::optional<Substitution> fromArgumentMapping(const std::vector<int>& source, const std::vector<int>& destination);
     static std::vector<Substitution> getAll(const std::vector<int>& src, const std::vector<int>& dest);
 
     struct Hasher {

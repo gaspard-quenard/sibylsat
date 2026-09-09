@@ -42,17 +42,13 @@ void Parameters::setDefaults() {
     setParam("cleanup", "0"); // clean up before exit?
     setParam("co", "1"); // colored output
     setParam("cs", "0"); // check solvability (without assumptions)
-    setParam("d", "0"); // min depth to start SAT solving at
     setParam("D", "0"); // max depth (= num iterations)
     setParam("edo", "1"); // eliminate dominated operations
-    setParam("el", "0"); // extra layers after initial solution (-1: expand indefinitely)
-    setParam("ip", "0"); // implicit primitiveness
     setParam("mp", "2"); // mine preconditions
     setParam("nps", "0"); // non-primitive fact supports
     setParam("of", "0"); // optimization factor
     setParam("p", "1"); // encode predecessor operations
     setParam("pvn", "0"); // print variable names
-    setParam("qcm", "0"); // q-constant mutexes: size threshold
     setParam("plc", "0"); // print learnt clauses
     setParam("qit", "0"); // q-constant instantiation threshold
     setParam("qrf", "0"); // q-constant rating factor
@@ -63,23 +59,19 @@ void Parameters::setDefaults() {
     setParam("sqq", "1"); // share q-constants
     setParam("srfa", "1"); // skip redundant frame axioms
     setParam("stats", "0"); // output domain statistics and exit
-    setParam("stl", "0"); // SAT time limit
     setParam("psr", "1"); // primitivize simple reductions
     setParam("svp", "0"); // set variable phases
-    setParam("T", "0"); // max. time (secs) for finding an initial plan
     setParam("tc", "1"); // tree conversion for DNF2CNF
     setParam("v", "2"); // verbosity
     setParam("aar", "1"); // acknowledge action repetitions
     setParam("vp", "0"); // verify plan before printing it
-    setParam("wf", "0"); // output formula to f.cnf
+    setParam("wf", "0"); // output formula to f.cnf or f.wcnf
 
     // Parameters added for sibylsat
     setParam("wp", "0"); // output plan to plan.txt
     setParam("sibylsat", "1"); // use the sibylsat expansion method
     setParam("mutex", "1"); // Filter possible effects of abstract tasks using mutexes
     setParam("macroActions", "1"); // Join consecutive actions in subtasks methods into a single macro action
-    // setParam("preprocessFacts", "1"); // Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts -> ALWAYS TRUE NOW, CANNOT BE SET TO FALSE
-    setParam("restrictSortsInFA", "1"); // Restrict the sorts of the possible effects of methods to the most constrained sort. For example. If a method has a parameter of sort 'car' an call a primtive subtask with this parameter, but the parameter sort of the primitive task is vehicle (which is a super sort of car), the possible effects of the method will be restricted to the sort car.
     setParam("separateTasks", "1"); // Solve the initial tasks network incrementally
 
     // Parameters added for optimal solution using MaxSAT and the TDG heuristic
@@ -106,10 +98,7 @@ void Parameters::printUsage() {
     Log::i(" -co=<0|1>           Colored terminal output\n");
     Log::i(" -cs=<0|1>           Check solvability: When some layer is UNSAT, re-run SAT solver without assumptions\n");
     Log::i("                     to see whether the formula has become generally unsatisfiable\n");
-    Log::i(" -d=<depth>          Minimum depth to begin SAT solving at\n");
     Log::i(" -D=<depth>          Maximum depth to explore (0 : no limit)\n");
-    Log::i(" -el=<int>           Number of extra layers to encode after an initial solution was found (use with -of=...)\n");
-    Log::i(" -ip=<0|1>           Implicit primitiveness instead of defining each op as primitive XOR nonprimitive\n");
     Log::i(" -mp=<0|1|2>         Mine preconditions for reductions from their (recursive) subtasks:\n");
     Log::i("                     0=none, 1=use mined prec. for instantiation only, 2=use mined prec. everywhere\n");
     Log::i(" -nps=<0|1>          Nonprimitive support: Enable encoding explicit fact supports for reductions\n");
@@ -118,7 +107,6 @@ void Parameters::printUsage() {
     Log::i(" -p=<0|1>            Encode predecessor operations\n");
     Log::i(" -psr=<0|1>          Primitivize simple reductions\n");
     Log::i(" -pvn=<0|1>          Print variable names\n");
-    Log::i(" -qcm=<limit>        Collect up to <limit> q-constant mutexes per tuple of q-constants\n");
     Log::i(" -qit=<threshold>    Q-constant instantiation threshold: fully instantiate up to <threshold> operations\n");
     Log::i(" -qrf=<factor>       If -q or -qq, multiply precondition rating used for q-constant identification with <factor>\n");
     Log::i(" -q=<0|1>            For each action and reduction, introduces q-constants for any ambiguous free parameters\n");
@@ -128,20 +116,16 @@ void Parameters::printUsage() {
     Log::i(" -sqq=<0|1>          Share q-constants among operations of a position if they have the same effective domain\n");
     Log::i(" -srfa=<0|1>         Skip redundant frame axioms\n");
     Log::i(" -stats=<0|1>        Output domain statistics and exit\n");
-    Log::i(" -stl=<limit>        SAT time limit: Set limit in seconds for a SAT solver call. Limit is discarded after first such interrupt.\n");
-    Log::i(" -T=<0|secs>         Try finding an initial plan for up to #secs (without optimization: total allowed runtime; 0: no limit)\n");
     Log::i(" -tc=<0|1>           Use tree conversion for DNF 2 CNF transformation instead of distributive law\n");
     Log::i(" -v=<verb>           Verbosity: 0=essential 1=warnings 2=information 3=verbose 4=debug\n");
     Log::i(" -vp=<0|1>           Verify plan (using pandaPIparser) before printing it\n");
-    Log::i(" -wf=<0|1>           Write generated formula to text file \"f.cnf\" (with assumptions used in final call)\n");
+    Log::i(" -wf=<0|1>           Write the generated formula to f.cnf, or f.wcnf in optimal mode\n");
 
     // SibylSAT
     Log::i(" -wp=<0|1>           Write plan to plan.txt\n");
     Log::i(" -sibylsat=<0|1>     Use the sibylsat expansion method\n");
     Log::i(" -mutex=<0|1>        Filter possible effects of abstract tasks using mutexes\n");
     Log::i(" -macroActions=<0|1> Join consecutive actions in subtasks methods into a single macro action\n");
-    // Log::i(" -preprocessFacts=<0|1> Ground the problem (using panda grounder) to find all the ground facts that can exist in the problem and restrict methods and tasks and their possible effects using those facts\n");
-    Log::i(" -restrictSortsInFA=<0|1> Restrict the sorts of the possible effects of methods to the most constrained sort. For example. If a method has a parameter of sort 'car' an call a primtive subtask with this parameter, but the parameter sort of the primitive task is vehicle (which is a super sort of car), the possible effects of the method will be restricted to the sort car.\n");
 
     // Optimal solution using MaxSAT and the TDG heuristic
     Log::i(" -optimal=<0|1>      Find an optimal solution instead of just a solution. Usually slower.\n");
@@ -154,10 +138,10 @@ void Parameters::printUsage() {
     Log::setForcePrint(false);
 }
 
-std::string Parameters::getDomainFilename() {
+const std::string& Parameters::getDomainFilename() const {
   return _domain_filename;
 }
-std::string Parameters::getProblemFilename() {
+const std::string& Parameters::getProblemFilename() const {
   return _problem_filename;
 }
 

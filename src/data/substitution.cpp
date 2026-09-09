@@ -51,6 +51,25 @@ Substitution Substitution::concatenate(const Substitution& second) const {
     return s;
 }
 
+std::optional<Substitution> Substitution::fromArgumentMapping(const std::vector<int>& source, const std::vector<int>& destination) {
+    assert(source.size() == destination.size());
+    if (source.size() != destination.size()) return std::nullopt;
+
+    Substitution substitution;
+    for (size_t i = 0; i < source.size(); i++) {
+        assert(source[i] != 0 && destination[i] != 0);
+        if (source[i] == 0 || destination[i] == 0) return std::nullopt;
+        if (source[i] == destination[i]) continue;
+
+        auto existing = substitution.find(source[i]);
+        if (existing != substitution.end() && existing->second != destination[i]) {
+            return std::nullopt;
+        }
+        substitution[source[i]] = destination[i];
+    }
+    return substitution;
+}
+
 std::vector<Substitution> Substitution::getAll(const std::vector<int>& src, const std::vector<int>& dest) {
     std::vector<Substitution> ss;
     ss.emplace_back(); // start with empty substitution

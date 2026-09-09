@@ -1,24 +1,23 @@
 
 #include "binary_amo.h"
 
-#include "variable_domain.h"
+#include <cassert>
+#include <string>
+
+#include "sat/variable_allocator.h"
 #include "util/log.h"
 
-BinaryAtMostOne::BinaryAtMostOne(const std::vector<int>& states, size_t numStates) : _states(states), _num_states(numStates) {
+BinaryAtMostOne::BinaryAtMostOne(const std::vector<int>& states, size_t numStates, VariableAllocator& variables) : _states(states), _num_states(numStates) {
 
     // Set up helper variables for a binary number representation
     _num_repr_states = 1;
     while (_num_repr_states < _num_states) {
-        int var = VariableDomain::nextVar();
-        Log::d("VARMAP %i (__amo_%i-%i_%i)\n", var, states[0], states[states.size()-1], _bin_num_vars.size());
+        const std::string name = "(__amo_" + std::to_string(states.front()) + "-"
+                + std::to_string(states.back()) + "_" + std::to_string(_bin_num_vars.size()) + ")";
+        int var = variables.allocateVariable(name);
         _bin_num_vars.push_back(var);
         _num_repr_states *= 2;
     }
-    /*
-    Log::d("BAMO vars:%lu binvars:%lu states:%lu reprstates:%i forbstates:[%i,%i)\n", 
-            _states.size(), _bin_num_vars.size(), _num_states, _num_repr_states, _num_states, _num_repr_states);
-    assert(!_bin_num_vars.empty());
-    */
 }
 
 std::vector<std::vector<int>> BinaryAtMostOne::encode() {
@@ -64,15 +63,6 @@ std::vector<std::vector<int>> BinaryAtMostOne::encode() {
         blockSize--;
     }
     assert(firstForbiddenState == _num_states);
-
-    /*
-    Log::d("BAMO =>\n");    
-    for (auto c : cls) {
-        Log::d("BAMO ");
-        for (auto lit : c) Log::log_notime(Log::V4_DEBUG, "%i ", lit);
-        Log::log_notime(Log::V4_DEBUG, "\n");
-    }
-    Log::d("<= BAMO\n");*/
 
     return cls;
 }

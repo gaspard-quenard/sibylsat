@@ -2,18 +2,18 @@
 #ifndef DOMPASCH_LILOTANE_DOMINATION_RESOLVER_H
 #define DOMPASCH_LILOTANE_DOMINATION_RESOLVER_H
 
-#include "data/htn_instance.h"
+#include "algo/q_constant_manager.h"
 #include "data/position.h"
 
 class DominationResolver {
 
 private:
-    HtnInstance& _htn;
+    QConstantManager& _q_constants;
 
     size_t _num_dominated_ops = 0;
 
 public:
-    DominationResolver(HtnInstance& htn) : _htn(htn) {}
+    explicit DominationResolver(QConstantManager& qConstants) : _q_constants(qConstants) {}
 
     enum DominationStatus {DOMINATING, DOMINATED, DIFFERENT, EQUIVALENT};
     struct DominationResult {
@@ -21,7 +21,7 @@ public:
         Substitution qconstSubstitutions;
     };
 
-    DominationResult getDominationStatus(const USignature& op, const USignature& other, Position& p);
+    DominationResult getDominationStatus(const USignature& op, const USignature& other);
     void eliminateDominatedOperations(Position& newPos);
 
     size_t getNumDominatedOps() const {
