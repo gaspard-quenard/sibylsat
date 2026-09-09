@@ -3,6 +3,7 @@
 #define DOMPASCH_LILOTANE_ANALYSIS_H
 
 #include <optional>
+#include <string>
 
 #include "data/ground_fact_index.h"
 #include "data/htn_instance.h"
@@ -34,7 +35,7 @@ private:
 
 public:
 
-    explicit FactAnalysis(HtnInstance& htn);
+    FactAnalysis(HtnInstance& htn, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations);
 
     bool isInGroundFacts(const USignature& fact, bool negated) {
         if (negated) {
@@ -243,10 +244,10 @@ public:
 
 private:
     /**
-     * Ground the problems using pandaPiGrounder. By default, make the pandaPiGrounder output only the ground facts that are reachable.
-     * If getAlsoGroundOps is true, make the pandaPiGrounder also output the ground operators (methods and tasks) that are reachable.
+     * Ground the problem using pandaPIgrounder and load its reachable facts.
+     * Optimal planning also requests the grounded tasks and methods needed by the TDG.
      */
-    void getGroundFacts(bool getAlsoGroundOps);
+    void getGroundFacts(const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations);
     void extractGroundFactsFromPandaPiGrounderFile(const std::string& filename);
 
 };

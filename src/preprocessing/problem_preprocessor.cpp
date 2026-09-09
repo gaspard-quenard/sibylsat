@@ -58,7 +58,7 @@ PlanningContext preprocessProblem(Parameters& params) {
     Log::i("%zu operators and %zu methods created.\n", htn->getActionTemplates().size(), htn->getReductionTemplates().size());
 
     // Ground reachable predicates and initialize the model's ground-fact index.
-    auto factAnalysis = std::make_unique<FactAnalysis>(*htn);
+    auto factAnalysis = std::make_unique<FactAnalysis>(*htn, params.getDomainFilename(), params.getProblemFilename(), params.isNonzero("optimal"));
 
     // Compute mutex groups and remove groups invalidated by grounded reachability.
     computeMutexGroups(*htn, *factAnalysis, params);

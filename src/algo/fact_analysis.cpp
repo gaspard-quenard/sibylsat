@@ -5,14 +5,15 @@
 #include <filesystem>
 
 #include "util/project_utils.h"
+#include "util/process_utils.h"
 #include "util/statistics.h"
 
-FactAnalysis::FactAnalysis(HtnInstance& htn)
+FactAnalysis::FactAnalysis(HtnInstance& htn, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations)
         : _htn(htn),
           _init_state(_htn.getInitState()) {
     Statistics& stats = Statistics::getInstance();
     stats.beginTiming(TimingStage::INIT_GROUNDING);
-    getGroundFacts(_htn.getParams().isNonzero("optimal"));
+    getGroundFacts(domainFilename, problemFilename, includeGroundOperations);
 
     std::vector<USignature> positiveFacts(_ground_pos_facts.begin(), _ground_pos_facts.end());
     std::vector<USignature> exclusiveNegativeFacts;
@@ -270,14 +271,14 @@ std::optional<std::vector<FlatHashSet<int>>> FactAnalysis::computeReachableArgum
     return domainPerVariable;
 }
 
-void FactAnalysis::getGroundFacts(bool getAlsoGroundOps)
+void FactAnalysis::getGroundFacts(const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations)
 {
 
     std::filesystem::path current_path = getProjectRootDir();
 
     // Path parser
     // If we need the groundOps, we need to get the same ops than what we parsed when we modified the parser
-    std::string pandaExecutable = getAlsoGroundOps ? "pandaPIparser" : "pandaPIparserOriginal";
+    std::string pandaExecutable = includeGroundOperations ? "pandaPIparser" : "pandaPIparserOriginal";
     std::filesystem::path filesystem_full_path_parser = current_path / "lib" / pandaExecutable;
     std::string full_path_parser = filesystem_full_path_parser.string();
 
@@ -285,7 +286,8 @@ void FactAnalysis::getGroundFacts(bool getAlsoGroundOps)
     std::filesystem::path filesystem_parser_output = getProblemProcessingDir() / "problem.parsed";
     std::string parser_output = filesystem_parser_output.string();
 
-    std::string commandParser = full_path_parser + " " + _htn.getParams().getDomainFilename() + " " + _htn.getParams().getProblemFilename() + " " + parser_output;
+    std::string commandParser = quoteShellArgument(full_path_parser) + " " + quoteShellArgument(domainFilename) + " "
+            + quoteShellArgument(problemFilename) + " " + quoteShellArgument(parser_output);
 
     Log::i("Parsing the domain and problem files with the parser...\n");
     int result = std::system(commandParser.c_str());
@@ -316,7 +318,7 @@ void FactAnalysis::getGroundFacts(bool getAlsoGroundOps)
     // The option --write-full-methods-name is used to write the name and parameters of the methods instead of just the name of the methods in the output file
     Log::i("Grounding the parsed file with the grounder...\n");
     std::string options = "";
-    if (!getAlsoGroundOps)
+    if (!includeGroundOperations)
     {
         options = "--no-literal-pruning --only-write-state-features --quick-compute-state-features --quiet";
     }

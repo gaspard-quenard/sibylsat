@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 
 #include "data/htn_instance.h"
 #include "data/plan.h"
@@ -12,10 +13,14 @@ class PlanWriter {
 
 private:
     HtnInstance& _htn;
-    Parameters& _params;
+    const std::string _domain_filename;
+    const std::string _problem_filename;
+    const bool _verify_plan;
+    const bool _write_plan;
 
 public:
-    PlanWriter(HtnInstance& htn, Parameters& params) : _htn(htn), _params(params) {}
+    PlanWriter(HtnInstance& htn, std::string domainFilename, std::string problemFilename, bool verifyPlan, bool writePlan)
+        : _htn(htn), _domain_filename(std::move(domainFilename)), _problem_filename(std::move(problemFilename)), _verify_plan(verifyPlan), _write_plan(writePlan) {}
 
     /** Normalize the decoded plan, convert it to the original problem, optionally verify and save it, and print it. */
     void outputPlan(const Plan& decodedPlan);

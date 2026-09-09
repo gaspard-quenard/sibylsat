@@ -3,7 +3,7 @@
 
 #include "algo/separate_tasks_scheduler.h"
 
-SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& facts)
+SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& facts, const std::string& domainFilename)
     : _num_init_tasks_resolved(0),
       _init_task_network_size(htn.getInitReduction().getSubtasks().size()),
       _current_task_index(1),
@@ -15,7 +15,7 @@ SeparateTasksScheduler::SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& f
       _restart_planner(false),
       _htn(htn),
       _facts(facts),
-      _domain_name(getDomaineNameFromDomainFile(htn.getParams().getDomainFilename()))
+      _domain_name(getDomaineNameFromDomainFile(domainFilename))
 {
     if (!_settings_manager.has_setting(_domain_name, "independent_init_tasks")) {
         Log::w("The domain %s does not have the setting independent_init_tasks in the domain_settings.json file. Create it with default value true.\n", _domain_name.c_str());

@@ -15,7 +15,7 @@ Planner::Planner(Parameters& params, HtnInstance& htn, FactAnalysis& analysis, T
           _analysis(analysis),
           _encoding(_params, _htn_instance, _analysis, _root_position, _leaf_positions),
           _pruning(std::make_unique<RetroactivePruning>(_encoding)),
-          _plan_writer(_htn_instance, _params),
+          _plan_writer(_htn_instance, _params.getDomainFilename(), _params.getProblemFilename(), _params.isNonzero("vp"), _params.isNonzero("wp")),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _optimal(_params.isNonzero("optimal")),
           _tdg(tdg),
@@ -31,7 +31,7 @@ void Planner::configure() {
     if (_tdg != nullptr) _tree_expander.attachTDG(*_tdg);
     _tree_expander.attachPruning(*_pruning);
     if (_separate_tasks) {
-        _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn_instance, _analysis);
+        _separate_tasks_scheduler = std::make_unique<SeparateTasksScheduler>(_htn_instance, _analysis, _params.getDomainFilename());
     }
 }
 

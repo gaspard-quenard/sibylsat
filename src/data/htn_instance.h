@@ -10,7 +10,6 @@
 #include "data/reduction.h"
 #include "data/signature.h"
 #include "util/names.h"
-#include "util/params.h"
 #include "util/hashmap.h"
 #include "util/bitvec.h"
 #include "util/statistics.h"
@@ -28,8 +27,6 @@ class HtnStatistics;
 class HtnInstance {
 
 private:
-    Parameters& _params;
-
     std::unique_ptr<MacroActionCompiler> _macro_action_compiler;
 
     // Maps a string to its name ID within the problem.
@@ -96,11 +93,6 @@ private:
 
 public:
     ~HtnInstance();
-
-    // Get the params 
-    Parameters& getParams() const {
-        return _params;
-    }
 
     bool isEqualityPredicate(int nameId) const {
         return _equality_predicates.count(nameId);
@@ -245,7 +237,7 @@ private:
     friend class HtnStatistics;
 
     /** Construct an empty internal model; HtnInstanceBuilder populates it. */
-    explicit HtnInstance(Parameters& params);
+    explicit HtnInstance(bool shareQConstants);
 
     std::optional<std::vector<int>> instantiateArgumentsWithQConstants(const HtnOp& operation, const std::vector<FlatHashSet<int>>& argumentDomains, size_t originPositionId);
     int createQConstant(const std::string& name, const FlatHashSet<int>& domain, size_t originPositionId);

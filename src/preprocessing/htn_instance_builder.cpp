@@ -14,7 +14,8 @@
 #include "util/regex.h"
 
 std::unique_ptr<HtnInstance> HtnInstanceBuilder::build(ParsedProblem& problem, std::unique_ptr<MacroActionCompiler> macroActions, Parameters& params) {
-    std::unique_ptr<HtnInstance> result(new HtnInstance(params));
+    USignatureHasher::seed = params.getIntParam("s");
+    std::unique_ptr<HtnInstance> result(new HtnInstance(params.isNonzero("sqq")));
     HtnInstance& htn = *result;
     htn._macro_action_compiler = std::move(macroActions);
 

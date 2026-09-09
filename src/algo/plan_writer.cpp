@@ -156,8 +156,8 @@ bool PlanWriter::verifyPlan(const std::string& planText) const {
 
     const std::filesystem::path parser = getProjectRootDir() / "lib" / "pandaPIparserOriginal";
     const std::string command = quoteShellArgument(parser.string()) + " -C --verify "
-            + quoteShellArgument(_htn.getParams().getDomainFilename()) + " "
-            + quoteShellArgument(_htn.getParams().getProblemFilename()) + " "
+            + quoteShellArgument(_domain_filename) + " "
+            + quoteShellArgument(_problem_filename) + " "
             + quoteShellArgument(temporaryPlan.getPath().string());
     return commandSucceedsAndOutputContains(command, "Plan verification result: true");
 }
@@ -168,7 +168,7 @@ void PlanWriter::outputPlan(const Plan& decodedPlan) {
     const std::string internalPlan = serializeNormalizedPlan(normalizedPlan);
     const std::string originalPlan = convertPlanToOriginalProblem(internalPlan);
 
-    if (_params.isNonzero("vp")) {
+    if (_verify_plan) {
         if (!verifyPlan(originalPlan)) {
             Log::e("ERROR: Plan declared invalid by pandaPIparser! Exiting.\n");
             std::exit(1);
@@ -177,7 +177,7 @@ void PlanWriter::outputPlan(const Plan& decodedPlan) {
     }
 
 
-    if (_params.isNonzero("wp")) {
+    if (_write_plan) {
         const std::filesystem::path planPath = "plan.txt";
         Log::i("Writing plan to file %s\n", planPath.string().c_str());
         writePlanFile(planPath, originalPlan);

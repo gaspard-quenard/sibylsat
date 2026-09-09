@@ -6,11 +6,7 @@
 #include "data/htn_instance.h"
 #include "preprocessing/macro_action_compiler.h"
 
-HtnInstance::HtnInstance(Parameters& params) :
-             _params(params),
-            _share_q_constants(_params.isNonzero("sqq")) {
-    USignatureHasher::seed = _params.getIntParam("s");
-}
+HtnInstance::HtnInstance(bool shareQConstants) : _share_q_constants(shareQConstants) {}
 
 int HtnInstance::nameId(const std::string& name) {
     auto existing = _name_table.find(name);

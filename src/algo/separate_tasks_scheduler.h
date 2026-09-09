@@ -57,8 +57,10 @@ public:
      * Constructor.
      *
      * @param htn The HTN instance.
+     * @param facts Ground facts and mutable reachability state.
+     * @param domainFilename Domain file used to select domain-specific scheduling settings.
      */
-    SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& facts);
+    SeparateTasksScheduler(HtnInstance& htn, FactAnalysis& facts, const std::string& domainFilename);
 
     /**
      * Display an advancement/progress bar showing how many tasks have been solved.
