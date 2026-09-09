@@ -10,6 +10,7 @@ TreeExpander::TreeExpander(Parameters& params, HtnInstance& htn, QConstantManage
           _q_constants(qConstants),
           _stats(Statistics::getInstance()),
           _analysis(analysis),
+          _operation_domain_analyzer(_htn, _q_constants, _analysis),
           _domination_resolver(_q_constants),
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _nonprimitive_support(_params.isNonzero("nps")),
@@ -652,7 +653,7 @@ std::optional<USignature> TreeExpander::instantiateAndRegisterAction(const USign
     if (!isPotentiallyApplicable(action)) return std::nullopt;
 
     const USignature originalSig = action.getSignature();
-    auto argumentDomains = _analysis.computeReachableArgumentDomains(action);
+    auto argumentDomains = _operation_domain_analyzer.compute(action);
     if (!argumentDomains) return std::nullopt;
     auto instantiatedAction = _q_constants.instantiate(action, argumentDomains.value(), originPositionId);
     if (!instantiatedAction) return std::nullopt;
@@ -722,7 +723,7 @@ std::optional<USignature> TreeExpander::instantiateAndRegisterReduction(Reductio
     if (!_q_constants.hasConsistentlyTypedArguments(reduction.getSignature())) return std::nullopt;
     if (!isPotentiallyApplicable(reduction)) return std::nullopt;
 
-    auto argumentDomains = _analysis.computeReachableArgumentDomains(reduction);
+    auto argumentDomains = _operation_domain_analyzer.compute(reduction);
     if (!argumentDomains) return std::nullopt;
     auto instantiatedReduction = _q_constants.instantiate(reduction, argumentDomains.value(), originPositionId);
     if (!instantiatedReduction) return std::nullopt;

@@ -8,6 +8,7 @@
 #include "data/ground_fact_index.h"
 #include "data/htn_instance.h"
 #include "algo/q_constant_manager.h"
+#include "preprocessing/ground_problem_loader.h"
 #include "util/bitvec.h"
 
 class FactAnalysis {
@@ -31,13 +32,9 @@ private:
 
     USigSet _ground_pos_facts;
     USigSet _ground_neg_facts;
-    // For each lift fact, store the set of ground facts that it can be grounded to
-    NodeHashMap<int, std::vector<FlatHashSet<int>>> _allowed_domain_per_pos_lift_facts;
-    NodeHashMap<int, std::vector<FlatHashSet<int>>> _allowed_domain_per_neg_lift_facts;
-
 public:
 
-    FactAnalysis(HtnInstance& htn, QConstantManager& qConstants, const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations);
+    FactAnalysis(HtnInstance& htn, QConstantManager& qConstants, GroundFacts groundFacts);
 
     bool isInGroundFacts(const USignature& fact, bool negated) {
         if (negated) {
@@ -54,8 +51,6 @@ public:
     bool isInGroundFacts(const Signature& fact) {
         return isInGroundFacts(fact._usig, fact._negated);
     }
-
-    const std::vector<FlatHashSet<int>>& getGroundFactArgumentDomains(const Signature& fact);
 
     void resetReachability() {
         // Reset the bit vectors
@@ -78,11 +73,6 @@ public:
         _init_state_pos = pos;
         _init_state_neg = neg;
     }
-
-    std::optional<std::vector<FlatHashSet<int>>> computeReachableArgumentDomains(const HtnOp& operation);
-
-
-
 
     // Reachability API
     bool isReachable(const int predId, bool negated) {
@@ -243,14 +233,6 @@ public:
     const USignature& getGroundFact(size_t factId) const { return _ground_facts.getFact(factId); }
     /** Find indexed facts compatible with a possibly lifted or pseudo-ground signature. */
     BitVec findMatchingGroundFactIds(const USignature& signature, bool negated, const std::vector<int>& argumentSorts = {});
-
-private:
-    /**
-     * Ground the problem using pandaPIgrounder and load its reachable facts.
-     * Optimal planning also requests the grounded tasks and methods needed by the TDG.
-     */
-    void getGroundFacts(const std::string& domainFilename, const std::string& problemFilename, bool includeGroundOperations);
-    void extractGroundFactsFromPandaPiGrounderFile(const std::string& filename);
 
 };
 

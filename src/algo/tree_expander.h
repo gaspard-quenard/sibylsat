@@ -12,6 +12,7 @@
 #include "algo/fact_analysis.h"
 #include "algo/retroactive_pruning.h"
 #include "algo/domination_resolver.h"
+#include "algo/operation_domain_analyzer.h"
 #include "algo/q_constant_manager.h"
 #include "data/tdg.h"
 
@@ -26,6 +27,7 @@ private:
     Position* _root_position = nullptr;
     std::vector<Position*> _leaf_positions;
     FactAnalysis& _analysis;
+    OperationDomainAnalyzer _operation_domain_analyzer;
     RetroactivePruning* _pruning = nullptr;
     DominationResolver _domination_resolver;
     TDG* _tdg = nullptr;

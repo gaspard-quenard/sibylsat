@@ -1,5 +1,8 @@
 #include "preprocessing/problem_preprocessor.h"
 
+#include <utility>
+
+#include "preprocessing/ground_problem_loader.h"
 #include "preprocessing/method_effect_analyzer.h"
 #include "preprocessing/precondition_inference.h"
 #include "preprocessing/htn_instance_builder.h"
@@ -61,8 +64,14 @@ PlanningContext preprocessProblem(Parameters& params) {
     // Own pseudo-constants introduced later during search.
     auto qConstants = std::make_unique<QConstantManager>(*htn, params.isNonzero("sqq"));
 
-    // Ground reachable predicates and initialize the model's ground-fact index.
-    auto factAnalysis = std::make_unique<FactAnalysis>(*htn, *qConstants, params.getDomainFilename(), params.getProblemFilename(), params.isNonzero("optimal"));
+    // Ground reachable predicates and initialize the ground-fact analysis.
+    Statistics& statistics = Statistics::getInstance();
+    statistics.beginTiming(TimingStage::INIT_GROUNDING);
+    GroundFacts groundFacts = GroundProblemLoader::load(*htn, params.getDomainFilename(), params.getProblemFilename(), params.isNonzero("optimal"));
+    auto factAnalysis = std::make_unique<FactAnalysis>(*htn, *qConstants, std::move(groundFacts));
+    statistics.endTiming(TimingStage::INIT_GROUNDING);
+    const double groundingSeconds = static_cast<double>(statistics.getTiming(TimingStage::INIT_GROUNDING)) / 1'000'000'000.0;
+    Log::i("Grounding time: %.3f s\n", groundingSeconds);
 
     // Compute mutex groups and remove groups invalidated by grounded reachability.
     std::unique_ptr<MutexGroups> mutexGroups = computeMutexGroups(*htn, *factAnalysis, params);
