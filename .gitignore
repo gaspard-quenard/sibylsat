@@ -7,6 +7,10 @@ lib/*
 lib/parser/*
 !lib/parser/fetch_and_build.sh
 !lib/parser/preserve_method_preconditions.patch
+!lib/parser/aiplan4rust/
+lib/parser/aiplan4rust/*
+!lib/parser/aiplan4rust/fetch_and_build.sh
+!lib/parser/aiplan4rust/README.md
 !lib/grounder/
 lib/grounder/*
 !lib/grounder/fetch_and_build.sh

@@ -72,6 +72,7 @@ void Parameters::setDefaults() {
     setParam("sibylsat", "1"); // use the sibylsat expansion method
     setParam("mutex", "1"); // Filter possible effects of abstract tasks using mutexes
     setParam("macroActions", "1"); // Join consecutive actions in subtasks methods into a single macro action
+    setParam("parser", "panda"); // Lifted frontend: panda or aiplan
     setParam("separateTasks", "1"); // Solve the initial tasks network incrementally
 
     // Parameters added for optimal solution using MaxSAT and the TDG heuristic
@@ -126,6 +127,7 @@ void Parameters::printUsage() {
     Log::i(" -sibylsat=<0|1>     Use the sibylsat expansion method\n");
     Log::i(" -mutex=<0|1>        Filter possible effects of abstract tasks using mutexes\n");
     Log::i(" -macroActions=<0|1> Join consecutive actions in subtasks methods into a single macro action\n");
+    Log::i(" -parser=<name>       Lifted frontend: panda (default) or aiplan\n");
 
     // Optimal solution using MaxSAT and the TDG heuristic
     Log::i(" -optimal=<0|1>      Find an optimal solution instead of just a solution. Usually slower.\n");

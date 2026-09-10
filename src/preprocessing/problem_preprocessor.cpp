@@ -1,5 +1,7 @@
 #include "preprocessing/problem_preprocessor.h"
 
+#include <stdexcept>
+#include <string>
 #include <utility>
 
 #include "preprocessing/panda_ground_problem_loader.h"
@@ -7,6 +9,8 @@
 #include "preprocessing/precondition_inference.h"
 #include "preprocessing/htn_instance_builder.h"
 #include "preprocessing/lifted_problem_normalizer.h"
+#include "parser/aiplan_lifted_problem_reader.h"
+#include "parser/aiplan_parser.h"
 #include "parser/panda_lifted_problem_reader.h"
 #include "parser/panda_parser.h"
 #include "parser/lifted_problem.h"
@@ -18,6 +22,18 @@
 #include "util/statistics.h"
 
 namespace {
+
+/** Select the lifted frontend without changing PandaPIgrounder's input. */
+LiftedProblem parseLiftedProblem(Parameters& params, const std::filesystem::path& processingDirectory, const std::filesystem::path& pandaProblemFile) {
+    const std::string parser = params.getParam("parser");
+    if (parser == "panda") return PandaLiftedProblemReader::read(pandaProblemFile);
+    if (parser == "aiplan") {
+        const std::filesystem::path aiplanProblemFile = processingDirectory / "problem.aiplan.json";
+        AiplanParser::parse(params.getDomainFilename(), params.getProblemFilename(), aiplanProblemFile);
+        return AiplanLiftedProblemReader::read(aiplanProblemFile);
+    }
+    throw std::runtime_error("Unknown parser '" + parser + "'. Expected panda or aiplan");
+}
 
 /** Compile macros only when the normalized task networks are totally ordered. */
 std::unique_ptr<MacroActionCompiler> compileMacroActions(LiftedProblem& problem, const LiftedProblemProperties& properties, const Parameters& params) {
@@ -46,12 +62,13 @@ std::unique_ptr<MutexGroups> computeMutexGroups(HtnInstance& htn, FactAnalysis& 
 }
 
 PlanningContext preprocessProblem(Parameters& params, Statistics& statistics) {
-    // Produce PandaPIgrounder's input independently of the in-memory parser representation.
-    const std::filesystem::path pandaProblemFile = getProblemProcessingDir() / "problem.parsed";
+    const std::filesystem::path processingDirectory = getProblemProcessingDir();
+    // PandaPIgrounder still requires PandaPIparser's private format, even when
+    // another frontend supplies SibylSat's lifted representation.
+    const std::filesystem::path pandaProblemFile = processingDirectory / "problem.parsed";
     PandaParser::parse(params.getDomainFilename(), params.getProblemFilename(), pandaProblemFile);
 
-    // PandaPIparser is currently also the selected frontend for LiftedProblem.
-    LiftedProblem parsedProblem = PandaLiftedProblemReader::read(pandaProblemFile);
+    LiftedProblem parsedProblem = parseLiftedProblem(params, processingDirectory, pandaProblemFile);
 
     // Establish representation invariants and select a deterministic subtask order.
     const LiftedProblemProperties properties = LiftedProblemNormalizer::normalize(parsedProblem);

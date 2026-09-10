@@ -57,7 +57,7 @@ endif()
 set(BASE_SOURCES
     src/algo/arg_iterator.cpp src/algo/domination_resolver.cpp src/algo/fact_analysis.cpp src/preprocessing/method_effect_analyzer.cpp src/algo/network_traversal.cpp src/algo/operation_domain_analyzer.cpp src/algo/planner.cpp src/algo/q_constant_manager.cpp src/algo/tree_expander.cpp src/algo/plan_writer.cpp src/algo/retroactive_pruning.cpp src/algo/separate_tasks_scheduler.cpp
     src/data/action.cpp src/data/ground_fact_index.cpp src/data/htn_instance.cpp src/preprocessing/htn_instance_builder.cpp src/data/htn_op.cpp src/data/htn_statistics.cpp src/data/position.cpp src/data/reduction.cpp src/data/signature.cpp src/data/substitution.cpp src/data/mutex_groups.cpp src/data/tdg.cpp
-    src/preprocessing/panda_ground_problem_loader.cpp src/preprocessing/lifted_problem_normalizer.cpp src/parser/panda_parser.cpp src/parser/panda_lifted_problem_reader.cpp
+    src/preprocessing/panda_ground_problem_loader.cpp src/preprocessing/lifted_problem_normalizer.cpp src/parser/aiplan_parser.cpp src/parser/aiplan_lifted_problem_reader.cpp src/parser/panda_parser.cpp src/parser/panda_lifted_problem_reader.cpp
     src/preprocessing/lifted_mutex_group_grounder.cpp src/preprocessing/macro_action_compiler.cpp src/preprocessing/mutex_loader.cpp src/preprocessing/problem_preprocessor.cpp
     src/sat/binary_amo.cpp src/sat/decoder.cpp src/sat/encoding.cpp src/sat/plan_optimizer.cpp src/sat/sat_interface.cpp src/sat/variable_allocator.cpp src/sat/variable_provider.cpp
     src/util/log.cpp src/util/names.cpp src/util/params.cpp src/util/process_utils.cpp src/util/project_utils.cpp src/util/random.cpp src/util/signal_manager.cpp src/util/statistics.cpp src/util/timer.cpp
@@ -100,6 +100,10 @@ endif()
 
 add_custom_target(parser COMMAND bash ${CMAKE_SOURCE_DIR}/lib/parser/fetch_and_build.sh)
 add_dependencies(lotane parser)
+
+# Optional frontend; compiling the Rust dependency is unnecessary for the
+# default Panda frontend, so it has its own explicit build target.
+add_custom_target(aiplan4rust-parser COMMAND bash ${CMAKE_SOURCE_DIR}/lib/parser/aiplan4rust/fetch_and_build.sh)
 
 
 # PandaPiGrounder
