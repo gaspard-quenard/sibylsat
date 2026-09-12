@@ -1,8 +1,8 @@
 diff --git a/MsSolver.cc b/MsSolver.cc
-index 8f5a681..19e0bda 100755
+index 8f5a681..4593c18 100755
 --- a/MsSolver.cc
 +++ b/MsSolver.cc
-@@ -400,6 +400,102 @@ static bool separate_gbmo_subgoal(vec<Int>& splitting_weights, vec<Lit>& goal_ps
+@@ -400,6 +400,116 @@ static bool separate_gbmo_subgoal(vec<Int>& splitting_weights, vec<Lit>& goal_ps
      } else
          return false;
  }
@@ -63,9 +63,11 @@ index 8f5a681..19e0bda 100755
 +            for (int k = i; k < saved_cores.size() - 1; k++) {
 +                saved_cores[k + 1].moveTo(saved_cores[k]);
 +                core_to_constrains_lits[k + 1].moveTo(core_to_constrains_lits[k]);
++                core_global_assumptions[k + 1].moveTo(core_global_assumptions[k]);
 +            }
 +            saved_cores.shrink(1);
 +            core_to_constrains_lits.shrink(1);
++            core_global_assumptions.shrink(1);
 +            num_cores_deleted++;
 +        } else {
 +            i++;
@@ -87,6 +89,18 @@ index 8f5a681..19e0bda 100755
 +    for (int core_idx = 0; core_idx < saved_cores.size(); ++core_idx) {
 +        if (core_usage_flags[core_idx]) continue; // Skip already used cores
 +
++        // A core found under IPAMIR assumptions is only valid while those
++        // assumptions still hold. The soft-literal subset check alone is not
++        // enough: primitive-plan assumptions disappear in the next abstract solve.
++        bool assumptions_hold = true;
++        for (int lit_idx = 0; lit_idx < core_global_assumptions[core_idx].size(); ++lit_idx) {
++            if (Sort::bin_search(global_assumptions, core_global_assumptions[core_idx][lit_idx]) == -1) {
++                assumptions_hold = false;
++                break;
++            }
++        }
++        if (!assumptions_hold) continue;
++
 +        // Check if all literals in this core are present in the current assumptions
 +        bool is_subset = true;
 +        for (int lit_idx = 0; lit_idx < saved_cores[core_idx].size(); ++lit_idx) {
@@ -105,7 +119,7 @@ index 8f5a681..19e0bda 100755
  
  void MsSolver::maxsat_solve(solve_Command cmd)
  {
-@@ -411,6 +507,11 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -411,6 +521,11 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          return;
      }
  
@@ -117,7 +131,7 @@ index 8f5a681..19e0bda 100755
  #if defined(GLUCOSE3) || defined(GLUCOSE4)    
      if (opt_verbosity >= 1) sat_solver.verbEveryConflicts = 100000;
      sat_solver.setIncrementalMode();
-@@ -674,6 +775,18 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -674,6 +789,19 @@ void MsSolver::maxsat_solve(solve_Command cmd)
      Minisat::vec<Lit> sat_conflicts;
      lbool status;
      extern bool opt_scip_parallel;
@@ -125,6 +139,7 @@ index 8f5a681..19e0bda 100755
 +    // Variables used when reusing previous cores
 +    Minisat::vec<Minisat::vec<Lit>> new_saved_cores;
 +    Minisat::vec<Minisat::vec<Lit>> new_core_to_constrains_lits;
++    Minisat::vec<Minisat::vec<Lit>> new_core_global_assumptions;
 +    // Initialize a mask to know if a reusable core has been used
 +    Minisat::vec<bool> saved_cores_used(saved_cores.size(), false);
 +    int num_saved_cores_used = 0;
@@ -136,7 +151,7 @@ index 8f5a681..19e0bda 100755
      do { // a loop to process GBMO splitting points
      while (1) {
  #ifdef USE_SCIP
-@@ -708,6 +821,15 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -708,6 +836,15 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                                   sat_solver.conflicts < opt_unsat_conflicts - 500)
            sat_solver.setConfBudget(opt_unsat_conflicts - sat_solver.conflicts);
        else sat_solver.budgetOff();
@@ -152,7 +167,7 @@ index 8f5a681..19e0bda 100755
        status = 
            base_assump.size() == 1 && base_assump[0] == assump_lit ? l_True :
            base_assump.size() == 1 && base_assump[0] == ~assump_lit ? l_False :
-@@ -929,31 +1051,38 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -929,31 +1066,38 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          if (assump_ps.size() == 0 && assump_lit == lit_Undef || 
              opt_minimization == 0 && sat_conflicts.size() == 1 && sat_conflicts[0] == ~assump_lit) break;
          {
@@ -214,7 +229,7 @@ index 8f5a681..19e0bda 100755
          Int min_removed = Int_MAX, min_bound = Int_MAX;
          int removed = 0;
          bool other_conflict = false;
-@@ -961,6 +1090,16 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -961,6 +1105,23 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          if (opt_minimization == 1) { 
              goal_ps.clear(); goal_Cs.clear();
          }
@@ -227,11 +242,18 @@ index 8f5a681..19e0bda 100755
 +            // Create the empty vector of constrains linked to this saved core
 +            new_core_to_constrains_lits.push();
 +            new (&new_core_to_constrains_lits[new_core_to_constrains_lits.size() - 1]) Minisat::vec<Lit>();
++
++            new_core_global_assumptions.push();
++            new (&new_core_global_assumptions[new_core_global_assumptions.size() - 1]) Minisat::vec<Lit>();
++            // Core minimization can use any active external assumption, so
++            // conservatively retain all of them as dependencies.
++            for (int i = 0; i < global_assumptions.size(); i++)
++                new_core_global_assumptions.last().push(global_assumptions[i]);
 +        }
          for (int j, i = 0; i < core_mus.size(); i++) {
              Lit p = ~core_mus[i];
              if ((j = Sort::bin_search(assump_ps, p)) >= 0) { 
-@@ -1049,6 +1188,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1049,6 +1210,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                      sat_solver.setFrozen(var(newp),true);
                      sat_solver.addClause(~saved_constrs[k]->lit, newp);
                      saved_constrs[k]->lit = newp;
@@ -239,7 +261,7 @@ index 8f5a681..19e0bda 100755
                      assump_ps.push(newp); assump_Cs.push(saved_constrs_Cs[k]);
                      for (int k = assump_ps.size() - 1; k > 0 && assump_ps[k] < assump_ps[k-1]; k--)
                          std::swap(assump_ps[k], assump_ps[k-1]), std::swap(assump_Cs[k], assump_Cs[k-1]);
-@@ -1060,6 +1200,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1060,6 +1222,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          }
          if (assump_lit != lit_Undef && !use_base_assump) {
              sat_solver.setFrozen(var(assump_lit),true);
@@ -247,7 +269,7 @@ index 8f5a681..19e0bda 100755
              assump_ps.push(assump_lit); assump_Cs.push(opt_minimization == 2 ? try_lessthan : 
                                                         min_removed != Int_MAX && min_removed != 0 ? min_removed : 1);
              for (int k = assump_ps.size() - 1; k > 0 && assump_ps[k] < assump_ps[k-1]; k--) // correct the order of assump_ps
-@@ -1077,7 +1218,10 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1077,7 +1240,10 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                      for (int i=0; i < new_assump.size(); i++) 
                          delayed_assump.push(Pair_new(assump_Cs.last(), new_assump[i]));
                  }
@@ -259,7 +281,7 @@ index 8f5a681..19e0bda 100755
                  saved_constrs.push(constrs.last()), assump_map.set(toInt(assump_lit),saved_constrs.size() - 1);
                  saved_constrs_Cs.push(assump_Cs.last());
              } else if (goal_ps.size() > 1) {
-@@ -1115,6 +1259,38 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1115,6 +1281,50 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                      assump_ps.size(), sorted_assump_Cs.size(), top_for_strat, toString(sorted_assump_Cs.size() > 0 ? sorted_assump_Cs.last() : 0)); xfree(t); }
          if (opt_minimization == 2 && opt_verbosity == 1 && use_base_assump) {
              char *t; reportf("Lower bound  = %s\n", t=toString(LB_goalvalue * goal_gcd)); xfree(t); }
@@ -275,15 +297,27 @@ index 8f5a681..19e0bda 100755
 +                // Update saved_cores and core_to_constrains_lits with new constraints
 +                if (old_to_new_constrains.size() > 0) {
 +                    for (int j = 0; j < saved_cores.size(); j++) {
++                        bool changed_core = false;
 +                        for (int k = 0; k < saved_cores[j].size(); k++) {
 +                            if (old_to_new_constrains.find(~saved_cores[j][k]) != old_to_new_constrains.end()) {
 +                                saved_cores[j][k] = ~old_to_new_constrains[~saved_cores[j][k]];
++                                changed_core = true;
 +                            }
 +                        }
 +                        for (int k = 0; k < core_to_constrains_lits[j].size(); k++) {
 +                            if (old_to_new_constrains.find(core_to_constrains_lits[j][k]) != old_to_new_constrains.end()) {
 +                                core_to_constrains_lits[j][k] = old_to_new_constrains[core_to_constrains_lits[j][k]];
 +                            }
++                        }
++                        if (changed_core) {
++                            // The replacement constraint was derived in this
++                            // solve, so inherit its external assumptions.
++                            for (int k = 0; k < global_assumptions.size(); k++) {
++                                if (Sort::bin_search(core_global_assumptions[j], global_assumptions[k]) == -1)
++                                    core_global_assumptions[j].push(global_assumptions[k]);
++                            }
++                            if (core_global_assumptions[j].size() > 1)
++                                Sort::sort(&core_global_assumptions[j][0], core_global_assumptions[j].size());
 +                        }
 +                    }
 +                }
@@ -298,7 +332,7 @@ index 8f5a681..19e0bda 100755
  SwitchSearchMethod:        
          if (opt_minimization == 1 && opt_to_bin_search && LB_goalvalue + 5 < UB_goalvalue &&
              cpuTime() >= opt_unsat_cpu + start_solving_cpu && sat_solver.conflicts > opt_unsat_conflicts) {
-@@ -1199,7 +1375,7 @@ SwitchSearchMethod:
+@@ -1199,7 +1409,7 @@ SwitchSearchMethod:
                  }
              }
          }
@@ -307,7 +341,7 @@ index 8f5a681..19e0bda 100755
      } // END OF LOOP: while(1)
        if (gbmo_remain_goal_ps.size() == 0 || !satisfied) break;
  
-@@ -1242,6 +1418,31 @@ SwitchSearchMethod:
+@@ -1242,6 +1452,37 @@ SwitchSearchMethod:
          if (UB_goalvalue   != Int_MAX) UB_goalvalue *= goal_gcd;
      }
      if (ipamir_used) reset_soft_cls(soft_cls, fixed_soft_cls, modified_soft_cls, goal_gcd);
@@ -317,6 +351,7 @@ index 8f5a681..19e0bda 100755
 +
 +        // Ensure all sizes match because each index corresponds to a core, its assumptions, and its constraints
 +        assert(new_saved_cores.size() == new_core_to_constrains_lits.size());
++        assert(new_saved_cores.size() == new_core_global_assumptions.size());
 +
 +        int orig_size = saved_cores.size();
 +
@@ -329,21 +364,26 @@ index 8f5a681..19e0bda 100755
 +            core_to_constrains_lits.push();
 +            new (&core_to_constrains_lits[i + orig_size]) Minisat::vec<Lit>();
 +            new_core_to_constrains_lits[i].copyTo(core_to_constrains_lits[i + orig_size]);
++
++            core_global_assumptions.push();
++            new (&core_global_assumptions[i + orig_size]) Minisat::vec<Lit>();
++            new_core_global_assumptions[i].copyTo(core_global_assumptions[i + orig_size]);
 +        }
 +
 +        printf("Updated saved cores count: %d\n", saved_cores.size());
 +
 +        new_saved_cores.clear();
 +        new_core_to_constrains_lits.clear();
++        new_core_global_assumptions.clear();
 +    }
  #ifdef USE_SCIP
      extern bool opt_scip_parallel;
      char test = OPT_NONE;
 diff --git a/MsSolver.h b/MsSolver.h
-index 4caddfc..34dd348 100755
+index 4caddfc..17de188 100755
 --- a/MsSolver.h
 +++ b/MsSolver.h
-@@ -139,6 +139,11 @@ class MsSolver final : public PbSolver {
+@@ -139,6 +139,12 @@ class MsSolver final : public PbSolver {
      Lit                 max_input_lit;  // IMPAMIR: the maximal value of literals created during reading an instance
      void *              termCallbackState;
      int               (*termCallback)(void *state);
@@ -351,11 +391,12 @@ index 4caddfc..34dd348 100755
 +    bool reuse_previous_cores = false;
 +    Minisat::vec<Minisat::vec<Lit>> saved_cores;
 +    Minisat::vec<Minisat::vec<Lit>> core_to_constrains_lits;
++    Minisat::vec<Minisat::vec<Lit>> core_global_assumptions;
 +    Minisat::vec<Lit> previous_soft_cls;
  #ifdef USE_SCIP
      ScipSolver          scip_solver;
  #endif
-@@ -192,6 +197,10 @@ class MsSolver final : public PbSolver {
+@@ -192,6 +198,10 @@ class MsSolver final : public PbSolver {
      void    maxsat_solve(solve_Command cmd = sc_Minimize); 
      void    preprocess_soft_cls(Minisat::vec<Lit>& assump_ps, vec<Int>& assump_Cs, const Int& max_assump_Cs, 
                                             IntLitQueue& delayed_assump, Int& delayed_assump_sum);
