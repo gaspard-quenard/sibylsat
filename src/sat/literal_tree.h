@@ -2,6 +2,7 @@
 #ifndef DOMPASCH_LILOTANE_LITERAL_TREE_H
 #define DOMPASCH_LILOTANE_LITERAL_TREE_H
 
+#include <limits>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -235,22 +236,26 @@ class LiteralTree {
     };
 
     Node _root;
+    // A path cannot have SIZE_MAX elements. Use that value when the common
+    // length is unknown, so the fast-path metadata needs only one word per tree.
+    static constexpr size_t UNKNOWN_PATH_LENGTH = std::numeric_limits<size_t>::max();
+    size_t _uniform_path_length = UNKNOWN_PATH_LENGTH;
 
 public:
 
     LiteralTree() = default;
-    LiteralTree(const LiteralTree& other) : _root(other._root) {}
-    LiteralTree(LiteralTree&& other) : _root(std::move(other._root)) {}
+    LiteralTree(const LiteralTree& other) = default;
+    LiteralTree(LiteralTree&& other) : _root(std::move(other._root)),
+        _uniform_path_length(std::exchange(other._uniform_path_length, UNKNOWN_PATH_LENGTH)) {}
 
     LiteralTree& operator=(LiteralTree<T, THash>&& other) noexcept {
+        if (this == &other) return *this;
         _root = std::move(other._root);
+        _uniform_path_length = std::exchange(other._uniform_path_length, UNKNOWN_PATH_LENGTH);
         return *this;
     }
 
-    LiteralTree& operator=(const LiteralTree<T, THash>& other) {
-        _root = other._root;
-        return *this;
-    }
+    LiteralTree& operator=(const LiteralTree<T, THash>& other) = default;
 
     /**
      * Insert a path while retaining only subset-minimal paths.
@@ -262,6 +267,14 @@ public:
      * encoding from imposing constraints belonging only to a redundant branch.
      */
     void insert(const std::vector<T>& lits) {
+        if (!_root.validLeaf && _root.children.empty()) _uniform_path_length = lits.size();
+        if (_uniform_path_length == lits.size()) {
+            // Equal-length sequences subsume each other only when identical;
+            // trie insertion already deduplicates identical paths.
+            _root.insertUnchecked(lits, 0);
+            return;
+        }
+        _uniform_path_length = UNKNOWN_PATH_LENGTH;
         if (_root.hasPathSubsumedBy(lits, 0)) return;
         _root.removePathsSubsumedBy(lits, 0);
         _root.insertUnchecked(lits, 0);
@@ -270,7 +283,7 @@ public:
     void merge(LiteralTree<T, THash>&& other) {
         if (this == &other) return;
         if (!_root.validLeaf && _root.children.empty()) {
-            _root = std::move(other._root);
+            *this = std::move(other);
             return;
         }
 
@@ -280,6 +293,10 @@ public:
     }
 
     void intersect(LiteralTree<T, THash>&& other) {
+        // Intersection can leave branches with no valid leaf. General insertion
+        // prunes those branches; bypassing it could change the structural CNF.
+        _uniform_path_length = UNKNOWN_PATH_LENGTH;
+        other._uniform_path_length = UNKNOWN_PATH_LENGTH;
         std::vector<std::pair<Node*, Node*>> nodeStack;
         nodeStack.emplace_back(&_root, &other._root);
         while (!nodeStack.empty()) {
