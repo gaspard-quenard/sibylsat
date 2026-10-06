@@ -22,6 +22,16 @@ private:
         }
     };
 
+    // Canonical arguments of the analysed operation and their sorts.
+    struct ParameterDomains {
+        const std::vector<int>& args;
+        const std::vector<int>& sorts;
+        int indexOf(int arg) const {
+            for (size_t i = 0; i < args.size(); i++) if (args[i] == arg) return i;
+            return -1;
+        }
+    };
+
     struct SubtaskOffsetSummary {
         SigSet preconditions;
         SigSet effects;
@@ -70,13 +80,15 @@ private:
         const Reduction& reduction = _htn.toReduction(result.signature._name_id, result.signature._args);
         result.preconditions.insert(reduction.getPreconditions().begin(), reduction.getPreconditions().end());
 
+        const ParameterDomains parameters{result.signature._args, _htn.getSorts(result.signature._name_id)};
         SigSet precedingEffects;
         for (size_t offset = 0; offset < reduction.getSubtasks().size(); offset++) {
             SubtaskOffsetSummary summary = inferSubtaskOffset(
                     reduction,
                     offset,
                     currentOps,
-                    precedingEffects);
+                    precedingEffects,
+                    parameters);
             result.preconditions.insert(summary.preconditions.begin(), summary.preconditions.end());
             precedingEffects.insert(summary.effects.begin(), summary.effects.end());
         }
@@ -89,7 +101,8 @@ private:
             const Reduction& reduction,
             size_t offset,
             USigSet& currentOps,
-            const SigSet& precedingEffects) {
+            const SigSet& precedingEffects,
+            const ParameterDomains& parameters) {
         SubtaskOffsetSummary summary;
         std::vector<USignature> children;
         _traversal.getPossibleChildren(reduction.getSubtasks(), offset, children);
@@ -100,7 +113,7 @@ private:
             InferredPreconditions childInference = inferPreconditionsForOperation(normalizedChild, currentOps);
 
             if (firstChild) {
-                addUnabsorbedPreconditions(summary.preconditions, childInference.preconditions, precedingEffects);
+                addUnabsorbedPreconditions(summary.preconditions, childInference.preconditions, precedingEffects, parameters);
                 firstChild = false;
             } else {
                 intersectPreconditions(summary.preconditions, childInference.preconditions);
@@ -139,20 +152,44 @@ private:
         return USignature(child._name_id, std::move(args));
     }
 
-    void addUnabsorbedPreconditions(SigSet& destination, const SigSet& preconditions, const SigSet& effects) {
+    void addUnabsorbedPreconditions(SigSet& destination, const SigSet& preconditions, const SigSet& effects,
+            const ParameterDomains& parameters) {
         for (const Signature& precondition : preconditions) {
-            if (!isAbsorbedByEffect(precondition, effects)) {
+            if (!isAbsorbedByEffect(precondition, effects, parameters)) {
                 destination.insert(precondition);
             }
         }
     }
 
-    bool isAbsorbedByEffect(const Signature& precondition, const SigSet& effects) {
+    // A preceding effect absorbs a precondition if it may produce it, i.e. if
+    // their arguments may denote the same objects. Distinct parameters of the
+    // analysed operation (canonical placeholders c0, c1, ...) may be bound to
+    // the same object, so they must not be compared as distinct constants.
+    bool isAbsorbedByEffect(const Signature& precondition, const SigSet& effects, const ParameterDomains& parameters) {
         for (const Signature& effect : effects) {
-            if (_htn.isUnifiable(effect, precondition) || _htn.isUnifiable(precondition, effect)) {
-                return true;
+            if (effect._negated != precondition._negated) continue;
+            if (effect._usig._name_id != precondition._usig._name_id) continue;
+            if (effect._usig._args.size() != precondition._usig._args.size()) continue;
+            bool mayMatch = true;
+            for (size_t i = 0; mayMatch && i < effect._usig._args.size(); i++) {
+                mayMatch = mayBeEqual(effect._usig._args[i], precondition._usig._args[i], parameters);
             }
+            if (mayMatch) return true;
         }
+        return false;
+    }
+
+    bool mayBeEqual(int a, int b, const ParameterDomains& parameters) {
+        if (a == b || _htn.isVariable(a) || _htn.isVariable(b)) return true;
+        const int indexA = parameters.indexOf(a), indexB = parameters.indexOf(b);
+        if (indexA < 0 && indexB < 0) return false; // two distinct constants
+        if (indexA < 0) return _htn.getConstantsOfSort(parameters.sorts[indexB]).count(a);
+        if (indexB < 0) return _htn.getConstantsOfSort(parameters.sorts[indexA]).count(b);
+        const FlatHashSet<int>& domainA = _htn.getConstantsOfSort(parameters.sorts[indexA]);
+        const FlatHashSet<int>& domainB = _htn.getConstantsOfSort(parameters.sorts[indexB]);
+        const FlatHashSet<int>& smaller = domainA.size() <= domainB.size() ? domainA : domainB;
+        const FlatHashSet<int>& larger = domainA.size() <= domainB.size() ? domainB : domainA;
+        for (int constant : smaller) if (larger.count(constant)) return true;
         return false;
     }
 
