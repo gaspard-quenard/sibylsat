@@ -451,12 +451,15 @@ bool TreeExpander::hasNegativeEffectOnPredicate(const USignature& actionSig, int
     return false;
 }
 
+// Returns false if the effect makes the operation impossible. A negative effect
+// on facts that can never hold changes nothing: it adds no possible fact change
+// and does not prune the operation.
 bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& position, const USignature& opSig, const Signature& effect, EffectMode mode) {
     const USignature& unsignedEffect = effect.getUnsigned();
     const bool hasQConstants = _q_constants.containsAny(unsignedEffect);
     if (!hasQConstants && _htn.isFullyGround(unsignedEffect)) {
         const int factId = _analysis.getGroundFactId(unsignedEffect, effect._negated);
-        if (factId < 0) return false;
+        if (factId < 0) return effect._negated;
         addGroundEffect(outgoing, opSig, factId, effect._negated, mode);
         return true;
     }
@@ -474,7 +477,7 @@ bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& po
 
     const BitVec matchingFactIds = _analysis.findMatchingGroundFactIds(unsignedEffect, effect._negated, effectSorts);
     if (!hasQConstants) {
-        if (matchingFactIds.none()) return false;
+        if (matchingFactIds.none()) return effect._negated;
         for (int factId : matchingFactIds) addGroundEffect(outgoing, opSig, factId, effect._negated, mode);
         return true;
     }
@@ -525,7 +528,7 @@ bool TreeExpander::addInstantiatedEffect(OutgoingEffects& outgoing, Position& po
         requiresQFactEncoding = true;
     }
 
-    if (!hasValidDecoding) return false;
+    if (!hasValidDecoding) return effect._negated;
     if (requiresQFactEncoding && mode == EffectMode::ACTION_EFFECT) outgoing.addQFact(unsignedEffect);
     return true;
 }
