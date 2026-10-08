@@ -25,13 +25,17 @@ void NetworkTraversal::traverse(const USignature& opSig, TraverseOrder order, st
             continue;
         }
 
-        // Normalize node signature arguments to compare to seen signatures
+        // Normalize node signature arguments to compare to seen signatures.
+        // The sort of a variable is kept: the same operation reached with
+        // variables of different sorts has different instances.
         Substitution s;
+        const std::vector<int> sorts = _htn->getArgumentSorts(nodeSig);
         for (size_t argPos = 0; argPos < nodeSig._args.size(); argPos++) {
             int arg = nodeSig._args[argPos];
             if (arg > 0 && _htn->isVariable(arg)) {
                 // Variable
-                if (!s.count(arg)) s[arg] = _htn->nameId(std::string("??_") + std::to_string(argPos));
+                if (!s.count(arg)) s[arg] = _htn->nameId(std::string("??_") + std::to_string(argPos)
+                        + "_" + std::to_string(sorts[argPos]));
             }
         }
         USignature normNodeSig = nodeSig.substitute(s);
