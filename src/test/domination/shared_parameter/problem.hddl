@@ -1,0 +1,3 @@
+(define (problem capturep) (:domain capturetest) (:objects d - item)
+ (:init (eligible c) (eligible d) (broad c) (broad d))
+ (:htn :ordered-subtasks (main)) (:goal (marked d)))

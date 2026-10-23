@@ -988,11 +988,11 @@ void Encoding::encodeExpansionSubstitutions(Position& pos, const USignature& par
         const int childVar = pos.getVariableOrZero(VarType::OP, child);
         if (childVar == 0) continue;
 
-        for (const auto& [sourceArgument, childQConstant] : substitution) {
+        for (const auto& [childQConstant, sourceArgument] : substitution) {
             assert(_q_constants.contains(childQConstant));
 
-            // The child's Q-constant may have a wider domain than the parent
-            // argument, so selecting both operations links their values.
+            // The child replaces a dominated operation whose argument is sourceArgument: its Q-constant
+            // may have a wider domain, so selecting both operations links their values.
             const int matchingValue = _q_constants.contains(sourceArgument)
                     ? encodeQConstEquality(childQConstant, sourceArgument)
                     : _vars.getOrCreateSubstitutionVariable(childQConstant, sourceArgument);

@@ -138,3 +138,10 @@ target_include_directories(test_domination_resolver PRIVATE ${BASE_INCLUDES})
 target_compile_options(test_domination_resolver PRIVATE ${BASE_COMPILEFLAGS})
 target_link_libraries(test_domination_resolver ${BASE_LIBS} lotane)
 add_test(NAME test_domination_resolver COMMAND test_domination_resolver)
+
+# Instances whose only plan an unsound domination would lose (src/test/domination/*/domain.hddl)
+foreach(case shared_parameter sibling_values ancestor_parameter)
+    add_test(NAME test_domination_${case} COMMAND sibylsat
+            ${CMAKE_SOURCE_DIR}/src/test/domination/${case}/domain.hddl ${CMAKE_SOURCE_DIR}/src/test/domination/${case}/problem.hddl -vp=1)
+    set_tests_properties(test_domination_${case} PROPERTIES PASS_REGULAR_EXPRESSION "Plan has been verified" RUN_SERIAL TRUE TIMEOUT 60)
+endforeach()

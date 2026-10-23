@@ -1,0 +1,3 @@
+(define (problem siblingp) (:domain siblingcapture) (:objects e - item)
+ (:init (eligible c) (eligible d) (eligible e))
+ (:htn :ordered-subtasks (main)) (:goal (finished)))

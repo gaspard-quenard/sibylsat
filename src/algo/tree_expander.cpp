@@ -87,6 +87,7 @@ void TreeExpander::printStatistics() const {
     Log::i("# retroactive prunings: %zu\n", getNumRetroactivePrunings());
     Log::i("# retroactively pruned operations: %zu\n", getNumRetroactivelyPrunedOps());
     Log::i("# dominated operations: %zu\n", _domination_resolver.getNumDominatedOps());
+    Log::i("# dominations not applied (could lose plans): %zu\n", _domination_resolver.getNumUnsafeDominations());
 }
 
 void TreeExpander::expandLeaves(const FlatHashSet<Position*>& leavesToExpand) {

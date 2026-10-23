@@ -1,6 +1,8 @@
 
 #include "algo/domination_resolver.h"
 
+#include <algorithm>
+
 DominationResolver::DominationResult DominationResolver::getDominationStatus(const USignature& op, const USignature& other) {
     DominationResult res;
     res.status = DIFFERENT;
@@ -10,7 +12,6 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
     
     DominationStatus status = EQUIVALENT;
     FlatHashSet<int> dummyDomain;
-    std::vector<int> sameDomainQConstArgIndices;
 
     for (size_t argIdx = 0; argIdx < op._args.size(); argIdx++) {
         int arg = op._args[argIdx];
@@ -43,7 +44,6 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
             for (int c : otherDomain) if (!domain.count(c)) return res;
             // Yes: Dominating w.r.t. this position
             status = DOMINATING;
-            res.qconstSubstitutions[otherArg] = arg;
 
         } else if (domain.size() < otherDomain.size()) {
             // This op may be dominated by the other op
@@ -54,15 +54,10 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
             for (int c : domain) if (!otherDomain.count(c)) return res;
             // Yes: Dominated w.r.t. this position
             status = DOMINATED;
-            res.qconstSubstitutions[arg] = otherArg;
 
         } else if (domain != otherDomain) {
             // Different domains
             return res;
-
-        } else {
-            // The two pseudo-constants are not equal, but share the same domain
-            sameDomainQConstArgIndices.push_back(argIdx);
         }
         // Domains are equal
 
@@ -78,34 +73,108 @@ DominationResolver::DominationResult DominationResolver::getDominationStatus(con
                 break;
             }    
         }
-        for (size_t argIdx = 0; argIdx < op._args.size(); argIdx++) {
-            if (_q_constants.contains(status == DOMINATED ? other._args[argIdx] : op._args[argIdx])) {
-                if (status == DOMINATED) res.qconstSubstitutions[op._args[argIdx]] = other._args[argIdx];
-                else res.qconstSubstitutions[other._args[argIdx]] = op._args[argIdx];
-            } 
+    }
+
+    // Each Q-constant of the dominating op takes the argument of the dominated op at the same index. A Q-constant
+    // occurring at several indices can only take one value: otherwise the dominating op cannot represent the other.
+    const USignature& dominating = status == DOMINATED ? other : op;
+    const USignature& dominated = status == DOMINATED ? op : other;
+    for (size_t argIdx = 0; argIdx < op._args.size(); argIdx++) {
+        const int target = dominating._args[argIdx];
+        const int value = dominated._args[argIdx];
+        if (target == value || !_q_constants.contains(target)) continue;
+        for (const auto& [assignedTarget, assignedValue] : res.qconstSubstitutions) {
+            if (assignedTarget == target && assignedValue != value) {
+                res.qconstSubstitutions.clear();
+                return res;
+            }
         }
-        res.status = status;
-        return res;
-    } else {
-        // Add to substitution all q-constant pairs with identical domain
-        for (int argIdx : sameDomainQConstArgIndices) {
-            if (status == DOMINATED) res.qconstSubstitutions[op._args[argIdx]] = other._args[argIdx];
-            else res.qconstSubstitutions[other._args[argIdx]] = op._args[argIdx];
-        }
+        res.qconstSubstitutions[target] = value;
     }
     res.status = status;
     return res;
 }
 
+bool DominationResolver::isSafeReplacement(const USignature& dominated, const USignature& dominating, const Substitution& s, const Position& newPos) {
+    // Under each parent P of the dominated op, the replacement adds the clauses P & dominating -> (target = value).
+    // They lose no plan if no operation selected together with P restricts a target:
+    // - the target is an argument neither of the dominated op nor of P or a possible ancestor of P. If P is
+    //   selected, its selected ancestor at the position where the target was created does not carry the target,
+    //   so the operations carrying it are not selected, except those placed by replacements;
+    // - replacements that can be selected together give the target the same value. Replacements under different
+    //   parents at the same position are never selected together; for an older target, any others may be.
+    if (s.empty()) return true;
+
+    const Position* parentPosition = newPos.getParentPosition();
+    if (parentPosition == nullptr) return false;
+    const USigSet& parents = newPos.getPredecessors().at(dominated);
+    const auto& expansions = newPos.getExpansions();
+
+    for (const auto& parent : parents) {
+        // As a child of its own, the dominating op must keep its Q-constants free under this parent
+        auto expansionIt = expansions.find(parent);
+        if (expansionIt != expansions.end() && expansionIt->second.count(dominating)) return false;
+    }
+    for (const auto& [target, value] : s) {
+        if (std::find(dominated._args.begin(), dominated._args.end(), target) != dominated._args.end()) return false;
+        if (isCarriedByAncestors(target, parents, *parentPosition)) return false;
+        auto valuesIt = _target_values.find(target);
+        if (valuesIt == _target_values.end()) continue;
+        // A target created at this position or at the parent position is only targeted by replacements at its
+        // creation position (whose dominating op is at it) or at a child position of it (whose parent is at it).
+        // Two of them with different parent positions are never selected together: that dominating op carries the
+        // target, that parent does not, and they are at the same position.
+        const size_t origin = _q_constants.getOriginPositionId(target);
+        const bool local = origin == newPos.getPositionId() || origin == parentPosition->getPositionId();
+        for (const auto& assigned : valuesIt->second) {
+            if (assigned.value == value) continue;
+            if (assigned.parentPositionId == parentPosition->getPositionId()) {
+                if (parents.count(assigned.parent)) return false;
+            } else if (!local) return false;
+        }
+    }
+
+    for (const auto& [target, value] : s) {
+        auto& values = _target_values[target];
+        for (const auto& parent : parents) values.push_back({parentPosition->getPositionId(), parent, value});
+    }
+    return true;
+}
+
+bool DominationResolver::isCarriedByAncestors(int qConstant, const USigSet& ops, const Position& position) const {
+    // Whether the Q-constant is an argument of one of these operations at this position or of one of their
+    // possible ancestors. It only occurs at the position where it was created and below (higher position ids).
+    const size_t origin = _q_constants.getOriginPositionId(qConstant);
+    USigSet level = ops;
+    const Position* pos = &position;
+    while (pos != nullptr && pos->getPositionId() >= origin) {
+        for (const auto& op : level) {
+            if (std::find(op._args.begin(), op._args.end(), qConstant) != op._args.end()) return true;
+        }
+        if (pos->getPositionId() == origin) return false;
+        const Position* above = pos->getParentPosition();
+        if (above == nullptr) return false;
+        USigSet predecessors;
+        for (const auto& op : level) {
+            auto it = pos->getPredecessors().find(op);
+            if (it == pos->getPredecessors().end()) return true; // unknown ancestry
+            predecessors.insert(it->second.begin(), it->second.end());
+        }
+        level = std::move(predecessors);
+        pos = above;
+    }
+    return false;
+}
+
 void DominationResolver::eliminateDominatedOperations(Position& newPos) {
 
-    // Map of an op name id to (map of a dominating op to a set of dominated ops)
-    NodeHashMap<int, NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>> dominatingActionsByName;
-    NodeHashMap<int, NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>> dominatingReductionsByName;
+    // Map of an op name id to (map of a dominating op to the ops it dominates, directly or transitively)
+    NodeHashMap<int, NodeHashMap<USignature, USigSet, USignatureHasher>> dominatingActionsByName;
+    NodeHashMap<int, NodeHashMap<USignature, USigSet, USignatureHasher>> dominatingReductionsByName;
 
     // For each operation
     const USigSet* ops[2] = {&newPos.getActions(), &newPos.getReductions()};
-    NodeHashMap<int, NodeHashMap<USignature, USigSubstitutionMap, USignatureHasher>>* dMaps[2] = {
+    NodeHashMap<int, NodeHashMap<USignature, USigSet, USignatureHasher>>* dMaps[2] = {
         &dominatingActionsByName, &dominatingReductionsByName
     };
     for (size_t i = 0; i < 2; i++) {
@@ -114,60 +183,49 @@ void DominationResolver::eliminateDominatedOperations(Position& newPos) {
             auto& dominatingOps = (*dMaps[i])[op._name_id];
 
             // Compare operation with each currently dominating op of the same name
-            USigSubstitutionMap dominated;
-            
+            std::vector<USignature> dominated;
+
             if (dominatingOps.empty()) {
                 dominatingOps[op];
                 continue;
             }
 
             for (auto& [other, dominatedByOther] : dominatingOps) {
-                auto result = getDominationStatus(op, other);
-                if (result.status == DOMINATED) {
+                const DominationStatus status = getDominationStatus(op, other).status;
+                if (status == DOMINATED) {
                     // This op is being dominated; mark for deletion
-                    //Log::d("DOM %s << %s\n", TOSTR(op), TOSTR(other));
-                    dominatedByOther[op] = std::move(result.qconstSubstitutions);
+                    dominatedByOther.insert(op);
                     dominated.clear();
                     break;
                 }
-                if (result.status == DOMINATING) {
+                if (status == DOMINATING) {
                     // This op dominates the other op
-                    //Log::d("DOM %s >> %s\n", TOSTR(op), TOSTR(other));
-                    dominated[other] = std::move(result.qconstSubstitutions);
+                    dominated.push_back(other);
                 }
             }
-            // Delete all ops transitively dominated by this op
+            // This op takes over the dominated ops and the ops they dominate
             assert(!dominatingOps.count(op));
-            for (const auto& [other, s] : dominated) {
-                std::vector<USignature> dominatedVec(1, other);
-                std::vector<Substitution> subVec(1, s);
-                for (size_t j = 0; j < dominatedVec.size(); j++) {
-                    auto dominatedOp = dominatedVec[j];
-                    auto domS = subVec[j];
-                    //Log::d("DOM %s, j=%i : %s\n", TOSTR(op), j, TOSTR(dominatedOp));
-                    //Log::d("DOM sub: %s\n", TOSTR(domS));
-                    if (!dominatingOps[op].count(dominatedOp) || domS.size() < dominatingOps[op][dominatedOp].size()) 
-                        dominatingOps[op][dominatedOp] = domS;
-                    //assert(dominatedOp.substitute(domS) == op || Log::e("%s -> %s != %s\n", TOSTR(dominatedOp), TOSTR(dominatedOp.substitute(domS)), TOSTR(op)));
-                    if (dominatingOps.count(dominatedOp)) {
-                        for (const auto& [domDomOp, domDomS] : dominatingOps[dominatedOp]) {
-                            dominatedVec.push_back(domDomOp);
-                            Substitution cat = domDomS.concatenate(domS);
-                            //Log::d("DOM concat (%s , %s) ~> %s\n", TOSTR(domDomS), TOSTR(domS), TOSTR(cat));
-                            subVec.push_back(cat); 
-                        }
-                        dominatingOps.erase(dominatedOp);
-                    }
+            for (const auto& other : dominated) {
+                auto& dominatedByOp = dominatingOps[op];
+                dominatedByOp.insert(other);
+                auto otherIt = dominatingOps.find(other);
+                if (otherIt != dominatingOps.end()) {
+                    for (const auto& transitivelyDominated : otherIt->second) dominatedByOp.insert(transitivelyDominated);
+                    dominatingOps.erase(otherIt);
                 }
             }
         }
 
-        // Remove all dominated ops
+        // Replace the dominated ops where this loses no plan, each compared directly with its dominating op
         for (auto& [nameId, dMap] : *dMaps[i]) for (auto& [op, dominated] : dMap) {
-            for (auto& [other, s] : dominated) {
-                Log::v("%s dominates %s (%s)\n", TOSTR(op), TOSTR(other), TOSTR(s));
-                //assert(other.substitute(s) == op);
-                newPos.replaceOperation(other, op, std::move(s));
+            for (const auto& other : dominated) {
+                DominationResult result = getDominationStatus(other, op);
+                if (result.status != DOMINATED || !isSafeReplacement(other, op, result.qconstSubstitutions, newPos)) {
+                    _num_unsafe_dominations++;
+                    continue;
+                }
+                Log::v("%s dominates %s (%s)\n", TOSTR(op), TOSTR(other), TOSTR(result.qconstSubstitutions));
+                newPos.replaceOperation(other, op, std::move(result.qconstSubstitutions));
                 _num_dominated_ops++;
             }
         }

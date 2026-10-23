@@ -60,5 +60,23 @@ int main() {
     const USignature broadSecond = instantiateAction(qConstants, action, {{a}, {a, b}});
     assert(resolver.getDominationStatus(broadFirst, broadSecond).status == DominationResolver::DIFFERENT);
     assert(resolver.getDominationStatus(broadSecond, broadFirst).status == DominationResolver::DIFFERENT);
+
+    // Substituted into the dominating signature, the substitution gives the dominated one: both Q-constants of
+    // broad take the value a (a substitution keyed by the dominated arguments would keep only one of them).
+    assert(narrow._args == std::vector<int>({a, a}));
+    const auto result = resolver.getDominationStatus(narrow, broad);
+    assert(result.qconstSubstitutions.size() == 2);
+    for (const auto& [target, value] : result.qconstSubstitutions) {
+        assert(target == broad._args[0] || target == broad._args[1]);
+        assert(value == a);
+    }
+
+    // A Q-constant occurring twice takes one value, so it cannot represent two different arguments.
+    const USignature repeated(actionId, std::vector<int>({broad._args[0], broad._args[0]}));
+    const USignature distinct = instantiateAction(qConstants, action, {{a}, {b}});
+    assert(distinct._args == std::vector<int>({a, b}));
+    assert(resolver.getDominationStatus(distinct, repeated).status == DominationResolver::DIFFERENT);
+    assert(resolver.getDominationStatus(repeated, distinct).status == DominationResolver::DIFFERENT);
+    assert(resolver.getDominationStatus(narrow, repeated).status == DominationResolver::DOMINATED);
     return 0;
 }
