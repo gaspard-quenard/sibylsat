@@ -145,3 +145,8 @@ foreach(case shared_parameter sibling_values ancestor_parameter)
             ${CMAKE_SOURCE_DIR}/src/test/domination/${case}/domain.hddl ${CMAKE_SOURCE_DIR}/src/test/domination/${case}/problem.hddl -vp=1)
     set_tests_properties(test_domination_${case} PROPERTIES PASS_REGULAR_EXPRESSION "Plan has been verified" RUN_SERIAL TRUE TIMEOUT 60)
 endforeach()
+
+add_executable(test_macro_action_cases src/test/test_macro_action_cases.cpp)
+target_include_directories(test_macro_action_cases PRIVATE ${BASE_INCLUDES})
+target_link_libraries(test_macro_action_cases ${BASE_LIBS} lotane)
+add_test(NAME test_macro_action_cases COMMAND test_macro_action_cases)

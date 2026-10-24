@@ -2,11 +2,14 @@
 #define SIBYLSAT_MACRO_ACTION_COMPILER_H
 
 #include <cstddef>
+#include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct LiftedProblem;
+struct LiftedMethod;
 
 /** One primitive action represented inside a compiled macro action. */
 struct MacroPrimitiveStep {
@@ -26,6 +29,14 @@ struct MacroActionExpansion {
 class MacroActionCompiler {
 private:
     std::unordered_map<std::string, MacroActionExpansion> _expansions;
+    std::unordered_map<std::string, std::string> _original_method_names;   // case of a method -> the method
+    std::map<std::pair<std::string, std::string>, bool> _sort_overlaps;
+    size_t _split_segments = 0;
+    size_t _case_split_methods = 0;
+    size_t _inapplicable_cases = 0;
+
+    std::vector<LiftedMethod> splitCases(const LiftedMethod& method, const LiftedProblem& problem,
+            const std::unordered_set<std::string>& primitiveNames);
 
 public:
     /** Rewrite eligible primitive sequences in the parsed problem in place. */
@@ -36,6 +47,9 @@ public:
 
     /** Return the primitive sequence represented by a generated macro action. */
     const MacroActionExpansion& getExpansion(const std::string& actionName) const;
+
+    /** The method a case created by the compilation belongs to (the name itself for other methods). */
+    const std::string& originalMethodName(const std::string& methodName) const;
 };
 
 #endif

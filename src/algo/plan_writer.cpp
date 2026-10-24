@@ -134,7 +134,8 @@ std::string PlanWriter::serializeNormalizedPlan(const Plan& normalizedPlan) {
         if (item.id <= 0 || actionIds.count(item.id)) continue;
 
         stream << item.id << " " << Names::to_string_nobrackets(_htn.restoreOriginalTaskArity(item.abstractTask))
-                << " -> " << Names::to_string_nobrackets(item.reduction);
+                << " -> " << Names::to_string_nobrackets(_macro_actions == nullptr ? item.reduction
+                        : USignature(_htn.nameId(_macro_actions->originalMethodName(_htn.toString(item.reduction._name_id))), item.reduction._args));
         for (int subtaskId : item.subtaskIds) stream << " " << subtaskId;
         stream << "\n";
     }
