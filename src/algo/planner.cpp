@@ -7,7 +7,7 @@
 #include "sat/plan_optimizer.h"
 #include "preprocessing/macro_action_compiler.h"
 
-Planner::Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions, Statistics& statistics)
+Planner::Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const ActionCosts* actionCosts, const MacroActionCompiler* macroActions, Statistics& statistics)
         : _params(params),
           _htn_instance(htn),
           _tree_expander(_params, _htn_instance, qConstants, analysis, statistics),
@@ -21,7 +21,7 @@ Planner::Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConsta
           _use_sibylsat_expansion(_params.isNonzero("sibylsat")),
           _optimal(_params.isNonzero("optimal")),
           _tdg(tdg),
-          _macro_actions(macroActions),
+          _action_costs(actionCosts),
           _separate_tasks(_params.isNonzero("separateTasks")
                   && _htn_instance.getInitReduction().getSubtasks().size() > 1
                   && _use_sibylsat_expansion
@@ -308,15 +308,9 @@ void Planner::setSoftLitsForCurrentLeaves() {
             int var = aVar;
             int heuristicValue = 0;
 
-            // If it is an action, set the weight to 1 since for now, we cannot indicate specific weight for actions in HDDL
+            // An action weighs what it costs.
             if (_htn_instance.isAction(op)) {
-                // If it is a macro action, then its heuristic value is the number of actions in the macro action
-                if (_macro_actions != nullptr && _macro_actions->isMacroAction(_htn_instance.toString(op._name_id))) {
-                    heuristicValue = _macro_actions->getExpansion(_htn_instance.toString(op._name_id)).primitiveSteps.size();
-                } else {
-                    // Otherwise, it is 1
-                    heuristicValue = 1;
-                }
+                heuristicValue = _action_costs->of(op);
             } else {
                 // Get the heuristic value of the best grounding of this lifted operator
                 heuristicValue = pos.getHeuristicValue(op);

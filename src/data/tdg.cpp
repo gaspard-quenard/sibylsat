@@ -46,7 +46,8 @@ int parseInteger(const std::string& line, size_t lineNumber, const std::string& 
 
 } // namespace
 
-TDG::TDG(HtnInstance& htn, QConstantManager& qConstants) : _htn(htn), _q_constants(qConstants) {
+TDG::TDG(HtnInstance& htn, QConstantManager& qConstants, const ActionCosts& actionCosts)
+        : _htn(htn), _q_constants(qConstants), _action_costs(actionCosts) {
     Log::i("Create TDG\n");
     loadGroundedGraph(getProblemProcessingDir() / "problem.sas");
     recordGroundedArities();
@@ -354,7 +355,7 @@ void TDG::visitComponent(size_t component, const std::vector<std::vector<size_t>
 int TDG::evaluateVertexCost(VertexId vertex) const {
     const Vertex& current = _vertices[vertex];
     if (current.signature._name_id == _noop_action_id) return 0;
-    if (_htn.isAction(current.signature)) return 1;
+    if (_htn.isAction(current.signature)) return _action_costs.of(current.signature);
 
     if (_htn.isReduction(current.signature)) {
         int cost = 0;
@@ -424,8 +425,11 @@ int TDG::getVirtualPlanHeuristicValue(const std::vector<PlanItem>& virtualPlan) 
     for (size_t index = 0; index + 1 < virtualPlan.size(); index++) {
         const USignature& operation = virtualPlan[index].reduction;
         int operationCost;
-        if (_htn.isAction(operation) || _htn.isReductionPrimitivizable(operation._name_id)) {
-            operationCost = operation._name_id == _htn.getBlankActionSig()._name_id ? 0 : 1;
+        if (_htn.isAction(operation)) {
+            operationCost = operation._name_id == _htn.getBlankActionSig()._name_id ? 0 : _action_costs.of(operation);
+        } else if (_htn.isReductionPrimitivizable(operation._name_id)) {
+            // The method stands for its only action: the action that replaces it has the same arguments.
+            operationCost = _action_costs.of(USignature(_htn.getReductionPrimitivization(operation._name_id).getNameId(), operation._args));
         } else {
             operationCost = getHeuristicValue(operation);
         }

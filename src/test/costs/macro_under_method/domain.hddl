@@ -1,0 +1,25 @@
+(define (domain macro_cost)
+  (:requirements :typing :hierarchy)
+  (:types machine - object)
+  (:predicates (started ?m - machine))
+  (:task work :parameters (?m - machine))
+  (:task part :parameters (?m - machine))
+  ; "long" does three steps in a row: they are compiled into one macro action, and the method, left with a single
+  ; action, into that action. It must weigh three actions, not one: the optimal plan is "short", with two.
+  (:method long
+    :parameters (?m - machine)
+    :task (work ?m)
+    :ordered-subtasks (and (step ?m) (step ?m) (step ?m)))
+  (:method short
+    :parameters (?m - machine)
+    :task (work ?m)
+    :ordered-subtasks (and (part ?m) (part ?m)))
+  (:method do_part
+    :parameters (?m - machine)
+    :task (part ?m)
+    :ordered-subtasks (and (step ?m)))
+  (:action step
+    :parameters (?m - machine)
+    :precondition (and)
+    :effect (started ?m))
+)

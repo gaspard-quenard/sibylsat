@@ -1,0 +1,6 @@
+(define (problem macro_cost_1)
+  (:domain macro_cost)
+  (:objects m1 - machine)
+  (:htn :parameters () :ordered-subtasks (and (work m1)))
+  (:init)
+)

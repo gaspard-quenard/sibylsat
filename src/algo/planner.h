@@ -3,6 +3,7 @@
 #define DOMPASCH_TREE_REXX_PLANNER_H
  
 #include "util/params.h"
+#include "data/action_costs.h"
 #include "data/position.h"
 #include "data/htn_instance.h"
 #include "algo/plan_writer.h"
@@ -57,7 +58,7 @@ private:
     // For optimal planning
     const bool _optimal;
     TDG* _tdg;
-    const MacroActionCompiler* _macro_actions;
+    const ActionCosts* _action_costs;
 
     const bool _separate_tasks;
     std::unique_ptr<SeparateTasksScheduler> _separate_tasks_scheduler;
@@ -65,7 +66,7 @@ private:
     float _optimization_factor;
 
 public:
-    Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const MacroActionCompiler* macroActions, Statistics& statistics);
+    Planner(Parameters& params, HtnInstance& htn, QConstantManager& qConstants, FactAnalysis& analysis, const MutexGroups* mutexGroups, TDG* tdg, const ActionCosts* actionCosts, const MacroActionCompiler* macroActions, Statistics& statistics);
     int findPlan();
     void optimizeCurrentPlan();
     void writeFormulaFile() { _encoding.writeFormulaFile(); }

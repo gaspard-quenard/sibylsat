@@ -56,7 +56,7 @@ endif()
 
 set(BASE_SOURCES
     src/algo/arg_iterator.cpp src/algo/domination_resolver.cpp src/algo/fact_analysis.cpp src/preprocessing/method_effect_analyzer.cpp src/algo/network_traversal.cpp src/algo/operation_domain_analyzer.cpp src/algo/planner.cpp src/algo/q_constant_manager.cpp src/algo/tree_expander.cpp src/algo/plan_writer.cpp src/algo/retroactive_pruning.cpp src/algo/separate_tasks_scheduler.cpp
-    src/data/action.cpp src/data/ground_fact_index.cpp src/data/htn_instance.cpp src/preprocessing/htn_instance_builder.cpp src/data/htn_op.cpp src/data/htn_statistics.cpp src/data/position.cpp src/data/reduction.cpp src/data/signature.cpp src/data/substitution.cpp src/data/mutex_groups.cpp src/data/tdg.cpp
+    src/data/action.cpp src/data/action_costs.cpp src/data/ground_fact_index.cpp src/data/htn_instance.cpp src/preprocessing/htn_instance_builder.cpp src/data/htn_op.cpp src/data/htn_statistics.cpp src/data/position.cpp src/data/reduction.cpp src/data/signature.cpp src/data/substitution.cpp src/data/mutex_groups.cpp src/data/tdg.cpp
     src/preprocessing/panda_ground_problem_loader.cpp src/preprocessing/lifted_problem_normalizer.cpp src/parser/panda_parser.cpp src/parser/panda_lifted_problem_reader.cpp
     src/preprocessing/lifted_mutex_group_grounder.cpp src/preprocessing/macro_action_compiler.cpp src/preprocessing/mutex_loader.cpp src/preprocessing/problem_preprocessor.cpp
     src/sat/binary_amo.cpp src/sat/decoder.cpp src/sat/encoding.cpp src/sat/plan_optimizer.cpp src/sat/sat_interface.cpp src/sat/variable_allocator.cpp src/sat/variable_provider.cpp
@@ -146,6 +146,15 @@ foreach(case shared_parameter sibling_values ancestor_parameter)
     set_tests_properties(test_domination_${case} PROPERTIES PASS_REGULAR_EXPRESSION "Plan has been verified" RUN_SERIAL TRUE TIMEOUT 60)
 endforeach()
 
+
+# Optimal mode (MaxSAT build): a method whose three actions are compiled into one macro action, and the method into
+# that action, must weigh three actions; the optimal plan uses the other method, with two
+# (src/test/costs/macro_under_method)
+if("${IPASIRSOLVER}" STREQUAL "uwrmaxsat")
+    add_test(NAME test_costs_macro_under_method_optimal COMMAND sibylsat
+            ${CMAKE_SOURCE_DIR}/src/test/costs/macro_under_method/domain.hddl ${CMAKE_SOURCE_DIR}/src/test/costs/macro_under_method/problem.hddl -optimal=1 -vp=1)
+    set_tests_properties(test_costs_macro_under_method_optimal PROPERTIES PASS_REGULAR_EXPRESSION "counted length of 2\\)" RUN_SERIAL TRUE TIMEOUT 60)
+endif()
 add_executable(test_macro_action_cases src/test/test_macro_action_cases.cpp)
 target_include_directories(test_macro_action_cases PRIVATE ${BASE_INCLUDES})
 target_link_libraries(test_macro_action_cases ${BASE_LIBS} lotane)

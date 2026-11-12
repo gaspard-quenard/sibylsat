@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "data/action_costs.h"
 #include "data/htn_instance.h"
 #include "data/plan.h"
 #include "algo/q_constant_manager.h"
@@ -16,7 +17,8 @@
  * Admissible task-decomposition heuristic built from the grounded TDG emitted
  * by pandaPIgrounder.
  *
- * Primitive tasks cost one, methods cost the sum of their subtasks, and
+ * Primitive tasks cost what their action costs (ActionCosts), methods cost
+ * the sum of their subtasks, and
  * abstract tasks cost the cheapest applicable method. Recursive components are
  * evaluated to a fixed point.
  */
@@ -36,6 +38,7 @@ private:
 
     HtnInstance& _htn;
     QConstantManager& _q_constants;
+    const ActionCosts& _action_costs;
     std::vector<Vertex> _vertices;
     NodeHashMap<USignature, VertexId, USignatureHasher> _vertex_ids;
     NodeHashMap<int, std::vector<VertexId>> _vertices_by_name;
@@ -68,7 +71,7 @@ private:
 
 public:
     /** Load the grounded task-decomposition graph and compute its heuristic. */
-    TDG(HtnInstance& htn, QConstantManager& qConstants);
+    TDG(HtnInstance& htn, QConstantManager& qConstants, const ActionCosts& actionCosts);
 
     /** Return the heuristic cost of an exact grounded graph vertex. */
     int getHeuristicValue(const USignature& signature) const;

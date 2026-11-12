@@ -86,11 +86,15 @@ PlanningContext preprocessProblem(Parameters& params, Statistics& statistics) {
     // Infer necessary method preconditions and attach them to the reductions.
     PreconditionInference::infer(*htn, PreconditionInference::MinePrecMode(params.getIntParam("mp")));
 
-    // Build the task-decomposition heuristic only for optimal planning.
+    // Only for optimal planning: what an action costs, and the task-decomposition heuristic built on it.
+    std::unique_ptr<ActionCosts> actionCosts;
     std::unique_ptr<TDG> tdg;
-    if (params.isNonzero("optimal")) tdg = std::make_unique<TDG>(*htn, *qConstants);
+    if (params.isNonzero("optimal")) {
+        actionCosts = std::make_unique<ActionCosts>(*htn, macroActions.get());
+        tdg = std::make_unique<TDG>(*htn, *qConstants, *actionCosts);
+    }
 
-    return {std::move(htn), std::move(qConstants), std::move(macroActions), std::move(factAnalysis), std::move(mutexGroups), std::move(tdg)};
+    return {std::move(htn), std::move(qConstants), std::move(macroActions), std::move(factAnalysis), std::move(mutexGroups), std::move(actionCosts), std::move(tdg)};
 }
 
 void PlanningContext::resetForNewSearch() {

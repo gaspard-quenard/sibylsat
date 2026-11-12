@@ -48,6 +48,9 @@ public:
     /** Return the primitive sequence represented by a generated macro action. */
     const MacroActionExpansion& getExpansion(const std::string& actionName) const;
 
+    /** Every generated macro action, by name, with the primitive sequence it represents. */
+    const std::unordered_map<std::string, MacroActionExpansion>& getExpansions() const { return _expansions; }
+
     /** The method a case created by the compilation belongs to (the name itself for other methods). */
     const std::string& originalMethodName(const std::string& methodName) const;
 };

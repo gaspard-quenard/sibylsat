@@ -30,6 +30,9 @@ struct PlanningContext {
     // Optional grounded fact groups used to strengthen state encodings.
     std::unique_ptr<MutexGroups> mutexGroups;
 
+    // Optional costs of the actions, required by optimal planning.
+    std::unique_ptr<ActionCosts> actionCosts;
+
     // Optional task-decomposition heuristic required by optimal planning.
     std::unique_ptr<TDG> tdg;
 
