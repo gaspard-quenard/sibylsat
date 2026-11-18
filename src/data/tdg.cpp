@@ -6,6 +6,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "preprocessing/macro_action_compiler.h"
 #include "util/log.h"
 #include "util/names.h"
 #include "util/project_utils.h"
@@ -46,9 +47,17 @@ int parseInteger(const std::string& line, size_t lineNumber, const std::string& 
 
 } // namespace
 
-TDG::TDG(HtnInstance& htn, QConstantManager& qConstants, const ActionCosts& actionCosts)
+TDG::TDG(HtnInstance& htn, QConstantManager& qConstants, const ActionCosts& actionCosts,
+        const MacroActionCompiler* macroActions)
         : _htn(htn), _q_constants(qConstants), _action_costs(actionCosts) {
     Log::i("Create TDG\n");
+    if (macroActions != nullptr) {
+        for (const auto& [methodId, method] : _htn.getReductionTemplates()) {
+            const std::string name = _htn.toString(methodId);
+            const std::string& original = macroActions->originalMethodName(name);
+            if (original != name) _method_of_case[methodId] = _htn.nameId(original);
+        }
+    }
     loadGroundedGraph(getProblemProcessingDir() / "problem.sas");
     recordGroundedArities();
     computeHeuristicValues();
@@ -380,7 +389,13 @@ USignature TDG::normalizeToGroundedArity(const USignature& signature) const {
     return USignature(signature._name_id, std::vector<int>(signature._args.begin(), signature._args.begin() + arity->second));
 }
 
-int TDG::getHeuristicValue(const USignature& signature) const {
+USignature TDG::asGroundedOperation(const USignature& operation) const {
+    const auto method = _method_of_case.find(operation._name_id);
+    return method == _method_of_case.end() ? operation : USignature(method->second, operation._args);
+}
+
+int TDG::getHeuristicValue(const USignature& operation) const {
+    const USignature signature = asGroundedOperation(operation);
     const USignature normalized = normalizeToGroundedArity(signature);
     auto vertex = _vertex_ids.find(normalized);
     if (vertex == _vertex_ids.end()) {
@@ -399,14 +414,17 @@ bool TDG::isCompatibleGrounding(const USignature& grounding, const std::vector<s
     return true;
 }
 
-int TDG::getBestHeuristicValue(const USignature& signature) {
-    if (!_q_constants.containsAny(signature) && _htn.isFullyGround(signature)) return getHeuristicValue(signature);
+int TDG::getBestHeuristicValue(const USignature& operation) {
+    if (!_q_constants.containsAny(operation) && _htn.isFullyGround(operation)) return getHeuristicValue(operation);
 
+    // The vertices are those of the operation as the grounder knows it; the sorts and the domains of the arguments
+    // are those of the operation itself (a case has the parameters of its method).
+    const USignature signature = asGroundedOperation(operation);
     auto namedVertices = _vertices_by_name.find(signature._name_id);
     if (namedVertices == _vertices_by_name.end()) return UNREACHABLE_COST;
 
-    const std::vector<int> sorts = _htn.getSorts(signature._name_id);
-    const std::vector<std::vector<int>> eligibleArguments = _q_constants.getCandidateArgumentDomains(signature, sorts);
+    const std::vector<int> sorts = _htn.getSorts(operation._name_id);
+    const std::vector<std::vector<int>> eligibleArguments = _q_constants.getCandidateArgumentDomains(operation, sorts);
     const int minimumPossibleCost = _minimum_cost_by_name.at(signature._name_id);
 
     int bestCost = UNREACHABLE_COST;

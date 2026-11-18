@@ -1,0 +1,48 @@
+(define (domain macro_case)
+  (:requirements :typing :hierarchy)
+  (:types block - object)
+  (:predicates (on ?x ?y - block) (clear ?x - block) (holding ?x - block) (checked ?x - block))
+  (:task relocate :parameters (?x ?y ?z - block))
+  (:task check :parameters (?x - block))
+  ; "direct" takes ?x off ?z and puts it on ?y: three actions with the check. Whether (clear ?y) holds for stack depends
+  ; on ?y = ?z (unstack clears ?z), so the macro compiler splits the method into cases, direct__case<k>, which the
+  ; grounder does not know. A case must weigh what "direct" weighs, three actions: the optimal plan is the one of
+  ; "direct". (Weighed as unknown, it loses against the four actions of "detour", which are one macro action.)
+  (:method direct
+    :parameters (?x ?y ?z - block)
+    :task (relocate ?x ?y ?z)
+    :ordered-subtasks (and (unstack ?x ?z) (stack ?x ?y) (check ?x)))
+  ; "detour" does the move with four actions, none of which depends on ?y = ?z: it is not split.
+  (:method detour
+    :parameters (?x ?y ?z - block)
+    :task (relocate ?x ?y ?z)
+    :ordered-subtasks (and (lift ?x ?z) (turn ?x) (turn ?x) (lower ?x ?y)))
+  (:method do_check
+    :parameters (?x - block)
+    :task (check ?x)
+    :ordered-subtasks (and (look ?x)))
+  (:action unstack
+    :parameters (?x ?z - block)
+    :precondition (and (on ?x ?z) (clear ?x))
+    :effect (and (holding ?x) (clear ?z) (not (on ?x ?z)) (not (clear ?x))))
+  (:action stack
+    :parameters (?x ?y - block)
+    :precondition (and (holding ?x) (clear ?y))
+    :effect (and (on ?x ?y) (clear ?x) (not (holding ?x)) (not (clear ?y))))
+  (:action lift
+    :parameters (?x ?z - block)
+    :precondition (on ?x ?z)
+    :effect (and (holding ?x) (not (on ?x ?z))))
+  (:action turn
+    :parameters (?x - block)
+    :precondition (holding ?x)
+    :effect (holding ?x))
+  (:action lower
+    :parameters (?x ?y - block)
+    :precondition (holding ?x)
+    :effect (and (on ?x ?y) (not (holding ?x))))
+  (:action look
+    :parameters (?x - block)
+    :precondition (and)
+    :effect (checked ?x))
+)

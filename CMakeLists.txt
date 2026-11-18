@@ -155,6 +155,15 @@ if("${IPASIRSOLVER}" STREQUAL "uwrmaxsat")
             ${CMAKE_SOURCE_DIR}/src/test/costs/macro_under_method/domain.hddl ${CMAKE_SOURCE_DIR}/src/test/costs/macro_under_method/problem.hddl -optimal=1 -vp=1)
     set_tests_properties(test_costs_macro_under_method_optimal PROPERTIES PASS_REGULAR_EXPRESSION "counted length of 2\\)" RUN_SERIAL TRUE TIMEOUT 60)
 endif()
+
+# Optimal mode (MaxSAT build): a method that the macro compiler splits into cases must weigh what the method weighs;
+# the optimal plan goes through it, with three actions, and not through the other method, with four
+# (src/test/costs/macro_case)
+if("${IPASIRSOLVER}" STREQUAL "uwrmaxsat")
+    add_test(NAME test_costs_macro_case_optimal COMMAND sibylsat
+            ${CMAKE_SOURCE_DIR}/src/test/costs/macro_case/domain.hddl ${CMAKE_SOURCE_DIR}/src/test/costs/macro_case/problem.hddl -optimal=1 -vp=1)
+    set_tests_properties(test_costs_macro_case_optimal PROPERTIES PASS_REGULAR_EXPRESSION "counted length of 3\\)" RUN_SERIAL TRUE TIMEOUT 60)
+endif()
 add_executable(test_macro_action_cases src/test/test_macro_action_cases.cpp)
 target_include_directories(test_macro_action_cases PRIVATE ${BASE_INCLUDES})
 target_link_libraries(test_macro_action_cases ${BASE_LIBS} lotane)

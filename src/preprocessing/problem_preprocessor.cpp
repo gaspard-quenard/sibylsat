@@ -91,7 +91,7 @@ PlanningContext preprocessProblem(Parameters& params, Statistics& statistics) {
     std::unique_ptr<TDG> tdg;
     if (params.isNonzero("optimal")) {
         actionCosts = std::make_unique<ActionCosts>(*htn, macroActions.get());
-        tdg = std::make_unique<TDG>(*htn, *qConstants, *actionCosts);
+        tdg = std::make_unique<TDG>(*htn, *qConstants, *actionCosts, macroActions.get());
     }
 
     return {std::move(htn), std::move(qConstants), std::move(macroActions), std::move(factAnalysis), std::move(mutexGroups), std::move(actionCosts), std::move(tdg)};

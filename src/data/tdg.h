@@ -13,6 +13,8 @@
 #include "data/plan.h"
 #include "algo/q_constant_manager.h"
 
+class MacroActionCompiler;
+
 /**
  * Admissible task-decomposition heuristic built from the grounded TDG emitted
  * by pandaPIgrounder.
@@ -21,6 +23,10 @@
  * the sum of their subtasks, and
  * abstract tasks cost the cheapest applicable method. Recursive components are
  * evaluated to a fixed point.
+ *
+ * The grounder does not know the cases that the macro compiler makes of a method
+ * (<method>__case<k>): a case is evaluated as its method, of which it is a
+ * restriction.
  */
 class TDG {
 private:
@@ -44,6 +50,7 @@ private:
     NodeHashMap<int, std::vector<VertexId>> _vertices_by_name;
     NodeHashMap<int, int> _minimum_cost_by_name;
     NodeHashMap<int, size_t> _grounded_arity_by_name;
+    NodeHashMap<int, int> _method_of_case;   // a case made by the macro compiler -> its method
     std::vector<std::vector<VertexId>> _strongly_connected_components;
     int _noop_action_id = -1;
 
@@ -67,11 +74,14 @@ private:
     int addCosts(int left, int right) const;
 
     USignature normalizeToGroundedArity(const USignature& signature) const;
+    /** The operation as the grounder knows it: a case of a method is replaced by its method. */
+    USignature asGroundedOperation(const USignature& operation) const;
     bool isCompatibleGrounding(const USignature& grounding, const std::vector<std::vector<int>>& eligibleArguments) const;
 
 public:
-    /** Load the grounded task-decomposition graph and compute its heuristic. */
-    TDG(HtnInstance& htn, QConstantManager& qConstants, const ActionCosts& actionCosts);
+    /** Load the grounded task-decomposition graph and compute its heuristic. `macroActions`: null without them. */
+    TDG(HtnInstance& htn, QConstantManager& qConstants, const ActionCosts& actionCosts,
+            const MacroActionCompiler* macroActions);
 
     /** Return the heuristic cost of an exact grounded graph vertex. */
     int getHeuristicValue(const USignature& signature) const;

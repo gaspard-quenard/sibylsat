@@ -1,0 +1,6 @@
+(define (problem macro_case_1)
+  (:domain macro_case)
+  (:objects b1 b2 b3 - block)
+  (:htn :parameters () :ordered-subtasks (and (relocate b1 b2 b3)))
+  (:init (on b1 b3) (clear b1) (clear b2))
+)
