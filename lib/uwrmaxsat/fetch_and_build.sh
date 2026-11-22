@@ -1,6 +1,7 @@
 #!/bin/bash
 
-if [ -f libuwrmaxsat.so ]; then
+# The library is built once, and again when uwrmaxsat_modifications.patch is newer than it
+if [ -f libuwrmaxsat.so ] && [ ! uwrmaxsat_modifications.patch -nt libuwrmaxsat.so ]; then
     echo "uwrmaxsat already compiled - skipping build"
     exit
 fi
@@ -40,6 +41,8 @@ if [ ! -d uwrmaxsat ]; then
 else
     cd uwrmaxsat
     git clean -f
+    # The patch applies on the plain commit: what an earlier build changed is set aside (in the stash of this checkout)
+    git stash --quiet
 fi
 
 # Checkout correct commit (can be updated but must be manually checked to build cleanly)
@@ -48,8 +51,9 @@ git checkout a8a97d4d10657d64f498f53eac6403c2b3e5df90
 
 # Apply the patch uwrmaxsat_modifications.patch which is situated in the parent directory
 # And is use to improve the capacity of the incremental MaxSat solver (can reuse cores in subsequent calls)
-git apply ../uwrmaxsat_modifications.patch
+# and to leave the signal handlers to the application (Ctrl+C then stops the planner)
+git apply ../uwrmaxsat_modifications.patch || { echo "uwrmaxsat: uwrmaxsat_modifications.patch does not apply"; exit 1; }
 rm -f config.mk
 make config
-USESCIP= make lsh
+USESCIP= make lsh || { echo "uwrmaxsat: the build failed"; exit 1; }
 cp build/dynamic/lib/libuwrmaxsat.so* ../

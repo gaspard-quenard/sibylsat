@@ -1,8 +1,8 @@
 diff --git a/MsSolver.cc b/MsSolver.cc
-index 8f5a681..4593c18 100755
+index 8f5a681..85d31a4 100755
 --- a/MsSolver.cc
 +++ b/MsSolver.cc
-@@ -400,6 +400,116 @@ static bool separate_gbmo_subgoal(vec<Int>& splitting_weights, vec<Lit>& goal_ps
+@@ -400,6 +400,125 @@ static bool separate_gbmo_subgoal(vec<Int>& splitting_weights, vec<Lit>& goal_ps
      } else
          return false;
  }
@@ -41,38 +41,8 @@ index 8f5a681..4593c18 100755
 +    }
 +
 +    int num_cores = saved_cores.size();
-+    int num_cores_deleted = 0;
-+    
-+    // Iterate over saved cores and remove those that contain deleted literals
-+    for (int i = 0; i < saved_cores.size(); ) {
-+        bool should_delete = false;
-+        for (int j = 0; j < saved_cores[i].size(); j++) {
-+            if (Sort::bin_search(lits_to_delete, ~saved_cores[i][j]) != -1) {
-+                should_delete = true;
-+                break;
-+            }
-+        }
-+
-+        if (should_delete) {
-+            // Add the constraint literals introduced by this core to lits_to_delete
-+            for (int j = 0; j < core_to_constrains_lits[i].size(); j++) {
-+                lits_to_delete.push(core_to_constrains_lits[i][j]);
-+            }
-+            Sort::sort(lits_to_delete);
-+            // Remove core and constraints without changing order
-+            for (int k = i; k < saved_cores.size() - 1; k++) {
-+                saved_cores[k + 1].moveTo(saved_cores[k]);
-+                core_to_constrains_lits[k + 1].moveTo(core_to_constrains_lits[k]);
-+                core_global_assumptions[k + 1].moveTo(core_global_assumptions[k]);
-+            }
-+            saved_cores.shrink(1);
-+            core_to_constrains_lits.shrink(1);
-+            core_global_assumptions.shrink(1);
-+            num_cores_deleted++;
-+        } else {
-+            i++;
-+        }
-+    }
++    Minisat::vec<bool> none;
++    int num_cores_deleted = forgetCores(lits_to_delete, none);
 +
 +    // Print the number of cores deleted
 +    printf("Done! Number of cores deleted: %d/%d\n", num_cores_deleted, num_cores);
@@ -82,6 +52,45 @@ index 8f5a681..4593c18 100755
 +    for (int i = 0; i < current_soft_literals.size(); i++) {
 +        previous_soft_cls.push(current_soft_literals[i]);
 +    }
++}
++
++int MsSolver::forgetCores(vec<Lit>& lits_to_delete, const Minisat::vec<bool>& refuted) {
++    // Forgets the saved cores marked in `refuted` and those that contain one of the (sorted) literals. The constraint
++    // literals that a forgotten core introduced join the literals, so that the cores built on them are forgotten too
++    // (a core comes after the cores whose constraint literals it contains). Returns the number of cores forgotten.
++    int num_cores = saved_cores.size(), kept = 0;
++    for (int i = 0; i < num_cores; i++) {
++        bool forget = i < refuted.size() && refuted[i];
++        for (int j = 0; !forget && j < saved_cores[i].size(); j++)
++            forget = Sort::bin_search(lits_to_delete, ~saved_cores[i][j]) != -1;
++        if (forget) {
++            for (int j = 0; j < core_to_constrains_lits[i].size(); j++)
++                lits_to_delete.push(core_to_constrains_lits[i][j]);
++            Sort::sort(lits_to_delete);
++        } else {
++            if (kept < i) {
++                saved_cores[i].moveTo(saved_cores[kept]);
++                core_to_constrains_lits[i].moveTo(core_to_constrains_lits[kept]);
++                core_global_assumptions[i].moveTo(core_global_assumptions[kept]);
++            }
++            kept++;
++        }
++    }
++    saved_cores.shrink(num_cores - kept);
++    core_to_constrains_lits.shrink(num_cores - kept);
++    core_global_assumptions.shrink(num_cores - kept);
++    return num_cores - kept;
++}
++
++lbool MsSolver::proveSavedCore(const Minisat::vec<Lit>& core) {
++    // A saved core was found in an earlier call, with what held in that call only: the soft literals hardened from
++    // its bounds, its unit cores, and constraint literals that the current call builds again, not always with the
++    // same bound. None of this is recorded with the core, so the SAT solver is asked whether the assumptions of the
++    // core can all hold now, under the assumptions and the hardened literals of the current call.
++    // l_False: they cannot, it is a core of this call. l_True: they can. l_Undef: the solver was interrupted.
++    Minisat::vec<Lit> assumptions;
++    for (int i = 0; i < core.size(); i++) assumptions.push(~core[i]);
++    return satSolveLimited(assumptions);
 +}
 +
 +int MsSolver::findReusableCore(const Minisat::vec<bool>& core_usage_flags, const Minisat::vec<Lit>& assump_ps) {
@@ -119,7 +128,7 @@ index 8f5a681..4593c18 100755
  
  void MsSolver::maxsat_solve(solve_Command cmd)
  {
-@@ -411,6 +521,11 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -411,6 +530,11 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          return;
      }
  
@@ -131,7 +140,24 @@ index 8f5a681..4593c18 100755
  #if defined(GLUCOSE3) || defined(GLUCOSE4)    
      if (opt_verbosity >= 1) sat_solver.verbEveryConflicts = 100000;
      sat_solver.setIncrementalMode();
-@@ -674,6 +789,19 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -492,10 +616,14 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+         sat_solver.toDimacs(opt_cnf),
+         exit(0);
+ 
+-    signal(SIGINT, SIGINT_interrupt);
++    // Applications embedding UWrMaxSat through IPAMIR own their process-wide
++    // signal handlers and interrupt us through the IPAMIR termination callback.
++    if (!ipamir_used) {
++        signal(SIGINT, SIGINT_interrupt);
+ #ifdef SIGXCPU
+-    signal(SIGXCPU,SIGINT_interrupt);
++        signal(SIGXCPU,SIGINT_interrupt);
+ #endif
++    }
+ 
+     Map<int,int> assump_map(-1);
+     vec<Linear*> saved_constrs;
+@@ -674,6 +802,22 @@ void MsSolver::maxsat_solve(solve_Command cmd)
      Minisat::vec<Lit> sat_conflicts;
      lbool status;
      extern bool opt_scip_parallel;
@@ -142,6 +168,9 @@ index 8f5a681..4593c18 100755
 +    Minisat::vec<Minisat::vec<Lit>> new_core_global_assumptions;
 +    // Initialize a mask to know if a reusable core has been used
 +    Minisat::vec<bool> saved_cores_used(saved_cores.size(), false);
++    // The saved cores that the SAT solver refuted in this call: forgotten at its end
++    Minisat::vec<bool> saved_cores_refuted(saved_cores.size(), false);
++    bool some_saved_core_refuted = false;
 +    int num_saved_cores_used = 0;
 +    float avg_size_core_used = 0;
 +    int reusable_core_idx = -1;
@@ -151,12 +180,20 @@ index 8f5a681..4593c18 100755
      do { // a loop to process GBMO splitting points
      while (1) {
  #ifdef USE_SCIP
-@@ -708,6 +836,15 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -708,6 +852,23 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                                   sat_solver.conflicts < opt_unsat_conflicts - 500)
            sat_solver.setConfBudget(opt_unsat_conflicts - sat_solver.conflicts);
        else sat_solver.budgetOff();
 +      if (reuse_previous_cores) {
++        // A saved core is only a candidate: it is used if the SAT solver proves it again in this call
 +        reusable_core_idx = findReusableCore(saved_cores_used, assump_ps);
++        while (reusable_core_idx >= 0) {
++            lbool proof = proveSavedCore(saved_cores[reusable_core_idx]);
++            if (proof == l_False) break;
++            saved_cores_used[reusable_core_idx] = true; // Not tried again in this call
++            if (proof == l_True) saved_cores_refuted[reusable_core_idx] = some_saved_core_refuted = true;
++            reusable_core_idx = findReusableCore(saved_cores_used, assump_ps);
++        }
 +        if (reusable_core_idx >= 0) {
 +            saved_cores_used[reusable_core_idx] = true;
 +            num_saved_cores_used++;
@@ -167,7 +204,7 @@ index 8f5a681..4593c18 100755
        status = 
            base_assump.size() == 1 && base_assump[0] == assump_lit ? l_True :
            base_assump.size() == 1 && base_assump[0] == ~assump_lit ? l_False :
-@@ -929,31 +1066,38 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -929,31 +1090,38 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          if (assump_ps.size() == 0 && assump_lit == lit_Undef || 
              opt_minimization == 0 && sat_conflicts.size() == 1 && sat_conflicts[0] == ~assump_lit) break;
          {
@@ -229,7 +266,7 @@ index 8f5a681..4593c18 100755
          Int min_removed = Int_MAX, min_bound = Int_MAX;
          int removed = 0;
          bool other_conflict = false;
-@@ -961,6 +1105,23 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -961,6 +1129,23 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          if (opt_minimization == 1) { 
              goal_ps.clear(); goal_Cs.clear();
          }
@@ -253,7 +290,7 @@ index 8f5a681..4593c18 100755
          for (int j, i = 0; i < core_mus.size(); i++) {
              Lit p = ~core_mus[i];
              if ((j = Sort::bin_search(assump_ps, p)) >= 0) { 
-@@ -1049,6 +1210,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1049,6 +1234,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                      sat_solver.setFrozen(var(newp),true);
                      sat_solver.addClause(~saved_constrs[k]->lit, newp);
                      saved_constrs[k]->lit = newp;
@@ -261,7 +298,7 @@ index 8f5a681..4593c18 100755
                      assump_ps.push(newp); assump_Cs.push(saved_constrs_Cs[k]);
                      for (int k = assump_ps.size() - 1; k > 0 && assump_ps[k] < assump_ps[k-1]; k--)
                          std::swap(assump_ps[k], assump_ps[k-1]), std::swap(assump_Cs[k], assump_Cs[k-1]);
-@@ -1060,6 +1222,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1060,6 +1246,7 @@ void MsSolver::maxsat_solve(solve_Command cmd)
          }
          if (assump_lit != lit_Undef && !use_base_assump) {
              sat_solver.setFrozen(var(assump_lit),true);
@@ -269,7 +306,7 @@ index 8f5a681..4593c18 100755
              assump_ps.push(assump_lit); assump_Cs.push(opt_minimization == 2 ? try_lessthan : 
                                                         min_removed != Int_MAX && min_removed != 0 ? min_removed : 1);
              for (int k = assump_ps.size() - 1; k > 0 && assump_ps[k] < assump_ps[k-1]; k--) // correct the order of assump_ps
-@@ -1077,7 +1240,10 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1077,7 +1264,10 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                      for (int i=0; i < new_assump.size(); i++) 
                          delayed_assump.push(Pair_new(assump_Cs.last(), new_assump[i]));
                  }
@@ -281,7 +318,7 @@ index 8f5a681..4593c18 100755
                  saved_constrs.push(constrs.last()), assump_map.set(toInt(assump_lit),saved_constrs.size() - 1);
                  saved_constrs_Cs.push(assump_Cs.last());
              } else if (goal_ps.size() > 1) {
-@@ -1115,6 +1281,50 @@ void MsSolver::maxsat_solve(solve_Command cmd)
+@@ -1115,6 +1305,50 @@ void MsSolver::maxsat_solve(solve_Command cmd)
                      assump_ps.size(), sorted_assump_Cs.size(), top_for_strat, toString(sorted_assump_Cs.size() > 0 ? sorted_assump_Cs.last() : 0)); xfree(t); }
          if (opt_minimization == 2 && opt_verbosity == 1 && use_base_assump) {
              char *t; reportf("Lower bound  = %s\n", t=toString(LB_goalvalue * goal_gcd)); xfree(t); }
@@ -332,7 +369,7 @@ index 8f5a681..4593c18 100755
  SwitchSearchMethod:        
          if (opt_minimization == 1 && opt_to_bin_search && LB_goalvalue + 5 < UB_goalvalue &&
              cpuTime() >= opt_unsat_cpu + start_solving_cpu && sat_solver.conflicts > opt_unsat_conflicts) {
-@@ -1199,7 +1409,7 @@ SwitchSearchMethod:
+@@ -1199,7 +1433,7 @@ SwitchSearchMethod:
                  }
              }
          }
@@ -341,7 +378,7 @@ index 8f5a681..4593c18 100755
      } // END OF LOOP: while(1)
        if (gbmo_remain_goal_ps.size() == 0 || !satisfied) break;
  
-@@ -1242,6 +1452,37 @@ SwitchSearchMethod:
+@@ -1242,6 +1476,42 @@ SwitchSearchMethod:
          if (UB_goalvalue   != Int_MAX) UB_goalvalue *= goal_gcd;
      }
      if (ipamir_used) reset_soft_cls(soft_cls, fixed_soft_cls, modified_soft_cls, goal_gcd);
@@ -352,6 +389,11 @@ index 8f5a681..4593c18 100755
 +        // Ensure all sizes match because each index corresponds to a core, its assumptions, and its constraints
 +        assert(new_saved_cores.size() == new_core_to_constrains_lits.size());
 +        assert(new_saved_cores.size() == new_core_global_assumptions.size());
++
++        if (some_saved_core_refuted) {
++            vec<Lit> lits_to_delete;
++            forgetCores(lits_to_delete, saved_cores_refuted);
++        }
 +
 +        int orig_size = saved_cores.size();
 +
@@ -380,7 +422,7 @@ index 8f5a681..4593c18 100755
      extern bool opt_scip_parallel;
      char test = OPT_NONE;
 diff --git a/MsSolver.h b/MsSolver.h
-index 4caddfc..17de188 100755
+index 4caddfc..960f470 100755
 --- a/MsSolver.h
 +++ b/MsSolver.h
 @@ -139,6 +139,12 @@ class MsSolver final : public PbSolver {
@@ -396,13 +438,15 @@ index 4caddfc..17de188 100755
  #ifdef USE_SCIP
      ScipSolver          scip_solver;
  #endif
-@@ -192,6 +198,10 @@ class MsSolver final : public PbSolver {
+@@ -192,6 +198,12 @@ class MsSolver final : public PbSolver {
      void    maxsat_solve(solve_Command cmd = sc_Minimize); 
      void    preprocess_soft_cls(Minisat::vec<Lit>& assump_ps, vec<Int>& assump_Cs, const Int& max_assump_Cs, 
                                             IntLitQueue& delayed_assump, Int& delayed_assump_sum);
 +
 +    // Functions when using parameter reusePreviousCores
 +    void    removeNonReusableCores();
++    int     forgetCores(vec<Lit>& lits_to_delete, const Minisat::vec<bool>& refuted);
++    lbool   proveSavedCore(const Minisat::vec<Lit>& core);
 +    int     findReusableCore(const Minisat::vec<bool>& saved_cores_used, const Minisat::vec<Lit>& assump_ps);
  } ;
  
