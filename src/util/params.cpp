@@ -72,7 +72,7 @@ void Parameters::setDefaults() {
     setParam("sibylsat", "1"); // use the sibylsat expansion method
     setParam("mutex", "1"); // Filter possible effects of abstract tasks using mutexes
     setParam("macroActions", "1"); // Join consecutive actions in subtasks methods into a single macro action
-    setParam("separateTasks", "1"); // Solve the initial tasks network incrementally
+    setParam("separateTasks", "0"); // Solve the initial tasks network incrementally (off by default: not part of the published planner)
 
     // Parameters added for optimal solution using MaxSAT and the TDG heuristic
     setParam("optimal", "0"); // Find an optimal solution instead of just a solution 
