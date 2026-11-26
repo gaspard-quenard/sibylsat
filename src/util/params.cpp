@@ -76,7 +76,7 @@ void Parameters::setDefaults() {
 
     // Parameters added for optimal solution using MaxSAT and the TDG heuristic
     setParam("optimal", "0"); // Find an optimal solution instead of just a solution 
-    setParam("reusePreviousCores", "0"); // If using MaxSAT, try to reuse previous cores for the next maxsat call
+    setParam("reusePreviousCores", "1"); // If using MaxSAT, try to reuse previous cores for the next maxsat call
 
     
 }
