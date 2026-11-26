@@ -14,7 +14,6 @@
 #include "algo/planner.h"
 #include "preprocessing/problem_preprocessor.h"
 #include "util/timer.h"
-#include "util/signal_manager.h"
 #include "util/random.h"
 #include "util/statistics.h"
 
@@ -67,10 +66,6 @@ void outputBanner(bool colors, bool use_sibylsat) {
 
 
 
-void handleSignal(int signum) {
-    SignalManager::signalExit();
-}
-
 void run(Parameters& params) {
 
     Statistics statistics;
@@ -108,9 +103,6 @@ void run(Parameters& params) {
 
 int main(int argc, char** argv) {
     
-    signal(SIGTERM, handleSignal);
-    signal(SIGINT, handleSignal);
-
     Timer::init();
 
     Parameters params;
