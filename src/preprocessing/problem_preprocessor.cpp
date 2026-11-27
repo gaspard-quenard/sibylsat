@@ -71,7 +71,15 @@ PlanningContext preprocessProblem(Parameters& params, Statistics& statistics) {
 
     // Ground reachable predicates and initialize the ground-fact analysis.
     statistics.beginTiming(TimingStage::GROUNDING);
-    GroundFacts groundFacts = PandaGroundProblemLoader::load(*htn, pandaProblemFile, params.isNonzero("optimal"));
+    // Optimal mode also reads the ground methods, which must be those of the planner's model. Otherwise only the
+    // state features are read, and the grounder gets the unmodified parser's output, which it grounds faster.
+    const bool groundOperations = params.isNonzero("optimal");
+    std::filesystem::path grounderInput = pandaProblemFile;
+    if (!groundOperations) {
+        grounderInput = getProblemProcessingDir() / "problem_state_features.parsed";
+        PandaParser::parseForStateFeatures(params.getDomainFilename(), params.getProblemFilename(), grounderInput);
+    }
+    GroundFacts groundFacts = PandaGroundProblemLoader::load(*htn, grounderInput, groundOperations);
     auto factAnalysis = std::make_unique<FactAnalysis>(*htn, *qConstants, std::move(groundFacts));
     statistics.endTiming(TimingStage::GROUNDING);
     const double groundingSeconds = std::chrono::duration<double>(statistics.getTiming(TimingStage::GROUNDING)).count();
